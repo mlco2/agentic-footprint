@@ -10,7 +10,7 @@ description = "Managed Python sidecar protocol for Agentic Footprint"
 anyhow.workspace = true
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-toml = "0.9"
+toml = { version = "0.9", default-features = false, features = ["parse", "serde"] }
 
 [dev-dependencies]
 tempfile = "3"

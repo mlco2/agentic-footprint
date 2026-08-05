@@ -10,6 +10,14 @@ readme = "README.md"
 rust-version = "1.97"
 
 [workspace.dependencies]
-clap = { version = "4.5", features = ["derive"] }
+clap = { version = "4.5", default-features = false, features = ["std", "derive", "help", "usage", "error-context"] }
 anyhow = "1"
 time = { version = "0.3", features = ["formatting", "parsing"] }
+
+# No `panic = "abort"`: the debug server isolates panicking requests with
+# `catch_unwind` (af-cli/src/cmd/debug_server.rs), which abort would defeat.
+[profile.release]
+strip = "symbols"
+opt-level = "z"
+lto = "fat"
+codegen-units = 1

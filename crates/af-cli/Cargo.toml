@@ -9,7 +9,7 @@ description = "Environmental impact measurement and attribution for coding agent
 
 [features]
 default = []
-experimental-opencode = []
+experimental-opencode = ["dep:ureq", "dep:sha2"]
 
 [[bin]]
 name = "af"
@@ -20,9 +20,9 @@ clap.workspace = true
 anyhow.workspace = true
 serde_json = "1"
 serde = { version = "1", features = ["derive"] }
-sha2 = "0.10"
+sha2 = { version = "0.10", optional = true }
 time.workspace = true
-ureq = "2.12"
+ureq = { version = "2.12", optional = true }
 af-console = { path = "../af-console" }
 af-core = { path = "../af-core" }
 af-events = { path = "../af-events" }
