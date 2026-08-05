@@ -1,0 +1,1 @@
+{"session_id":"sess-synthetic-01","transcript_path":"/home/user/.claude/projects/example/sess-synthetic-01.jsonl","cwd":"/home/user/project","prompt_id":"synth-prompt-02","permission_mode":"default","hook_event_name":"PreToolUse","tool_name":"mcp__weather__get_forecast","tool_input":{"location":"Paris"},"tool_use_id":"toolu_synth_mcp_01"}

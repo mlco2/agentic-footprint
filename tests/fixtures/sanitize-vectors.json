@@ -1,0 +1,97 @@
+[
+  {
+    "raw": "4848dec5-894b-43c9-806a-b7991cb5b216",
+    "sanitized": "4848dec5-894b-43c9-806a-b7991cb5b216",
+    "note": "an ordinary session id is left exactly alone"
+  },
+  {
+    "raw": "sess_1.2-3",
+    "sanitized": "sess_1.2-3",
+    "note": "the whole allowed set passes through: letters, digits, . _ -"
+  },
+  {
+    "raw": "-leading-dash",
+    "sanitized": "-leading-dash",
+    "note": "only a leading DOT is guarded; a leading dash is an ordinary id"
+  },
+  {
+    "raw": "",
+    "sanitized": "x",
+    "note": "empty must still name a file"
+  },
+  {
+    "raw": "///",
+    "sanitized": "x",
+    "note": "an id that strips to nothing must still name a file"
+  },
+  {
+    "raw": "..",
+    "sanitized": "x..",
+    "note": "the parent directory itself: dots survive the strip, the guard covers them"
+  },
+  {
+    "raw": "../",
+    "sanitized": "x..",
+    "note": "same, with the separator gone"
+  },
+  {
+    "raw": "../../../../etc/cron.d/pwned",
+    "sanitized": "x........etccron.dpwned",
+    "note": "the attack this exists for: no separator survives, so it cannot escape the spool"
+  },
+  {
+    "raw": "/etc/passwd",
+    "sanitized": "etcpasswd",
+    "note": "an absolute path becomes one relative component"
+  },
+  {
+    "raw": "sess/../../evil",
+    "sanitized": "sess....evil",
+    "note": "traversal in the middle: dots are harmless without separators"
+  },
+  {
+    "raw": "..%2F..%2Fetc",
+    "sanitized": "x..2F..2Fetc",
+    "note": "percent-encoded separators are not decoded, and % is not in the allow-list"
+  },
+  {
+    "raw": "..\\..\\windows",
+    "sanitized": "x....windows",
+    "note": "backslash is a separator on some hosts and is not in the allow-list either"
+  },
+  {
+    "raw": ".hidden",
+    "sanitized": "x.hidden",
+    "note": "a dotfile is not the collector's to create"
+  },
+  {
+    "raw": "a Z0._-",
+    "sanitized": "aZ0._-",
+    "note": "spaces are stripped, not replaced"
+  },
+  {
+    "raw": "a\tb",
+    "sanitized": "ab",
+    "note": "control characters are stripped"
+  },
+  {
+    "raw": "a:b;c|d*e?f",
+    "sanitized": "abcdef",
+    "note": "shell/glob metacharacters do not survive"
+  },
+  {
+    "raw": "日本語",
+    "sanitized": "x",
+    "note": "non-ASCII is stripped whole, byte-wise or char-wise alike"
+  },
+  {
+    "raw": "café-01",
+    "sanitized": "caf-01",
+    "note": "a multi-byte character inside an otherwise fine id takes no ASCII with it"
+  },
+  {
+    "raw": "x..",
+    "sanitized": "x..",
+    "note": "idempotent: sanitizing an already-sanitized id changes nothing"
+  }
+]

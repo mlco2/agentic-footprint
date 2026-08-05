@@ -1,0 +1,8 @@
+# statusline JSON on stdin
+{"session_id":"4848dec5-894b-43c9-806a-b7991cb5b216","model":{"display_name":"Haiku"}}
+# af statusline (gwp_kg water_L energy_kWh adpe_kg pe_MJ)
+0.00020160263164320513 0.0013822297096009973 0.00042156499192108144 0.0000000004747790158541403 0.0008877367986363799
+# statusline/ecologits-bar.sh, default ECOLOGITS_METRICS ("gwp wcf energy"), ANSI escapes preserved
+[90m🔥 202 mgCO₂eq | 💧 1.4 mL | ⚡️ 422 mWh[0m
+# same, ECOLOGITS_METRICS="gwp wcf energy adpe pe model"
+[90m🔥 202 mgCO₂eq | 💧 1.4 mL | ⚡️ 422 mWh | ⛏️ 0 µgSbeq | 🛢️ 888 J | 🤖 Haiku[0m

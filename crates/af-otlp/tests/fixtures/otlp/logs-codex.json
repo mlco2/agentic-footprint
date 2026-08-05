@@ -1,0 +1,49 @@
+{
+  "resourceLogs": [{
+    "resource": {"attributes": [
+      {"key": "service.name", "value": {"stringValue": "codex_exec"}},
+      {"key": "service.version", "value": {"stringValue": "0.142.0"}}
+    ]},
+    "scopeLogs": [{
+      "scope": {"name": "codex_otel"},
+      "logRecords": [
+        {
+          "timeUnixNano": "1785074307423000000",
+          "attributes": [
+            {"key": "event.name", "value": {"stringValue": "codex.conversation_starts"}},
+            {"key": "conversation.id", "value": {"stringValue": "019f9eb8-515f-7be1-9bab-834da2e2e4ab"}},
+            {"key": "provider_name", "value": {"stringValue": "openai"}},
+            {"key": "model", "value": {"stringValue": "gpt-5.6-sol"}},
+            {"key": "app.version", "value": {"stringValue": "0.142.0"}}
+          ]
+        },
+        {
+          "timeUnixNano": "1785074310574000000",
+          "attributes": [
+            {"key": "event.name", "value": {"stringValue": "codex.sse_event"}},
+            {"key": "event.kind", "value": {"stringValue": "response.completed"}},
+            {"key": "input_token_count", "value": {"intValue": "26345"}},
+            {"key": "output_token_count", "value": {"intValue": "92"}},
+            {"key": "cached_token_count", "value": {"intValue": "1024"}},
+            {"key": "reasoning_token_count", "value": {"intValue": "19"}},
+            {"key": "conversation.id", "value": {"stringValue": "019f9eb8-515f-7be1-9bab-834da2e2e4ab"}},
+            {"key": "model", "value": {"stringValue": "gpt-5.6-sol"}},
+            {"key": "app.version", "value": {"stringValue": "0.142.0"}}
+          ]
+        },
+        {
+          "timeUnixNano": "1785074310596000000",
+          "attributes": [
+            {"key": "event.name", "value": {"stringValue": "codex.tool_result"}},
+            {"key": "tool_name", "value": {"stringValue": "exec_command"}},
+            {"key": "call_id", "value": {"stringValue": "call_fixture_codex"}},
+            {"key": "duration_ms", "value": {"intValue": "61"}},
+            {"key": "success", "value": {"boolValue": true}},
+            {"key": "conversation.id", "value": {"stringValue": "019f9eb8-515f-7be1-9bab-834da2e2e4ab"}},
+            {"key": "model", "value": {"stringValue": "gpt-5.6-sol"}}
+          ]
+        }
+      ]
+    }]
+  }]
+}

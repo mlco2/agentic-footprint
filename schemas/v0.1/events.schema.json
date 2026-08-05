@@ -1,0 +1,190 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agentic-footprint.dev/schemas/v0.1/events.schema.json",
+  "title": "agentic-footprint collector event (Contract #1)",
+  "description": "Raw-facts events emitted by collectors to the local JSONL spool. Collectors MUST NOT include impact estimates; all estimation happens in the control plane.",
+  "type": "object",
+  "required": ["schema_version", "event_id", "type", "ts", "collector", "session_id", "payload"],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "description": "Semver of this event standard.",
+      "pattern": "^0\\.1\\.[0-9]+$"
+    },
+    "event_id": {
+      "type": "string",
+      "description": "Collector-generated unique id (ULID or UUID).",
+      "minLength": 16
+    },
+    "type": {
+      "enum": ["llm_call", "energy_sample", "action_span", "process_sample", "session_meta"]
+    },
+    "ts": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Emission time, RFC 3339. Interval payloads carry their own t_start/t_end."
+    },
+    "collector": {
+      "type": "object",
+      "required": ["name", "version"],
+      "properties": {
+        "name": { "type": "string", "description": "e.g. cc-hooks, codecarbon-sampler, litellm-middleware" },
+        "version": { "type": "string" }
+      }
+    },
+    "session_id": {
+      "type": "string",
+      "description": "The only mandatory correlation key. Agent-native session identifier when available."
+    },
+    "attribution": {
+      "type": "object",
+      "description": "Optional deepening of correlation to task/tool level. Emit what the collector can observe; omit the rest.",
+      "properties": {
+        "agent_id": { "type": "string", "description": "Logical agent within the session (e.g. main)." },
+        "subagent_id": { "type": "string" },
+        "task_id": { "type": "string" },
+        "tool_call_id": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "payload": { "type": "object" }
+  },
+  "allOf": [
+    { "if": { "properties": { "type": { "const": "llm_call" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/llm_call" } } } },
+    { "if": { "properties": { "type": { "const": "energy_sample" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/energy_sample" } } } },
+    { "if": { "properties": { "type": { "const": "action_span" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/action_span" } } } },
+    { "if": { "properties": { "type": { "const": "process_sample" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/process_sample" } } } },
+    { "if": { "properties": { "type": { "const": "session_meta" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/session_meta" } } } }
+  ],
+  "$defs": {
+    "llm_call": {
+      "type": "object",
+      "description": "One remote LLM inference request. Raw facts only. Token field names aligned with ACP session-usage RFD.",
+      "required": ["provider", "model_id_requested", "usage", "usage_source"],
+      "properties": {
+        "provider": { "type": "string", "description": "e.g. anthropic, openai, mistralai, bedrock" },
+        "model_id_requested": { "type": "string" },
+        "model_id_served": { "type": "string", "description": "If the provider reports a different served model (routing/aliases)." },
+        "endpoint": { "type": "string", "description": "Base URL or provider endpoint class, if known. No credentials, no paths with user data." },
+        "usage": {
+          "type": "object",
+          "properties": {
+            "input_tokens": { "type": "integer", "minimum": 0 },
+            "output_tokens": { "type": "integer", "minimum": 0 },
+            "thought_tokens": { "type": "integer", "minimum": 0, "description": "Reasoning/thinking tokens when reported separately." },
+            "cached_read_tokens": { "type": "integer", "minimum": 0 },
+            "cached_write_tokens": { "type": "integer", "minimum": 0 }
+          },
+          "additionalProperties": false
+        },
+        "usage_source": {
+          "enum": ["api_response", "agent_telemetry", "transcript", "estimated"],
+          "description": "Provenance of the usage numbers, in decreasing reliability order (RFC Annex B). Collectors MUST prefer the highest available: in-band API usage, then agent-native telemetry (OTel export), then local transcripts (known accuracy issues), then estimates."
+        },
+        "duration_ms": { "type": "integer", "minimum": 0 },
+        "status": { "enum": ["ok", "error", "cancelled", "unknown"] },
+        "streaming": { "type": "boolean" }
+      }
+    },
+    "energy_sample": {
+      "type": "object",
+      "description": "Locally measured (or hardware-modeled) energy over an interval. Machine-scoped; attribution to actions is a control-plane concern.",
+      "required": ["t_start", "t_end", "components"],
+      "properties": {
+        "t_start": { "type": "string", "format": "date-time" },
+        "t_end": { "type": "string", "format": "date-time" },
+        "components": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "required": ["kind", "energy_j", "method"],
+            "properties": {
+              "kind": { "enum": ["cpu", "dram", "gpu", "total", "other"] },
+              "label": { "type": "string", "description": "Device identity, e.g. 'NVIDIA RTX 4090 #0'." },
+              "energy_j": { "type": "number", "minimum": 0, "description": "Joules consumed over the interval." },
+              "method": {
+                "enum": ["rapl", "powermetrics", "nvml", "tdp_model", "other"],
+                "description": "Measured (rapl/powermetrics/nvml) vs modeled (tdp_model) MUST stay distinguishable."
+              }
+            }
+          }
+        },
+        "host_id": { "type": "string", "description": "Stable opaque host identifier (hash), for multi-host merging later." }
+      }
+    },
+    "action_span": {
+      "type": "object",
+      "description": "One agent action (tool run, subagent, file operation). Overlapping spans are legal: concurrency is data, apportionment is control-plane policy.",
+      "required": ["span_id", "tool_name", "tool_kind", "execution_locus", "t_start", "t_end"],
+      "properties": {
+        "span_id": { "type": "string" },
+        "tool_name": { "type": "string", "description": "e.g. Bash, Edit, mcp__server__tool" },
+        "tool_kind": { "enum": ["bash", "mcp", "file_op", "subagent", "web", "other"] },
+        "execution_locus": {
+          "enum": ["local", "remote", "hybrid", "unknown"],
+          "description": "remote spans are excluded from the local energy join and reported as unmeasured remote activity."
+        },
+        "t_start": { "type": "string", "format": "date-time" },
+        "t_end": { "type": "string", "format": "date-time" },
+        "pids": {
+          "type": "array",
+          "items": { "type": "integer" },
+          "description": "Observed process ids of the action's process tree roots, when observable."
+        },
+        "cgroup": { "type": "string", "description": "cgroup path when the action was wrapped (L3 attribution)." },
+        "status": { "enum": ["ok", "error", "cancelled", "unknown"] }
+      }
+    },
+    "process_sample": {
+      "type": "object",
+      "description": "Per-process-tree resource deltas over an interval: the weighting signal for CPU-time (L2) attribution.",
+      "required": ["t_start", "t_end", "processes"],
+      "properties": {
+        "t_start": { "type": "string", "format": "date-time" },
+        "t_end": { "type": "string", "format": "date-time" },
+        "processes": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["pid", "cpu_time_delta_ms"],
+            "properties": {
+              "pid": { "type": "integer", "description": "Root pid of a watched tree; deltas aggregate the tree." },
+              "cpu_time_delta_ms": { "type": "integer", "minimum": 0 },
+              "memory_rss_bytes": { "type": "integer", "minimum": 0 },
+              "io_read_bytes": { "type": "integer", "minimum": 0 },
+              "io_write_bytes": { "type": "integer", "minimum": 0 }
+            }
+          }
+        }
+      }
+    },
+    "session_meta": {
+      "type": "object",
+      "description": "Session context. Geo zone is user-configured, never auto-geolocated. No hostnames, usernames or paths in clear.",
+      "required": ["agent_app"],
+      "properties": {
+        "agent_app": {
+          "type": "object",
+          "required": ["name"],
+          "properties": {
+            "name": { "type": "string", "description": "e.g. claude-code, codex-cli" },
+            "version": { "type": "string" }
+          }
+        },
+        "os": { "type": "string", "description": "e.g. darwin-25.3.0, linux-6.9" },
+        "hardware": {
+          "type": "object",
+          "properties": {
+            "cpu_model": { "type": "string" },
+            "gpu_models": { "type": "array", "items": { "type": "string" } },
+            "ram_gb": { "type": "number", "minimum": 0 }
+          },
+          "description": "Used for TDP fallback modeling when counters are unavailable."
+        },
+        "geo_zone": { "type": "string", "description": "Electricity-mix zone code (user-configured), e.g. FRA, USA-CAL." },
+        "power_source": { "enum": ["ac", "battery", "unknown"] }
+      }
+    }
+  }
+}

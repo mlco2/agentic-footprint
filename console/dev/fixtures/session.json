@@ -1,0 +1,30 @@
+{
+  "session_id": "ses_01k9z8q4rt0debugcon",
+  "session_meta": {
+    "agent_app": { "name": "claude-code", "version": "1.2.3" },
+    "os": "darwin-25.3.0",
+    "hardware": {
+      "cpu_model": "AMD Ryzen 9 7950X",
+      "gpu_models": ["NVIDIA RTX 4090 #0"],
+      "ram_gb": 64
+    },
+    "geo_zone": "FRA",
+    "power_source": "ac"
+  },
+  "t_start": "2026-07-25T09:40:12.004Z",
+  "attribution_policy": "l2_cpu_time",
+  "methodology": {
+    "version": "v2026.06.1",
+    "source": "bundled",
+    "ecologits_version": "0.7.1",
+    "codecarbon_version": "3.0.4"
+  },
+  "grid": {
+    "zone": "FRA",
+    "g_co2e_per_kwh": 56,
+    "source": "codecarbon data v2026.06"
+  },
+  "state_dir": "~/.local/state/agentic-footprint",
+  "schema_version": "0.1.0",
+  "mode": "watch --debug"
+}

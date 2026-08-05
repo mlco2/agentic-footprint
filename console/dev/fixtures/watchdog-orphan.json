@@ -1,0 +1,10 @@
+{
+  "pid": 30887,
+  "span_id": "spn_0006",
+  "cmd": "Bash(uv pip install) → cargo/rustc",
+  "cpu_pct": 38.0,
+  "rss_bytes": 1932735283,
+  "state": "orphaned",
+  "orphaned_since": "2026-07-25T09:40:42.004Z",
+  "outlived_span_by_ms": 47000
+}

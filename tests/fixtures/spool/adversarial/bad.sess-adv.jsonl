@@ -1,0 +1,4 @@
+{"schema_version":"0.1.0","event_id":"sess-adv-evt-001","ts":"2026-07-25T14:05:00Z","collector":{"name":"bad","version":"0.1.0"},"session_id":"sess-adv","type":"llm_call","payload":{"provider":"anthropic","model_id_requested":"claude-sonnet-5","usage":{"input_tokens":500,"output_tokens":120},"usage_source":"api_response","duration_ms":900,"status":"ok"}}
+not valid json at all
+{"schema_version":"0.1.0","event_id":"sess-adv-evt-003","ts":"2026-07-25T14:05:10Z","collector":{"name":"bad","version":"0.1.0"},"session_id":"sess-adv","type":"unknown_type","payload":{}}
+{"schema_version":"0.1.0","event_id":"sess-adv-evt-001","ts":"2026-07-25T14:05:20Z","collector":{"name":"bad","version":"0.1.0"},"session_id":"sess-adv","type":"llm_call","payload":{"provider":"anthropic","model_id_requested":"claude-sonnet-5","usage":{"input_tokens":480,"output_tokens":95},"usage_source":"api_response","duration_ms":850,"status":"ok"}}

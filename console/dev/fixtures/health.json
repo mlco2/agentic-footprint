@@ -1,0 +1,49 @@
+{
+  "collectors": [
+    {
+      "name": "claude-code",
+      "version": "0.1.2",
+      "transport": "jsonl spool",
+      "spool_file": "claude-code.01K9Y7QZ.jsonl",
+      "byte_offset": 2517428,
+      "events": 30,
+      "events_per_s": 0.14,
+      "rejected": 1,
+      "last_seen": "2026-07-25T09:41:42.881Z",
+      "emits": ["session_meta", "llm_call", "action_span"]
+    },
+    {
+      "name": "codecarbon-sampler",
+      "version": "3.0.4",
+      "transport": "jsonl spool",
+      "spool_file": "codecarbon-sampler.01K9Y7QZ.jsonl",
+      "byte_offset": 884213,
+      "events": 96,
+      "events_per_s": 0.96,
+      "rejected": 0,
+      "last_seen": "2026-07-25T09:41:50.004Z",
+      "emits": ["energy_sample", "process_sample"]
+    },
+    {
+      "name": "otlp-cc",
+      "version": "0.1.0",
+      "transport": "POST /v1/logs",
+      "events": 4,
+      "events_per_s": 0.02,
+      "rejected": 0,
+      "last_seen": "2026-07-25T09:41:20.500Z",
+      "emits": ["llm_call"]
+    }
+  ],
+  "otlp_receiver": {
+    "endpoint": "127.0.0.1:4318",
+    "protocol": "http/json",
+    "logs_accepted": 11,
+    "metrics_discarded": 42
+  },
+  "python": [
+    { "key": "ecologits", "value": "0.7.1 · hash-locked", "status": "ok" },
+    { "key": "codecarbon", "value": "3.0.4", "status": "ok" },
+    { "key": "venv", "value": "~/.local/state/agentic-footprint/venv", "status": "ok" }
+  ]
+}

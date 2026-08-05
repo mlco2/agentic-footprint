@@ -1,0 +1,23 @@
+data: {"id":"evt_step_started_fixture","type":"session.next.step.started",
+data: "durable":{"aggregateID":"ses_fixture","seq":1,"version":1},"data":{"timestamp":1785071855435,"sessionID":"ses_fixture","assistantMessageID":"msg_assistant_fixture","agent":"build","model":{"id":"test-model","providerID":"test-provider"}}}
+
+data: {"id":"evt_step_ended_fixture","type":"session.next.step.ended","durable":{"aggregateID":"ses_fixture","seq":2,"version":2},"data":{"timestamp":1785071856435,"sessionID":"ses_fixture","assistantMessageID":"msg_assistant_fixture","finish":"stop","cost":0.001,"tokens":{"input":10,"output":4,"reasoning":2,"cache":{"read":3,"write":1}}}}
+
+data: {"id":"evt_tool_called_fixture","type":"session.next.tool.called","durable":{"aggregateID":"ses_fixture","seq":3,"version":1},"data":{"timestamp":1785071857000,"sessionID":"ses_fixture","assistantMessageID":"msg_assistant_fixture","callID":"call_fixture_bash","tool":"bash","input":{"command":"printf ok"},"provider":{"executed":false}}}
+
+data: {"id":"evt_tool_success_fixture","type":"session.next.tool.success","durable":{"aggregateID":"ses_fixture","seq":4,"version":1},"data":{"timestamp":1785071857250,"sessionID":"ses_fixture","assistantMessageID":"msg_assistant_fixture","callID":"call_fixture_bash","structured":{},"content":[],"provider":{"executed":false}}}
+
+data: {"id":"evt_remote_called_fixture","type":"session.next.tool.called","durable":{"aggregateID":"ses_fixture","seq":5,"version":1},"data":{"timestamp":1785071858000,"sessionID":"ses_fixture","assistantMessageID":"msg_assistant_fixture","callID":"call_fixture_remote","tool":"mcp.search","input":{},"provider":{"executed":true}}}
+
+data: {"id":"evt_remote_failed_fixture","type":"session.next.tool.failed","durable":{"aggregateID":"ses_fixture","seq":6,"version":1},"data":{"timestamp":1785071858500,"sessionID":"ses_fixture","assistantMessageID":"msg_assistant_fixture","callID":"call_fixture_remote","error":{"type":"unknown","message":"fixture failure"},"provider":{"executed":true}}}
+
+data: {"id":"evt_mcp_local_called_fixture","type":"session.next.tool.called","durable":{"aggregateID":"ses_fixture","seq":7,"version":1},"data":{"timestamp":1785071859000,"sessionID":"ses_fixture","assistantMessageID":"msg_assistant_fixture","callID":"call_fixture_mcp_local","tool":"mcp.local_search","input":{},"provider":{"executed":false}}}
+
+data: {"id":"evt_mcp_local_success_fixture","type":"session.next.tool.success","durable":{"aggregateID":"ses_fixture","seq":8,"version":1},"data":{"timestamp":1785071859400,"sessionID":"ses_fixture","assistantMessageID":"msg_assistant_fixture","callID":"call_fixture_mcp_local","structured":{},"content":[],"provider":{"executed":false}}}
+
+data: {"id":"evt_poison_started_fixture","type":"session.next.step.started","durable":{"aggregateID":"ses_fixture","seq":9,"version":1},"data":{"timestamp":1785071860000,"sessionID":"ses_fixture","assistantMessageID":"msg_poison_fixture","agent":"build"}}
+
+data: {"id":"evt_poison_ended_fixture","type":"session.next.step.ended","durable":{"aggregateID":"ses_fixture","seq":10,"version":1},"data":{"timestamp":1785071861000,"sessionID":"ses_fixture","assistantMessageID":"msg_poison_fixture","finish":"stop","tokens":{"input":1,"output":1}}}
+
+data: {this is not json at all
+

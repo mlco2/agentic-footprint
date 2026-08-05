@@ -1,0 +1,17 @@
+[package]
+name = "af-store"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "SQLite persistence for Agentic Footprint"
+
+[dependencies]
+af-events = { path = "../af-events" }
+rusqlite = { version = "0.32", features = ["bundled"] }
+serde_json = "1"
+
+[dev-dependencies]
+af-events = { path = "../af-events", features = ["test-support"] }
+rusqlite = { version = "0.32", features = ["bundled"] }
+tempfile = "3"

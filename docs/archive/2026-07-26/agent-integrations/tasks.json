@@ -1,0 +1,55 @@
+{
+  "schema_version": 1,
+  "policy": {
+    "order": ["opencode", "codex", "pi"],
+    "on_blocked": "checkpoint_and_continue",
+    "single_in_progress": true,
+    "manual_live_tests": true,
+    "task_plan": "docs/action-plan-agent-integrations.md"
+  },
+  "integrations": [
+    {
+      "id": "pi",
+      "status": "deferred",
+      "decision_log": "docs/agent-integrations/pi.md",
+      "source_revision": "5bc1c2c0a6f07e00e8c240304182f213ab8d311f",
+      "tasks": [
+        { "id": "PI-1", "status": "deferred", "title": "Capture extension event ordering" },
+        { "id": "PI-2", "status": "deferred", "title": "Implement thin Contract #1 extension" },
+        { "id": "PI-3", "status": "deferred", "title": "Add process attribution" },
+        { "id": "PI-4", "status": "deferred", "title": "Add deterministic tests" },
+        { "id": "PI-5", "status": "deferred", "title": "Add manual live test" },
+        { "id": "PI-6", "status": "deferred", "title": "Document and close out" }
+      ]
+    },
+    {
+      "id": "opencode",
+      "status": "done",
+      "decision_log": "docs/agent-integrations/opencode.md",
+      "source_revision": "7534d23551f665e65080809975b4ca5c7d63807b",
+      "tasks": [
+        { "id": "OC-1", "status": "done", "title": "Capture typed SSE and replay" },
+        { "id": "OC-2", "status": "done", "title": "Implement offline normalizer" },
+        { "id": "OC-3", "status": "done", "title": "Add live SSE adapter" },
+        { "id": "OC-4", "status": "done", "title": "Decide process attribution" },
+        { "id": "OC-5", "status": "done", "title": "Add deterministic tests" },
+        { "id": "OC-6", "status": "done", "title": "Add manual live test" },
+        { "id": "OC-7", "status": "done", "title": "Document and close out" }
+      ]
+    },
+    {
+      "id": "codex",
+      "status": "done",
+      "decision_log": "docs/agent-integrations/codex.md",
+      "source_version": "0.142.0",
+      "tasks": [
+        { "id": "CX-1", "status": "done", "title": "Capture app-server and OTLP traces" },
+        { "id": "CX-2", "status": "done", "title": "Implement offline app-server normalizer" },
+        { "id": "CX-3", "status": "done", "title": "Choose runtime topology" },
+        { "id": "CX-4", "status": "done", "title": "Add deterministic tests" },
+        { "id": "CX-5", "status": "done", "title": "Add manual live test" },
+        { "id": "CX-6", "status": "done", "title": "Document and close out" }
+      ]
+    }
+  ]
+}

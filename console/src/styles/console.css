@@ -1,0 +1,276 @@
+/* Console-specific semantic layer, built entirely on Broadsheet variables
+   (see docs/design_handoff_af_debug_console/DESIGN-SYSTEM.md). No raw hex,
+   font or px value that a token already carries. */
+
+:root {
+  font-variant-numeric: tabular-nums;
+}
+
+/* — shell layout (SCREENS.md: 100vh column, overflow hidden) — */
+.af-shell {
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--color-bg);
+  color: var(--color-text);
+  font-family: var(--font-body);
+}
+.af-main {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  overflow: hidden;
+}
+
+/* — semantic fill/texture: solid ink = measured, hatch = modelled/estimated
+   (DESIGN-SYSTEM §3) — */
+.hatch {
+  background-image: repeating-linear-gradient(
+    45deg,
+    var(--color-neutral-700) 0 1.5px,
+    transparent 1.5px 4px
+  );
+}
+.hatch-alarm {
+  background-image: repeating-linear-gradient(
+    45deg,
+    var(--color-accent-2) 0 1.5px,
+    transparent 1.5px 4px
+  );
+}
+
+/* — event-type swatch colors (FilterChips, Stream tab) — a legend, not the
+   measured/modelled/alarm axis. Cyan/neutral only, deliberately excluding
+   magenta: DESIGN-SYSTEM §3 rations it to actual alarm conditions ("If
+   magenta shows up as decoration, the device is broken"), and a type-legend
+   swatch is decoration, not a gap the control plane is admitting. — */
+:root {
+  --type-swatch-llm_call: var(--color-accent);
+  --type-swatch-action_span: var(--color-neutral-900);
+  --type-swatch-energy_sample: var(--color-accent-300);
+  --type-swatch-process_sample: var(--color-neutral-400);
+  --type-swatch-session_meta: var(--color-neutral-600);
+}
+
+/* — source/method + status badges (DATA-CONTRACT §4, DESIGN-SYSTEM §3/§7):
+   provenance-ranked (usage_source, decreasing reliability) and
+   measured-vs-modelled (energy component method). Rank 0/1 (api_response,
+   agent_telemetry) and "measured"/"modelled" are NOT alarm — only rank 2/3
+   (transcript, estimated) and `status: error` get the rationed magenta. — */
+.badge-prov-0,
+.badge-prov-1 {
+  color: var(--color-neutral-700);
+}
+.badge-prov-2,
+.badge-prov-3 {
+  color: var(--color-accent-2-700);
+}
+.badge-measured {
+  color: var(--color-accent-700);
+}
+.badge-modelled {
+  color: var(--color-neutral-700);
+}
+.badge-neutral {
+  color: var(--color-neutral-600);
+}
+.status-alarm {
+  color: var(--color-accent-2-700);
+}
+.status-neutral {
+  color: var(--color-neutral-600);
+}
+/* Inspector key/value row tone — same two non-decorative meanings, reused
+   outside the table (DESIGN-SYSTEM §3). */
+.kv-tone-alarm {
+  color: var(--color-accent-2-700);
+}
+.kv-tone-modelled {
+  color: var(--color-neutral-700);
+  font-style: italic;
+}
+
+/* — tool-kind fill/border custom properties (DESIGN-SYSTEM §3 table) — */
+:root {
+  --tool-fill-bash: var(--color-accent);
+  --tool-border-bash: var(--color-accent-700);
+
+  --tool-fill-file_op: var(--color-accent-300);
+  --tool-border-file_op: var(--color-accent-700);
+
+  --tool-fill-mcp: var(--color-neutral-300);
+  --tool-border-mcp: var(--color-neutral-700);
+
+  --tool-fill-web: transparent;
+  --tool-border-web: var(--color-neutral-700);
+
+  --tool-fill-subagent: var(--color-neutral-400);
+  --tool-border-subagent: var(--color-neutral-800);
+
+  --tool-border-status-error: var(--color-accent-2);
+}
+
+/* — ghost buttons (DESIGN-SYSTEM §6): transparent ground, 2px bottom
+   border on active, neutral label idle — */
+.ghost-btn {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--space-1);
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  padding: var(--space-1) 0;
+  font-family: var(--font-heading);
+  font-weight: 400;
+  color: var(--color-neutral-600);
+  cursor: pointer;
+}
+.ghost-btn:hover {
+  background: var(--color-accent-200);
+}
+.ghost-btn:active {
+  background: var(--color-accent-600);
+}
+.ghost-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.ghost-btn.is-active {
+  border-bottom-color: var(--color-accent);
+  color: var(--color-text);
+}
+
+/* — chips (event-type / filter toggles): swatch + label + count, ghost
+   interaction, dimmed when toggled off — */
+.chip {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  background: transparent;
+  border: none;
+  padding: 2px 0;
+  font-family: var(--font-body);
+  font-size: 12.5px;
+  color: var(--color-text);
+  cursor: pointer;
+}
+.chip:hover {
+  background: var(--color-accent-200);
+}
+.chip.is-off {
+  color: var(--color-neutral-600);
+}
+.chip__swatch {
+  width: 8px;
+  height: 8px;
+  flex: 0 0 8px;
+}
+.chip.is-off .chip__swatch {
+  opacity: 0.35;
+}
+.chip__count {
+  font-size: 11px;
+  color: var(--color-neutral-600);
+}
+
+/* — tab-shell pane geometry (Timeline/Stream/Attribution/Impact/Health):
+   every scrollable rail/detail/aside pane across the five tabs shares this
+   `overflow:auto` + standard `--space-2` pane padding; only the pane's own
+   flex-basis (flex:1 for a main content column, a fixed px width for a
+   rail/aside) differs and stays a scoped rule on the element itself. — */
+.tab-pane {
+  overflow: auto;
+  padding: var(--space-2);
+}
+
+/* — rail section heading (Timeline rail's Collectors/Event types/Watchdog
+   sections; CollectorList/WatchdogList/Timeline.svelte all use it, so it
+   lives here rather than being duplicated per-component scoped style) — */
+.rail-section {
+  margin-bottom: var(--space-3);
+}
+.rail-section__heading {
+  font-family: var(--font-heading);
+  font-weight: 600;
+  font-size: 11px;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--color-neutral-700);
+  margin-bottom: var(--space-1);
+}
+
+/* — status dots (idle-recency convention shared by the Timeline rail's
+   collector list and, later, the Health collector table — SCREENS.md:
+   "Dot: cyan < 12s idle, neutral-400 < 45s, magenta beyond") — */
+.status-dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex: 0 0 6px;
+}
+.dot-accent {
+  background: var(--color-accent);
+}
+.dot-neutral {
+  background: var(--color-neutral-400);
+}
+.dot-alarm {
+  background: var(--color-accent-2);
+}
+
+/* — decision log prefix colour-by-kind (SCREENS.md §1: "colour per kind,
+   600 weight for [orphan]") — */
+.decision-prefix-ingest {
+  color: var(--color-neutral-600);
+}
+.decision-prefix-span_open {
+  color: var(--color-accent-700);
+}
+.decision-prefix-attr {
+  color: var(--color-neutral-700);
+}
+.decision-prefix-orphan {
+  color: var(--color-accent-2-700);
+  font-weight: 600;
+}
+
+/* — the five sanctioned rule kinds (DESIGN-SYSTEM §5); nothing else may
+   structure the page with a rule, border or box — */
+
+/* 1. masthead rule: 3px ink under the header */
+.rule-masthead {
+  border-bottom: 3px solid var(--color-text);
+}
+
+/* 2. 1px ink rule under the tab bar, above the footer, between top-level
+   panes — same spec, applied to whichever edge the layout needs */
+.rule-ink-b {
+  border-bottom: 1px solid var(--color-text);
+}
+.rule-ink-t {
+  border-top: 1px solid var(--color-text);
+}
+.rule-ink-l {
+  border-left: 1px solid var(--color-text);
+}
+
+/* 3. table rules: 1px ink under the header row, 1px neutral-200 between
+   body rows */
+.rule-table-head {
+  border-bottom: 1px solid var(--color-text);
+}
+.rule-table-row {
+  border-bottom: 1px solid var(--color-neutral-200);
+}
+
+/* 4. chart axis: 1px ink on the left edge of the plot area */
+.rule-chart-axis {
+  border-left: 1px solid var(--color-text);
+}
+
+/* 5. quarantine: 2px magenta left border on quarantined-line entries */
+.rule-quarantine {
+  border-left: 2px solid var(--color-accent-2);
+}

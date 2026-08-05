@@ -1,0 +1,82 @@
+site_name: Agentic Footprint
+site_description: Measure and attribute the environmental impact of coding agents.
+docs_dir: docs
+site_dir: site
+copyright: "Agentic Footprint contributors"
+
+theme:
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: teal
+      accent: teal
+      toggle:
+        icon: lucide/sun
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: teal
+      accent: teal
+      toggle:
+        icon: lucide/moon
+        name: Switch to light mode
+  features:
+    - content.code.copy
+    - content.code.select
+    - navigation.instant
+    - navigation.instant.progress
+    - navigation.sections
+    - navigation.tabs
+    - navigation.tabs.sticky
+    - navigation.top
+    - search.highlight
+
+plugins:
+  - search
+
+extra_css:
+  - stylesheets/extra.css
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - md_in_html
+  - toc:
+      permalink: true
+  - pymdownx.details
+  - pymdownx.highlight
+  - pymdownx.inlinehilite
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.tabbed:
+      alternate_style: true
+
+nav:
+  - Home: index.md
+  - Tutorials:
+      - Quickstart: tutorials/quickstart.md
+  - How-to Guides:
+      - Install and configure: how-to/installation.md
+      - Claude Code: how-to/claude-code.md
+      - Codex: how-to/codex.md
+      - Verify releases: how-to/verify-release.md
+  - Explanation:
+      - Energy attribution: explanation/energy-attribution.md
+      - Rebuild architecture: explanation/rebuild-architecture.md
+  - Reference:
+      - CLI: reference/cli.md
+      - Debug API: reference/debug-api.md
+      - Event schemas: reference/event-schemas.md
+      - Release process: reference/release-process.md
+  - Contributing:
+      - Developer guide: contributing/developer-guide.md
+      - API boundaries: contributing/api-boundaries.md
+      - Error handling: contributing/error-handling.md
+      - Live tests: contributing/testing-live.md
+  - Decisions:
+      - Architecture RFC: decisions/0001-architecture.md
+      - Integration strategy: decisions/0002-integration-surface-strategy.md
+  - Archive: archive/README.md

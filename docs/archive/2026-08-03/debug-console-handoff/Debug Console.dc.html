@@ -1,0 +1,1672 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="_ds/broadsheet-cbf7a41a-3fb9-4e0e-bcbd-4ed714de9abf/styles.css" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="anonymous" />
+<link href="https://fonts.googleapis.com/css2?family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,600;0,8..60,700;1,8..60,400&display=swap" rel="stylesheet" />
+<style>
+  html, body { margin:0; padding:0; background:var(--color-bg); color:var(--color-text); }
+  * { box-sizing:border-box; }
+  a { color:var(--color-accent-700); text-decoration:none; }
+  a:hover { color:var(--color-accent-600); text-decoration:underline; }
+  ::selection { background:var(--color-accent-200); }
+  :focus-visible { outline:2px solid var(--color-accent); outline-offset:2px; }
+  ::-webkit-scrollbar { width:9px; height:9px; }
+  ::-webkit-scrollbar-track { background:var(--color-neutral-200); }
+  ::-webkit-scrollbar-thumb { background:var(--color-neutral-400); }
+  ::-webkit-scrollbar-thumb:hover { background:var(--color-neutral-500); }
+</style>
+</helmet>
+
+<div style="height:100vh; display:flex; flex-direction:column; overflow:hidden; background:var(--color-bg); color:var(--color-text); font-family:var(--font-body); font-size:13px; font-variant-numeric:tabular-nums">
+
+  <header style="flex:0 0 auto; display:flex; align-items:baseline; gap:var(--space-3); padding:var(--space-2) var(--space-3) var(--space-1); border-bottom:3px solid var(--color-text)">
+    <span style="font-family:var(--font-heading); font-weight:700; font-size:19px; letter-spacing:-.01em">af watch --debug</span>
+    <span style="font-size:12px; color:var(--color-neutral-700); font-style:italic">agentic-footprint control plane · schema v0.1.0</span>
+    <div style="flex:1"></div>
+    <span style="font-size:12px; color:var(--color-neutral-700)">{{ sessionShort }}</span>
+    <span style="font-size:12px; color:var(--color-neutral-700)">claude-code 2.1.4</span>
+    <span style="font-size:12px; color:var(--color-neutral-700)">{{ sessionAge }}</span>
+    <span style="font-size:12px; color:{{ sseFg }}">{{ sseLabel }}</span>
+    <button onClick="{{ toggleLive }}" style="font-family:var(--font-body); font-size:12px; padding:2px var(--space-2); border-radius:var(--radius-md); cursor:pointer; background:{{ liveBg }}; border:1px solid {{ liveBd }}; color:{{ liveFg }}">{{ liveLabel }}</button>
+  </header>
+
+  <div style="flex:0 0 auto; display:flex; align-items:baseline; gap:var(--space-3); padding:3px var(--space-3) 4px; border-bottom:1px solid var(--color-text)">
+    <sc-for list="{{ tabs }}" as="t" hint-placeholder-count="5">
+      <button onClick="{{ t.onClick }}" style="display:flex; align-items:baseline; gap:5px; padding:1px 0; background:transparent; border:0; border-bottom:2px solid {{ t.bd }}; color:{{ t.fg }}; font-family:var(--font-heading); font-weight:{{ t.wt }}; font-size:14px; cursor:pointer">
+        {{ t.label }}<span style="font-size:11px; color:var(--color-neutral-600); font-weight:400">{{ t.count }}</span>
+      </button>
+    </sc-for>
+    <div style="flex:1"></div>
+    <sc-if value="{{ isTimeline }}" hint-placeholder-val="{{ true }}">
+      <div style="display:flex; align-items:baseline; gap:var(--space-2)">
+        <span style="font-size:11px; color:var(--color-neutral-600); font-style:italic">layout</span>
+        <sc-for list="{{ layouts }}" as="l" hint-placeholder-count="3">
+          <button onClick="{{ l.onClick }}" title="{{ l.title }}" style="font-family:var(--font-body); font-size:12px; padding:1px var(--space-1); background:transparent; border:0; border-bottom:2px solid {{ l.bd }}; color:{{ l.fg }}; cursor:pointer">{{ l.label }}</button>
+        </sc-for>
+      </div>
+    </sc-if>
+  </div>
+
+  <main style="flex:1; min-height:0; display:flex; overflow:hidden">
+
+    <!-- ══ TIMELINE A · rail · chart · inspector ══ -->
+    <sc-if value="{{ showA }}" hint-placeholder-val="{{ true }}">
+      <div data-screen-label="Timeline A" style="flex:1; min-width:0; display:flex">
+
+        <aside style="flex:0 0 196px; overflow:auto; padding:var(--space-2); display:flex; flex-direction:column; gap:var(--space-3)">
+          <div>
+            <div style="font-family:var(--font-heading); font-size:11px; font-weight:600; letter-spacing:.09em; text-transform:uppercase; color:var(--color-neutral-700); margin-bottom:4px">Collectors</div>
+            <sc-for list="{{ collectors }}" as="c" hint-placeholder-count="4">
+              <div style="padding:3px 0">
+                <div style="display:flex; align-items:baseline; gap:5px">
+                  <span style="width:6px; height:6px; border-radius:50%; background:{{ c.dot }}; flex:0 0 6px"></span>
+                  <span style="flex:1; font-size:12.5px; color:var(--color-text); overflow:hidden; text-overflow:ellipsis; white-space:nowrap">{{ c.name }}</span>
+                </div>
+                <div style="padding-left:11px; font-size:11px; color:var(--color-neutral-600)">{{ c.railLine }}</div>
+              </div>
+            </sc-for>
+          </div>
+
+          <div>
+            <div style="font-family:var(--font-heading); font-size:11px; font-weight:600; letter-spacing:.09em; text-transform:uppercase; color:var(--color-neutral-700); margin-bottom:4px">Event types</div>
+            <sc-for list="{{ typeFilters }}" as="f" hint-placeholder-count="5">
+              <button onClick="{{ f.onClick }}" style="display:flex; align-items:baseline; gap:6px; width:100%; text-align:left; padding:2px 0; background:transparent; border:0; cursor:pointer; font-family:var(--font-body); font-size:12.5px; color:{{ f.fg }}">
+                <span style="width:8px; height:8px; flex:0 0 8px; background:{{ f.swatch }}; opacity:{{ f.op }}"></span>
+                <span style="flex:1">{{ f.name }}</span>
+                <span style="font-size:11px; color:var(--color-neutral-600)">{{ f.count }}</span>
+              </button>
+            </sc-for>
+          </div>
+
+          <div>
+            <div style="font-family:var(--font-heading); font-size:11px; font-weight:600; letter-spacing:.09em; text-transform:uppercase; color:var(--color-neutral-700); margin-bottom:4px">Watchdog</div>
+            <sc-for list="{{ watched }}" as="w" hint-placeholder-count="4">
+              <div style="padding:3px 0">
+                <div style="display:flex; align-items:baseline; gap:5px">
+                  <span style="font-size:12.5px; color:{{ w.fg }}">pid {{ w.pid }}</span>
+                  <span style="flex:1; font-size:11.5px; color:var(--color-neutral-700); overflow:hidden; text-overflow:ellipsis; white-space:nowrap">{{ w.cmd }}</span>
+                </div>
+                <div style="padding-left:2px; font-size:11px; color:var(--color-neutral-600)">{{ w.meta }}</div>
+              </div>
+            </sc-for>
+            <div style="margin-top:4px; font-size:11.5px; color:{{ orphanFg }}; font-style:italic">{{ orphanSummary }}</div>
+          </div>
+        </aside>
+
+        <section style="flex:1; min-width:0; display:flex; flex-direction:column; padding:var(--space-2) 0 0">
+          <div style="flex:0 0 auto; display:flex; align-items:baseline; gap:var(--space-3); padding:0 var(--space-3) var(--space-1)">
+            <span style="font-family:var(--font-heading); font-size:15px; font-weight:600">Session timeline</span>
+            <span style="font-size:11.5px; color:var(--color-neutral-700); font-style:italic">{{ windowLabel }} · {{ spanCountLabel }}</span>
+            <div style="flex:1"></div>
+            <sc-for list="{{ legend }}" as="g" hint-placeholder-count="5">
+              <span style="display:flex; align-items:center; gap:4px; font-size:11px; color:var(--color-neutral-700)">
+                <span style="width:9px; height:9px; background:{{ g.bg }}; background-image:{{ g.hatch }}; border:1px solid {{ g.bd }}"></span>{{ g.label }}
+              </span>
+            </sc-for>
+          </div>
+
+          <div style="flex:0 1 auto; min-height:0; overflow:auto; display:flex; padding:0 var(--space-3)">
+            <div style="flex:0 0 116px; position:relative; height:{{ ganttH }}px">
+              <sc-for list="{{ laneLabels }}" as="l" hint-placeholder-count="10">
+                <div style="position:absolute; left:0; right:6px; top:{{ l.topPx }}px; height:{{ l.h }}px; display:flex; align-items:center; justify-content:flex-end; text-align:right; font-size:{{ l.size }}px; font-weight:{{ l.wt }}; color:{{ l.fg }}; overflow:hidden">{{ l.label }}</div>
+              </sc-for>
+            </div>
+            <div style="flex:1; min-width:0; position:relative; height:{{ ganttH }}px; border-left:1px solid var(--color-text)">
+              <sc-for list="{{ axisTicks }}" as="a" hint-placeholder-count="7">
+                <div style="position:absolute; top:0; bottom:0; left:{{ a.left }}%; border-left:1px solid var(--color-neutral-300)"></div>
+              </sc-for>
+              <sc-for list="{{ bars }}" as="b" hint-placeholder-count="26">
+                <div onClick="{{ b.onClick }}" title="{{ b.title }}" style="position:absolute; left:{{ b.left }}%; width:{{ b.width }}%; top:{{ b.topPx }}px; height:{{ b.h }}px; min-width:2px; background:{{ b.bg }}; background-image:{{ b.hatch }}; border:{{ b.border }}; box-shadow:{{ b.ring }}; cursor:pointer; overflow:hidden; display:flex; align-items:center; padding:0 3px">
+                  <span style="font-size:10.5px; color:{{ b.fg }}; white-space:nowrap; overflow:hidden; text-overflow:ellipsis">{{ b.name }}</span>
+                </div>
+              </sc-for>
+            </div>
+          </div>
+
+          <div style="flex:0 0 auto; display:flex; padding:0 var(--space-3) 4px">
+            <div style="flex:0 0 116px"></div>
+            <div style="flex:1; min-width:0; position:relative; height:16px">
+              <sc-for list="{{ axisTicks }}" as="a" hint-placeholder-count="7">
+                <div style="position:absolute; top:0; left:{{ a.left }}%; padding-left:3px; font-size:10.5px; color:var(--color-neutral-600); white-space:nowrap; transform:translateX({{ a.shift }})">{{ a.label }}</div>
+              </sc-for>
+            </div>
+          </div>
+
+          <div style="flex:1 1 auto; display:flex; flex-direction:column; border-top:1px solid var(--color-text); padding:var(--space-1) var(--space-3) 0; min-height:130px; max-height:38%">
+            <div style="flex:0 0 auto; display:flex; align-items:baseline; gap:var(--space-2); padding-bottom:3px">
+              <span style="font-family:var(--font-heading); font-size:12px; font-weight:600; letter-spacing:.06em; text-transform:uppercase">Decision log</span>
+              <span style="font-size:11px; color:var(--color-neutral-600); font-style:italic">stderr · {{ spoolPath }}</span>
+            </div>
+            <div style="flex:1; overflow:auto">
+              <sc-for list="{{ decisionRows }}" as="d" hint-placeholder-count="9">
+                <div style="display:flex; gap:var(--space-2); padding:1px 0; font-size:12px; line-height:1.45">
+                  <span style="flex:0 0 76px; color:{{ d.fg }}; font-weight:{{ d.wt }}">{{ d.pfx }}</span>
+                  <span style="flex:0 0 76px; color:var(--color-neutral-600)">{{ d.t }}</span>
+                  <span style="flex:1; color:var(--color-neutral-800); overflow:hidden; text-overflow:ellipsis; white-space:nowrap">{{ d.text }}</span>
+                </div>
+              </sc-for>
+            </div>
+          </div>
+        </section>
+
+        <aside style="flex:0 0 320px; overflow:auto; padding:var(--space-2); border-left:1px solid var(--color-text)">
+          <div style="font-family:var(--font-heading); font-size:11px; font-weight:600; letter-spacing:.09em; text-transform:uppercase; color:var(--color-neutral-700)">{{ inspKind }}</div>
+          <div style="font-family:var(--font-heading); font-size:17px; font-weight:600; margin:2px 0 1px; line-height:1.2">{{ inspTitle }}</div>
+          <div style="font-size:11.5px; color:var(--color-neutral-600); font-style:italic; margin-bottom:var(--space-2)">{{ inspSub }}</div>
+          <sc-for list="{{ inspRows }}" as="r" hint-placeholder-count="10">
+            <div style="display:flex; gap:var(--space-2); padding:2px 0">
+              <span style="flex:0 0 106px; font-size:11.5px; color:var(--color-neutral-600)">{{ r.k }}</span>
+              <span style="flex:1; font-size:12.5px; color:{{ r.fg }}; word-break:break-word">{{ r.v }}</span>
+            </div>
+          </sc-for>
+          <sc-if value="{{ hasInspAlloc }}" hint-placeholder-val="{{ false }}">
+            <div style="font-family:var(--font-heading); font-size:11px; font-weight:600; letter-spacing:.09em; text-transform:uppercase; color:var(--color-neutral-700); margin:var(--space-3) 0 4px">Share · {{ policy }}</div>
+            <sc-for list="{{ inspAlloc }}" as="a" hint-placeholder-count="4">
+              <div style="padding:2px 0">
+                <div style="display:flex; gap:var(--space-2); align-items:baseline">
+                  <span style="flex:1; font-size:12px; color:{{ a.fg }}; overflow:hidden; text-overflow:ellipsis; white-space:nowrap">{{ a.name }}</span>
+                  <span style="font-size:12px">{{ a.j }}</span>
+                  <span style="flex:0 0 36px; text-align:right; font-size:11px; color:var(--color-neutral-600)">{{ a.pct }}</span>
+                </div>
+                <div style="height:3px; background:var(--color-neutral-200)">
+                  <div style="height:100%; width:{{ a.w }}%; background:{{ a.bar }}; background-image:{{ a.hatch }}"></div>
+                </div>
+              </div>
+            </sc-for>
+          </sc-if>
+          <div style="font-family:var(--font-heading); font-size:11px; font-weight:600; letter-spacing:.09em; text-transform:uppercase; color:var(--color-neutral-700); margin:var(--space-3) 0 4px">Raw JSONL line</div>
+          <pre style="margin:0; font-family:var(--font-body); font-size:11.5px; line-height:1.5; color:var(--color-neutral-800); white-space:pre-wrap; word-break:break-word">{{ inspJson }}</pre>
+        </aside>
+      </div>
+    </sc-if>
+
+    <!-- ══ TIMELINE B · wide lanes + live tail ══ -->
+    <sc-if value="{{ showB }}" hint-placeholder-val="{{ false }}">
+      <div data-screen-label="Timeline B" style="flex:1; min-width:0; display:flex">
+        <section style="flex:1; min-width:0; display:flex; flex-direction:column; padding:var(--space-2) 0 0; min-height:0">
+          <div style="flex:0 0 auto; display:flex; gap:var(--space-6); padding:0 var(--space-3) var(--space-2)">
+            <sc-for list="{{ kpis }}" as="k" hint-placeholder-count="6">
+              <div style="min-width:0">
+                <div style="font-size:10.5px; letter-spacing:.08em; text-transform:uppercase; color:var(--color-neutral-600); white-space:nowrap">{{ k.label }}</div>
+                <div style="display:flex; align-items:baseline; gap:4px">
+                  <span style="font-family:var(--font-heading); font-size:22px; font-weight:600; color:{{ k.fg }}; letter-spacing:-.02em">{{ k.value }}</span>
+                  <span style="font-size:11.5px; color:var(--color-neutral-600)">{{ k.sub }}</span>
+                </div>
+              </div>
+            </sc-for>
+          </div>
+
+          <div style="flex:0 1 auto; min-height:0; overflow:auto; display:flex; padding:0 var(--space-3)">
+            <div style="flex:0 0 138px; position:relative; height:{{ ganttH }}px">
+              <sc-for list="{{ laneLabels }}" as="l" hint-placeholder-count="9">
+                <div style="position:absolute; left:0; right:6px; top:{{ l.topPx }}px; height:{{ l.h }}px; display:flex; align-items:center; justify-content:flex-end; text-align:right; font-size:{{ l.size }}px; font-weight:{{ l.wt }}; color:{{ l.fg }}; overflow:hidden">{{ l.label }}</div>
+              </sc-for>
+            </div>
+            <div style="flex:1; min-width:0; position:relative; height:{{ ganttH }}px; border-left:1px solid var(--color-text)">
+              <sc-for list="{{ axisTicks }}" as="a" hint-placeholder-count="7">
+                <div style="position:absolute; top:0; bottom:0; left:{{ a.left }}%; border-left:1px solid var(--color-neutral-300)"></div>
+              </sc-for>
+              <sc-for list="{{ bars }}" as="b" hint-placeholder-count="30">
+                <div onClick="{{ b.onClick }}" title="{{ b.title }}" style="position:absolute; left:{{ b.left }}%; width:{{ b.width }}%; top:{{ b.topPx }}px; height:{{ b.h }}px; min-width:2px; background:{{ b.bg }}; background-image:{{ b.hatch }}; border:{{ b.border }}; box-shadow:{{ b.ring }}; cursor:pointer; overflow:hidden"></div>
+              </sc-for>
+            </div>
+          </div>
+
+          <div style="flex:0 0 auto; display:flex; padding:0 var(--space-3) var(--space-2)">
+            <div style="flex:0 0 138px"></div>
+            <div style="flex:1; min-width:0; position:relative; height:16px">
+              <sc-for list="{{ axisTicks }}" as="a" hint-placeholder-count="7">
+                <div style="position:absolute; top:0; left:{{ a.left }}%; padding-left:3px; font-size:10.5px; color:var(--color-neutral-600); white-space:nowrap; transform:translateX({{ a.shift }})">{{ a.label }}</div>
+              </sc-for>
+            </div>
+          </div>
+        </section>
+
+        <aside style="flex:0 0 372px; display:flex; flex-direction:column; border-left:1px solid var(--color-text); min-height:0">
+          <div style="flex:0 0 auto; display:flex; align-items:baseline; gap:var(--space-2); padding:var(--space-2) var(--space-2) 4px">
+            <span style="font-family:var(--font-heading); font-size:12px; font-weight:600; letter-spacing:.06em; text-transform:uppercase">Live tail</span>
+            <span style="font-size:11px; color:var(--color-neutral-600)">{{ ingestRate }}</span>
+            <div style="flex:1"></div>
+            <span style="font-size:11px; color:{{ rejFg }}">{{ rejectedLabel }}</span>
+          </div>
+          <div style="flex:1; overflow:auto; padding:0 var(--space-2)">
+            <sc-for list="{{ tailRows }}" as="r" hint-placeholder-count="16">
+              <div onClick="{{ r.onClick }}" style="padding:3px 0; cursor:pointer; background:{{ r.bg }}">
+                <div style="display:flex; gap:6px; align-items:baseline">
+                  <span style="flex:0 0 62px; font-size:11px; color:var(--color-neutral-600)">{{ r.t }}</span>
+                  <span style="flex:1; font-size:12.5px; color:{{ r.typeFg }}">{{ r.type }}</span>
+                  <span style="font-size:11px; color:{{ r.badgeFg }}">{{ r.badge }}</span>
+                </div>
+                <div style="padding-left:68px; font-size:11.5px; color:var(--color-neutral-700); overflow:hidden; text-overflow:ellipsis; white-space:nowrap">{{ r.summary }}</div>
+              </div>
+            </sc-for>
+          </div>
+          <div style="flex:0 0 178px; border-top:1px solid var(--color-text); overflow:auto; padding:var(--space-2)">
+            <div style="font-family:var(--font-heading); font-size:13px; font-weight:600; margin-bottom:3px">{{ inspTitle }}</div>
+            <pre style="margin:0; font-family:var(--font-body); font-size:11.5px; line-height:1.5; color:var(--color-neutral-800); white-space:pre-wrap; word-break:break-word">{{ inspJson }}</pre>
+          </div>
+        </aside>
+      </div>
+    </sc-if>
+
+    <!-- ══ TIMELINE C · overview strip + table + drawer ══ -->
+    <sc-if value="{{ showC }}" hint-placeholder-val="{{ false }}">
+      <div data-screen-label="Timeline C" style="flex:1; min-width:0; display:flex; flex-direction:column; min-height:0">
+        <div style="flex:0 0 auto; display:flex; gap:var(--space-3); padding:var(--space-2) var(--space-3) var(--space-1)">
+          <div style="flex:0 0 132px">
+            <div style="font-family:var(--font-heading); font-size:12px; font-weight:600; letter-spacing:.06em; text-transform:uppercase">Overview</div>
+            <div style="font-size:11px; color:var(--color-neutral-600); font-style:italic">{{ windowLabel }}</div>
+            <div style="font-size:11px; color:var(--color-neutral-600)">{{ spanCountLabel }}</div>
+            <div style="font-size:11px; color:var(--color-accent-700)">{{ peakWattsLabel }}</div>
+          </div>
+          <div style="flex:1; min-width:0; position:relative; height:{{ ganttH }}px; border-left:1px solid var(--color-text)">
+            <sc-for list="{{ axisTicks }}" as="a" hint-placeholder-count="7">
+              <div style="position:absolute; top:0; bottom:16px; left:{{ a.left }}%; border-left:1px solid var(--color-neutral-300)"></div>
+            </sc-for>
+            <sc-for list="{{ bars }}" as="b" hint-placeholder-count="30">
+              <div onClick="{{ b.onClick }}" title="{{ b.title }}" style="position:absolute; left:{{ b.left }}%; width:{{ b.width }}%; top:{{ b.topPx }}px; height:{{ b.h }}px; min-width:2px; background:{{ b.bg }}; background-image:{{ b.hatch }}; border:{{ b.border }}; cursor:pointer"></div>
+            </sc-for>
+            <sc-for list="{{ axisTicks }}" as="a" hint-placeholder-count="7">
+              <div style="position:absolute; bottom:0; left:{{ a.left }}%; padding-left:3px; font-size:10.5px; color:var(--color-neutral-600); white-space:nowrap; transform:translateX({{ a.shift }})">{{ a.label }}</div>
+            </sc-for>
+          </div>
+        </div>
+
+        <div style="flex:0 0 auto; display:flex; align-items:baseline; gap:var(--space-2); padding:0 var(--space-3) 3px; border-bottom:1px solid var(--color-text)">
+          <span style="font-family:var(--font-heading); font-size:12px; font-weight:600; letter-spacing:.06em; text-transform:uppercase">Events</span>
+          <sc-for list="{{ typeFilters }}" as="f" hint-placeholder-count="5">
+            <button onClick="{{ f.onClick }}" style="display:flex; align-items:center; gap:4px; padding:1px var(--space-1); cursor:pointer; background:transparent; border:0; color:{{ f.fg }}; font-family:var(--font-body); font-size:11.5px">
+              <span style="width:8px; height:8px; background:{{ f.swatch }}; opacity:{{ f.op }}"></span>{{ f.name }}<span style="color:var(--color-neutral-600)">{{ f.count }}</span>
+            </button>
+          </sc-for>
+          <div style="flex:1"></div>
+          <span style="font-size:11px; color:var(--color-neutral-600); font-style:italic">{{ streamCountLabel }}</span>
+        </div>
+
+        <div style="flex:1; min-height:0; overflow:auto; padding:0 var(--space-3)">
+          <div style="display:flex; gap:var(--space-2); padding:3px 0; font-size:10.5px; letter-spacing:.07em; text-transform:uppercase; color:var(--color-neutral-600); border-bottom:1px solid var(--color-text); position:sticky; top:0; background:var(--color-bg)">
+            <span style="flex:0 0 80px">ts</span><span style="flex:0 0 104px">type</span><span style="flex:0 0 118px">collector</span><span style="flex:0 0 86px">attribution</span><span style="flex:1">facts</span><span style="flex:0 0 112px">source / method</span><span style="flex:0 0 48px; text-align:right">status</span>
+          </div>
+          <sc-for list="{{ streamRows }}" as="r" hint-placeholder-count="20">
+            <div onClick="{{ r.onClick }}" style="display:flex; gap:var(--space-2); padding:2px 0; cursor:pointer; background:{{ r.bg }}; border-bottom:1px solid var(--color-neutral-200); font-size:12px">
+              <span style="flex:0 0 80px; color:var(--color-neutral-600)">{{ r.t }}</span>
+              <span style="flex:0 0 104px; color:{{ r.typeFg }}">{{ r.type }}</span>
+              <span style="flex:0 0 118px; color:var(--color-neutral-700); overflow:hidden; text-overflow:ellipsis; white-space:nowrap">{{ r.collector }}</span>
+              <span style="flex:0 0 86px; color:var(--color-neutral-600); overflow:hidden; text-overflow:ellipsis; white-space:nowrap">{{ r.attr }}</span>
+              <span style="flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap">{{ r.summary }}</span>
+              <span style="flex:0 0 112px; color:{{ r.badgeFg }}; overflow:hidden; text-overflow:ellipsis; white-space:nowrap">{{ r.badge }}</span>
+              <span style="flex:0 0 48px; text-align:right; color:{{ r.statusFg }}">{{ r.status }}</span>
+            </div>
+          </sc-for>
+        </div>
+
+        <div style="flex:0 0 226px; display:flex; gap:var(--space-4); border-top:1px solid var(--color-text); padding:var(--space-2) var(--space-3); overflow:hidden">
+          <div style="flex:0 0 286px; overflow:auto">
+            <div style="font-family:var(--font-heading); font-size:15px; font-weight:600">{{ inspTitle }}</div>
+            <div style="font-size:11.5px; color:var(--color-neutral-600); font-style:italic; margin-bottom:4px">{{ inspSub }}</div>
+            <sc-for list="{{ inspRows }}" as="r" hint-placeholder-count="10">
+              <div style="display:flex; gap:var(--space-2); padding:1.5px 0">
+                <span style="flex:0 0 102px; font-size:11.5px; color:var(--color-neutral-600)">{{ r.k }}</span>
+                <span style="flex:1; font-size:12.5px; color:{{ r.fg }}; word-break:break-word">{{ r.v }}</span>
+              </div>
+            </sc-for>
+          </div>
+          <div style="flex:1; min-width:0; overflow:auto">
+            <div style="font-family:var(--font-heading); font-size:11px; font-weight:600; letter-spacing:.09em; text-transform:uppercase; color:var(--color-neutral-700); margin-bottom:3px">Correlated context</div>
+            <sc-for list="{{ correlated }}" as="c" hint-placeholder-count="7">
+              <div onClick="{{ c.onClick }}" style="display:flex; gap:var(--space-2); padding:2px 0; cursor:pointer; font-size:12px">
+                <span style="flex:0 0 96px; color:{{ c.typeFg }}">{{ c.type }}</span>
+                <span style="flex:1; color:var(--color-neutral-700); overflow:hidden; text-overflow:ellipsis; white-space:nowrap">{{ c.summary }}</span>
+                <span style="color:var(--color-neutral-600)">{{ c.rel }}</span>
+              </div>
+            </sc-for>
+          </div>
+          <div style="flex:0 0 318px; overflow:auto">
+            <div style="font-family:var(--font-heading); font-size:11px; font-weight:600; letter-spacing:.09em; text-transform:uppercase; color:var(--color-neutral-700); margin-bottom:3px">Raw JSONL line</div>
+            <pre style="margin:0; font-family:var(--font-body); font-size:11.5px; line-height:1.5; color:var(--color-neutral-800); white-space:pre-wrap; word-break:break-word">{{ inspJson }}</pre>
+          </div>
+        </div>
+      </div>
+    </sc-if>
+
+    <!-- ══ STREAM ══ -->
+    <sc-if value="{{ isStream }}" hint-placeholder-val="{{ false }}">
+      <div data-screen-label="Stream" style="flex:1; min-width:0; display:flex; min-height:0">
+        <section style="flex:1; min-width:0; display:flex; flex-direction:column; padding:var(--space-2) var(--space-3) 0; min-height:0">
+          <div style="flex:0 0 auto; display:flex; align-items:baseline; gap:var(--space-2); padding-bottom:3px">
+            <sc-for list="{{ typeFilters }}" as="f" hint-placeholder-count="5">
+              <button onClick="{{ f.onClick }}" style="display:flex; align-items:center; gap:4px; padding:1px var(--space-1); cursor:pointer; background:transparent; border:0; color:{{ f.fg }}; font-family:var(--font-body); font-size:12px">
+                <span style="width:8px; height:8px; background:{{ f.swatch }}; opacity:{{ f.op }}"></span>{{ f.name }}<span style="color:var(--color-neutral-600)">{{ f.count }}</span>
+              </button>
+            </sc-for>
+            <div style="flex:1"></div>
+            <button onClick="{{ clearFilters }}" style="font-family:var(--font-body); font-size:12px; padding:1px var(--space-1); background:transparent; border:0; border-bottom:1px solid var(--color-accent); color:var(--color-accent-700); cursor:pointer">clear filters</button>
+            <span style="font-size:11px; color:var(--color-neutral-600); font-style:italic">{{ streamCountLabel }}</span>
+          </div>
+          <div style="flex:1; min-height:0; overflow:auto">
+            <div style="display:flex; gap:var(--space-2); padding:3px 0; font-size:10.5px; letter-spacing:.07em; text-transform:uppercase; color:var(--color-neutral-600); border-bottom:1px solid var(--color-text); position:sticky; top:0; background:var(--color-bg)">
+              <span style="flex:0 0 80px">ts</span><span style="flex:0 0 104px">type</span><span style="flex:0 0 118px">collector</span><span style="flex:0 0 86px">attribution</span><span style="flex:1">facts</span><span style="flex:0 0 112px">source / method</span><span style="flex:0 0 48px; text-align:right">status</span>
+            </div>
+            <sc-for list="{{ streamRows }}" as="r" hint-placeholder-count="26">
+              <div onClick="{{ r.onClick }}" style="display:flex; gap:var(--space-2); padding:2.5px 0; cursor:pointer; background:{{ r.bg }}; border-bottom:1px solid var(--color-neutral-200); font-size:12px">
+                <span style="flex:0 0 80px; color:var(--color-neutral-600)">{{ r.t }}</span>
+                <span style="flex:0 0 104px; color:{{ r.typeFg }}">{{ r.type }}</span>
+                <span style="flex:0 0 118px; color:var(--color-neutral-700); overflow:hidden; text-overflow:ellipsis; white-space:nowrap">{{ r.collector }}</span>
+                <span style="flex:0 0 86px; color:var(--color-neutral-600); overflow:hidden; text-overflow:ellipsis; white-space:nowrap">{{ r.attr }}</span>
+                <span style="flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap">{{ r.summary }}</span>
+                <span style="flex:0 0 112px; color:{{ r.badgeFg }}; overflow:hidden; text-overflow:ellipsis; white-space:nowrap">{{ r.badge }}</span>
+                <span style="flex:0 0 48px; text-align:right; color:{{ r.statusFg }}">{{ r.status }}</span>
+              </div>
+            </sc-for>
+          </div>
+        </section>
+        <aside style="flex:0 0 352px; overflow:auto; padding:var(--space-2); border-left:1px solid var(--color-text)">
+          <div style="font-family:var(--font-heading); font-size:11px; font-weight:600; letter-spacing:.09em; text-transform:uppercase; color:var(--color-neutral-700)">{{ inspKind }}</div>
+          <div style="font-family:var(--font-heading); font-size:17px; font-weight:600; margin:2px 0 1px; line-height:1.2">{{ inspTitle }}</div>
+          <div style="font-size:11.5px; color:var(--color-neutral-600); font-style:italic; margin-bottom:var(--space-2)">{{ inspSub }}</div>
+          <sc-for list="{{ inspRows }}" as="r" hint-placeholder-count="11">
+            <div style="display:flex; gap:var(--space-2); padding:2px 0">
+              <span style="flex:0 0 106px; font-size:11.5px; color:var(--color-neutral-600)">{{ r.k }}</span>
+              <span style="flex:1; font-size:12.5px; color:{{ r.fg }}; word-break:break-word">{{ r.v }}</span>
+            </div>
+          </sc-for>
+          <div style="font-family:var(--font-heading); font-size:11px; font-weight:600; letter-spacing:.09em; text-transform:uppercase; color:var(--color-neutral-700); margin:var(--space-3) 0 3px">Correlated</div>
+          <sc-for list="{{ correlated }}" as="c" hint-placeholder-count="6">
+            <div onClick="{{ c.onClick }}" style="display:flex; gap:var(--space-2); padding:2px 0; cursor:pointer; font-size:12px">
+              <span style="flex:0 0 96px; color:{{ c.typeFg }}">{{ c.type }}</span>
+              <span style="flex:1; color:var(--color-neutral-700); overflow:hidden; text-overflow:ellipsis; white-space:nowrap">{{ c.summary }}</span>
+              <span style="color:var(--color-neutral-600)">{{ c.rel }}</span>
+            </div>
+          </sc-for>
+          <div style="font-family:var(--font-heading); font-size:11px; font-weight:600; letter-spacing:.09em; text-transform:uppercase; color:var(--color-neutral-700); margin:var(--space-3) 0 3px">Raw JSONL line</div>
+          <pre style="margin:0; font-family:var(--font-body); font-size:11.5px; line-height:1.5; color:var(--color-neutral-800); white-space:pre-wrap; word-break:break-word">{{ inspJson }}</pre>
+        </aside>
+      </div>
+    </sc-if>
+
+    <!-- ══ ATTRIBUTION ══ -->
+    <sc-if value="{{ isAttr }}" hint-placeholder-val="{{ false }}">
+      <div data-screen-label="Attribution" style="flex:1; min-width:0; display:flex; min-height:0">
+        <aside style="flex:0 0 232px; display:flex; flex-direction:column; padding:var(--space-2); min-height:0">
+          <div style="flex:0 0 auto; display:flex; align-items:baseline; gap:var(--space-2); padding-bottom:3px">
+            <span style="font-family:var(--font-heading); font-size:12px; font-weight:600; letter-spacing:.06em; text-transform:uppercase">Samples</span>
+            <span style="font-size:11px; color:var(--color-neutral-600)">{{ sampleCountLabel }}</span>
+          </div>
+          <div style="flex:1; overflow:auto">
+            <sc-for list="{{ sampleList }}" as="s" hint-placeholder-count="16">
+              <div onClick="{{ s.onClick }}" style="padding:3px 0 3px 6px; cursor:pointer; background:{{ s.bg }}; border-left:2px solid {{ s.mark }}">
+                <div style="display:flex; gap:6px; align-items:baseline">
+                  <span style="flex:1; font-size:12px; color:var(--color-neutral-700)">{{ s.t }}</span>
+                  <span style="font-size:12.5px; color:var(--color-accent-700)">{{ s.total }}</span>
+                </div>
+                <div style="font-size:11px; color:var(--color-neutral-600)">{{ s.meta }}<span style="color:{{ s.warnFg }}">{{ s.warn }}</span></div>
+              </div>
+            </sc-for>
+          </div>
+        </aside>
+
+        <section style="flex:1; min-width:0; overflow:auto; padding:var(--space-2) var(--space-3); border-left:1px solid var(--color-text)">
+          <div style="display:flex; align-items:baseline; gap:var(--space-2)">
+            <span style="font-family:var(--font-heading); font-size:19px; font-weight:600">energy_sample</span>
+            <span style="font-size:12.5px; color:var(--color-neutral-700)">{{ selSampleInterval }}</span>
+            <span style="font-size:11px; color:var(--color-neutral-600)">{{ selSampleId }}</span>
+          </div>
+          <div style="display:flex; gap:var(--space-6); margin:var(--space-2) 0 var(--space-3)">
+            <sc-for list="{{ selSampleStats }}" as="st" hint-placeholder-count="6">
+              <div>
+                <div style="font-size:10.5px; letter-spacing:.07em; text-transform:uppercase; color:var(--color-neutral-600); white-space:nowrap">{{ st.k }}</div>
+                <div style="font-family:var(--font-heading); font-size:17px; font-weight:600; color:{{ st.fg }}">{{ st.v }}</div>
+              </div>
+            </sc-for>
+          </div>
+
+          <div style="font-family:var(--font-heading); font-size:11px; font-weight:600; letter-spacing:.09em; text-transform:uppercase; color:var(--color-neutral-700); margin-bottom:4px">Sample interval · overlapping spans</div>
+          <div style="position:relative; height:{{ overlapH }}px; border-left:1px solid var(--color-text); border-right:1px solid var(--color-text); margin-bottom:var(--space-3)">
+            <sc-for list="{{ overlapRows }}" as="o" hint-placeholder-count="4">
+              <div style="position:absolute; top:{{ o.top }}px; height:17px; left:{{ o.left }}%; width:{{ o.width }}%; background:{{ o.bg }}; background-image:{{ o.hatch }}; border:{{ o.border }}; display:flex; align-items:center; padding:0 4px; overflow:hidden">
+                <span style="font-size:11px; color:{{ o.fg }}; white-space:nowrap">{{ o.name }}</span>
+              </div>
+            </sc-for>
+          </div>
+
+          <div style="font-family:var(--font-heading); font-size:11px; font-weight:600; letter-spacing:.09em; text-transform:uppercase; color:var(--color-neutral-700); margin-bottom:3px">Components · solid = measured, hatched = modeled</div>
+          <div style="margin-bottom:var(--space-3)">
+            <div style="display:flex; gap:var(--space-2); padding:3px 0; font-size:10.5px; letter-spacing:.07em; text-transform:uppercase; color:var(--color-neutral-600); border-bottom:1px solid var(--color-text)">
+              <span style="flex:0 0 56px">kind</span><span style="flex:1">label</span><span style="flex:0 0 84px; text-align:right">energy_j</span><span style="flex:0 0 76px; text-align:right">avg power</span><span style="flex:0 0 128px; text-align:right">method</span>
+            </div>
+            <sc-for list="{{ componentRows }}" as="c" hint-placeholder-count="3">
+              <div style="display:flex; gap:var(--space-2); padding:3px 0; border-bottom:1px solid var(--color-neutral-200); font-size:12.5px">
+                <span style="flex:0 0 56px">{{ c.kind }}</span>
+                <span style="flex:1; color:var(--color-neutral-700); overflow:hidden; text-overflow:ellipsis; white-space:nowrap">{{ c.label }}</span>
+                <span style="flex:0 0 84px; text-align:right">{{ c.j }}</span>
+                <span style="flex:0 0 76px; text-align:right; color:var(--color-neutral-700)">{{ c.w }}</span>
+                <span style="flex:0 0 128px; text-align:right; color:{{ c.mFg }}">{{ c.method }}</span>
+              </div>
+            </sc-for>
+          </div>
+
+          <div style="display:flex; align-items:baseline; gap:var(--space-2); margin-bottom:3px">
+            <span style="font-family:var(--font-heading); font-size:11px; font-weight:600; letter-spacing:.09em; text-transform:uppercase; color:var(--color-neutral-700)">Allocation</span>
+            <span style="font-size:11.5px; color:var(--color-accent-700)">active {{ policy }}</span>
+            <span style="font-size:11.5px; color:var(--color-neutral-600); font-style:italic">shadow l1_wall_clock</span>
+          </div>
+          <div>
+            <div style="display:flex; gap:var(--space-2); padding:3px 0; font-size:10.5px; letter-spacing:.07em; text-transform:uppercase; color:var(--color-neutral-600); border-bottom:1px solid var(--color-text)">
+              <span style="flex:1">span</span><span style="flex:0 0 58px">locus</span><span style="flex:0 0 68px; text-align:right">overlap</span><span style="flex:0 0 78px; text-align:right">cpu Δ</span><span style="flex:0 0 122px">l2 share</span><span style="flex:0 0 70px; text-align:right">l2 joules</span><span style="flex:0 0 70px; text-align:right">l1 joules</span>
+            </div>
+            <sc-for list="{{ allocRows }}" as="a" hint-placeholder-count="5">
+              <div onClick="{{ a.onClick }}" style="display:flex; gap:var(--space-2); padding:3px 0; border-bottom:1px solid var(--color-neutral-200); font-size:12.5px; cursor:pointer; background:{{ a.rowBg }}; align-items:center">
+                <span style="flex:1; color:{{ a.fg }}; overflow:hidden; text-overflow:ellipsis; white-space:nowrap">{{ a.name }}</span>
+                <span style="flex:0 0 58px; color:{{ a.locusFg }}">{{ a.locus }}</span>
+                <span style="flex:0 0 68px; text-align:right; color:var(--color-neutral-700)">{{ a.overlap }}</span>
+                <span style="flex:0 0 78px; text-align:right; color:var(--color-neutral-700)">{{ a.cpu }}</span>
+                <div style="flex:0 0 122px; display:flex; align-items:center; gap:5px">
+                  <div style="flex:1; height:4px; background:var(--color-neutral-200)"><div style="height:100%; width:{{ a.w }}%; background:{{ a.bar }}; background-image:{{ a.hatch }}"></div></div>
+                  <span style="flex:0 0 34px; text-align:right; font-size:11px; color:var(--color-neutral-600)">{{ a.pct }}</span>
+                </div>
+                <span style="flex:0 0 70px; text-align:right; color:{{ a.jFg }}">{{ a.j }}</span>
+                <span style="flex:0 0 70px; text-align:right; color:var(--color-neutral-600)">{{ a.j1 }}</span>
+              </div>
+            </sc-for>
+          </div>
+          <sc-for list="{{ allocNotes }}" as="n" hint-placeholder-count="3">
+            <div style="margin-top:var(--space-2); display:flex; gap:var(--space-2); align-items:baseline">
+              <span style="flex:0 0 auto; font-size:11px; letter-spacing:.06em; text-transform:uppercase; color:{{ n.fg }}; font-weight:600">{{ n.tag }}</span>
+              <span style="flex:1; font-size:12.5px; color:var(--color-neutral-800); line-height:1.5; text-wrap:pretty">{{ n.text }}</span>
+            </div>
+          </sc-for>
+        </section>
+
+        <aside style="flex:0 0 274px; overflow:auto; padding:var(--space-2); border-left:1px solid var(--color-text)">
+          <div style="font-family:var(--font-heading); font-size:11px; font-weight:600; letter-spacing:.09em; text-transform:uppercase; color:var(--color-neutral-700); margin-bottom:4px">Policy · {{ policy }}</div>
+          <div style="font-size:12.5px; color:var(--color-neutral-800); line-height:1.55; text-wrap:pretty; margin-bottom:var(--space-3)">{{ policyText }}</div>
+          <div style="font-family:var(--font-heading); font-size:11px; font-weight:600; letter-spacing:.09em; text-transform:uppercase; color:var(--color-neutral-700); margin-bottom:4px">Formula with this sample</div>
+          <pre style="margin:0 0 var(--space-3); font-family:var(--font-body); font-size:11.5px; line-height:1.6; color:var(--color-neutral-800); white-space:pre-wrap">{{ formulaText }}</pre>
+          <div style="font-family:var(--font-heading); font-size:11px; font-weight:600; letter-spacing:.09em; text-transform:uppercase; color:var(--color-neutral-700); margin-bottom:3px">cpu Δ source · process_sample</div>
+          <sc-for list="{{ procRows }}" as="p" hint-placeholder-count="4">
+            <div style="display:flex; gap:var(--space-2); padding:2px 0; font-size:12px">
+              <span style="flex:0 0 48px; color:{{ p.fg }}">{{ p.pid }}</span>
+              <span style="flex:1; color:var(--color-neutral-600); overflow:hidden; text-overflow:ellipsis; white-space:nowrap">{{ p.cmd }}</span>
+              <span style="flex:0 0 56px; text-align:right; color:var(--color-neutral-700)">{{ p.cpu }}</span>
+            </div>
+          </sc-for>
+          <div style="font-family:var(--font-heading); font-size:11px; font-weight:600; letter-spacing:.09em; text-transform:uppercase; color:var(--color-neutral-700); margin:var(--space-3) 0 3px">Grid intensity</div>
+          <sc-for list="{{ gridRows }}" as="g" hint-placeholder-count="5">
+            <div style="display:flex; gap:var(--space-2); padding:2px 0; font-size:12px">
+              <span style="flex:1; color:var(--color-neutral-600)">{{ g.k }}</span>
+              <span style="color:{{ g.fg }}">{{ g.v }}</span>
+            </div>
+          </sc-for>
+        </aside>
+      </div>
+    </sc-if>
+
+    <!-- ══ IMPACT ══ -->
+    <sc-if value="{{ isImpact }}" hint-placeholder-val="{{ false }}">
+      <div data-screen-label="Impact" style="flex:1; min-width:0; display:flex; min-height:0">
+        <section style="flex:1; min-width:0; overflow:auto; padding:var(--space-2) var(--space-3)">
+          <div style="display:flex; gap:var(--space-8); margin-bottom:var(--space-4)">
+            <sc-for list="{{ impactCards }}" as="c" hint-placeholder-count="3">
+              <div style="flex:1; min-width:0">
+                <div style="display:flex; align-items:center; gap:5px; margin-bottom:3px">
+                  <span style="width:9px; height:9px; background:{{ c.dot }}; background-image:{{ c.hatch }}; flex:0 0 9px"></span>
+                  <span style="font-size:10.5px; letter-spacing:.08em; text-transform:uppercase; color:var(--color-neutral-700)">{{ c.label }}</span>
+                </div>
+                <div style="display:flex; align-items:baseline; gap:5px">
+                  <span style="font-family:var(--font-heading); font-size:33px; font-weight:600; color:{{ c.fg }}; letter-spacing:-.025em; line-height:1">{{ c.value }}</span>
+                  <span style="font-size:13px; color:var(--color-neutral-700)">{{ c.unit }}</span>
+                </div>
+                <div style="font-size:11.5px; color:var(--color-neutral-600); margin:3px 0 4px">{{ c.range }}</div>
+                <div style="font-size:12.5px; color:var(--color-neutral-800)">{{ c.second }}</div>
+                <div style="display:flex; gap:4px; flex-wrap:wrap; margin-top:5px">
+                  <sc-for list="{{ c.badges }}" as="b" hint-placeholder-count="2">
+                    <span style="font-size:11px; padding:1px 5px; border-radius:var(--radius-md); background:{{ b.bg }}; color:{{ b.fg }}">{{ b.text }}</span>
+                  </sc-for>
+                </div>
+              </div>
+            </sc-for>
+          </div>
+
+          <div style="display:flex; align-items:baseline; gap:var(--space-2); margin-bottom:3px">
+            <span style="font-family:var(--font-heading); font-size:11px; font-weight:600; letter-spacing:.09em; text-transform:uppercase; color:var(--color-neutral-700)">impact_join · session</span>
+            <span style="font-size:11px; color:var(--color-neutral-600); font-style:italic">{{ joinInterval }}</span>
+          </div>
+          <div style="margin-bottom:var(--space-2)">
+            <div style="display:flex; gap:var(--space-2); padding:3px 0; font-size:10.5px; letter-spacing:.07em; text-transform:uppercase; color:var(--color-neutral-600); border-bottom:1px solid var(--color-text)">
+              <span style="flex:0 0 70px">criterion</span><span style="flex:0 0 62px">unit</span><span style="flex:0 0 108px; text-align:right">local measured</span><span style="flex:0 0 122px; text-align:right">remote estimated</span><span style="flex:1">split</span><span style="flex:0 0 148px; text-align:right">combined min–max</span>
+            </div>
+            <sc-for list="{{ criteriaRows }}" as="r" hint-placeholder-count="5">
+              <div style="display:flex; gap:var(--space-2); padding:4px 0; border-bottom:1px solid var(--color-neutral-200); font-size:12.5px; align-items:center">
+                <span style="flex:0 0 70px">{{ r.name }}</span>
+                <span style="flex:0 0 62px; color:var(--color-neutral-600)">{{ r.unit }}</span>
+                <span style="flex:0 0 108px; text-align:right; color:{{ r.localFg }}">{{ r.local }}</span>
+                <span style="flex:0 0 122px; text-align:right; color:var(--color-neutral-800)">{{ r.remote }}</span>
+                <div style="flex:1; display:flex; height:7px; background:var(--color-neutral-200)">
+                  <div title="{{ r.localTitle }}" style="width:{{ r.localW }}%; background:var(--color-accent)"></div>
+                  <div title="{{ r.remoteTitle }}" style="width:{{ r.remoteW }}%; background:var(--color-neutral-300); background-image:repeating-linear-gradient(45deg, var(--color-neutral-700) 0 1.5px, transparent 1.5px 4px)"></div>
+                </div>
+                <span style="flex:0 0 148px; text-align:right">{{ r.combined }}</span>
+              </div>
+            </sc-for>
+          </div>
+          <div style="display:flex; gap:var(--space-2); align-items:baseline; margin-bottom:var(--space-4)">
+            <span style="flex:0 0 auto; font-size:11px; letter-spacing:.06em; text-transform:uppercase; color:var(--color-accent-2-700); font-weight:600">cross-paradigm</span>
+            <span style="flex:1; font-size:12.5px; color:var(--color-neutral-800); line-height:1.5; text-wrap:pretty">Combined totals add <span style="color:var(--color-accent-700)">measured</span> local joules to <span style="color:var(--color-neutral-900)">modeled</span> remote inference. Not a homogeneous quantity — ranges preserved, never collapsed to a point.</span>
+          </div>
+
+          <div style="font-family:var(--font-heading); font-size:11px; font-weight:600; letter-spacing:.09em; text-transform:uppercase; color:var(--color-neutral-700); margin-bottom:3px">Per model · impact_estimate</div>
+          <div>
+            <div style="display:flex; gap:var(--space-2); padding:3px 0; font-size:10.5px; letter-spacing:.07em; text-transform:uppercase; color:var(--color-neutral-600); border-bottom:1px solid var(--color-text)">
+              <span style="flex:1">model_id_requested</span><span style="flex:0 0 44px; text-align:right">calls</span><span style="flex:0 0 66px; text-align:right">in</span><span style="flex:0 0 58px; text-align:right">out</span><span style="flex:0 0 62px; text-align:right">thought</span><span style="flex:0 0 62px; text-align:right">cached</span><span style="flex:0 0 112px; text-align:right">energy Wh</span><span style="flex:0 0 106px; text-align:right">gwp gCO₂e</span><span style="flex:0 0 104px">status</span>
+            </div>
+            <sc-for list="{{ modelRows }}" as="m" hint-placeholder-count="4">
+              <div style="display:flex; gap:var(--space-2); padding:3.5px 0; border-bottom:1px solid var(--color-neutral-200); font-size:12.5px">
+                <span style="flex:1; color:{{ m.fg }}; overflow:hidden; text-overflow:ellipsis; white-space:nowrap">{{ m.model }}</span>
+                <span style="flex:0 0 44px; text-align:right; color:var(--color-neutral-700)">{{ m.calls }}</span>
+                <span style="flex:0 0 66px; text-align:right; color:var(--color-neutral-700)">{{ m.in }}</span>
+                <span style="flex:0 0 58px; text-align:right; color:var(--color-neutral-700)">{{ m.out }}</span>
+                <span style="flex:0 0 62px; text-align:right; color:var(--color-neutral-700)">{{ m.thought }}</span>
+                <span style="flex:0 0 62px; text-align:right; color:var(--color-neutral-600)">{{ m.cached }}</span>
+                <span style="flex:0 0 112px; text-align:right">{{ m.energy }}</span>
+                <span style="flex:0 0 106px; text-align:right">{{ m.gwp }}</span>
+                <span style="flex:0 0 104px; color:{{ m.stFg }}">{{ m.status }}</span>
+              </div>
+            </sc-for>
+          </div>
+        </section>
+
+        <aside style="flex:0 0 296px; overflow:auto; padding:var(--space-2); border-left:1px solid var(--color-text)">
+          <div style="font-family:var(--font-heading); font-size:11px; font-weight:600; letter-spacing:.09em; text-transform:uppercase; color:var(--color-neutral-700); margin-bottom:4px">What token-only misses</div>
+          <sc-for list="{{ missRows }}" as="m" hint-placeholder-count="6">
+            <div style="padding:4px 0">
+              <div style="display:flex; align-items:baseline; gap:6px">
+                <span style="flex:1; font-size:12.5px; color:var(--color-neutral-800)">{{ m.label }}</span>
+                <span style="font-family:var(--font-heading); font-size:15px; font-weight:600; color:{{ m.fg }}">{{ m.value }}</span>
+              </div>
+              <div style="font-size:11px; color:var(--color-neutral-600); text-wrap:pretty">{{ m.sub }}</div>
+            </div>
+          </sc-for>
+
+          <div style="font-family:var(--font-heading); font-size:11px; font-weight:600; letter-spacing:.09em; text-transform:uppercase; color:var(--color-neutral-700); margin:var(--space-3) 0 3px">Estimation status</div>
+          <sc-for list="{{ statusRows }}" as="s" hint-placeholder-count="4">
+            <div style="display:flex; align-items:center; gap:6px; padding:2px 0">
+              <span style="width:7px; height:7px; border-radius:50%; background:{{ s.dot }}; flex:0 0 7px"></span>
+              <span style="flex:1; font-size:12.5px; color:var(--color-neutral-800)">{{ s.name }}</span>
+              <span style="font-size:12.5px; color:{{ s.fg }}">{{ s.n }}</span>
+            </div>
+          </sc-for>
+
+          <div style="font-family:var(--font-heading); font-size:11px; font-weight:600; letter-spacing:.09em; text-transform:uppercase; color:var(--color-neutral-700); margin:var(--space-3) 0 3px">af statusline · stdout</div>
+          <pre style="margin:0; font-family:var(--font-body); font-size:12.5px; line-height:1.6; color:var(--color-accent-700); white-space:pre-wrap">{{ statuslineText }}</pre>
+          <div style="font-size:11px; color:var(--color-neutral-600); margin-top:4px; line-height:1.45; text-wrap:pretty">Range means in natural units, full session to date. Unmeasured criteria print <span style="color:var(--color-accent-2-700)">nan</span>.</div>
+
+          <div style="font-family:var(--font-heading); font-size:11px; font-weight:600; letter-spacing:.09em; text-transform:uppercase; color:var(--color-neutral-700); margin:var(--space-3) 0 3px">Methodology</div>
+          <sc-for list="{{ methodRows }}" as="r" hint-placeholder-count="7">
+            <div style="display:flex; gap:var(--space-2); padding:2px 0; font-size:12px">
+              <span style="flex:0 0 104px; color:var(--color-neutral-600)">{{ r.k }}</span>
+              <span style="flex:1; color:{{ r.fg }}; word-break:break-word">{{ r.v }}</span>
+            </div>
+          </sc-for>
+        </aside>
+      </div>
+    </sc-if>
+
+    <!-- ══ HEALTH ══ -->
+    <sc-if value="{{ isHealth }}" hint-placeholder-val="{{ false }}">
+      <div data-screen-label="Health" style="flex:1; min-width:0; display:flex; min-height:0">
+        <section style="flex:1; min-width:0; overflow:auto; padding:var(--space-2) var(--space-3)">
+          <div style="font-family:var(--font-heading); font-size:11px; font-weight:600; letter-spacing:.09em; text-transform:uppercase; color:var(--color-neutral-700); margin-bottom:3px">Collectors</div>
+          <div style="margin-bottom:var(--space-4)">
+            <div style="display:flex; gap:var(--space-2); padding:3px 0; font-size:10.5px; letter-spacing:.07em; text-transform:uppercase; color:var(--color-neutral-600); border-bottom:1px solid var(--color-text)">
+              <span style="flex:0 0 156px">collector</span><span style="flex:0 0 50px">version</span><span style="flex:0 0 112px">transport</span><span style="flex:0 0 58px; text-align:right">events</span><span style="flex:0 0 58px; text-align:right">rate</span><span style="flex:0 0 68px; text-align:right">rejected</span><span style="flex:0 0 74px; text-align:right">last seen</span><span style="flex:1">emits</span>
+            </div>
+            <sc-for list="{{ collectors }}" as="c" hint-placeholder-count="4">
+              <div style="display:flex; gap:var(--space-2); padding:4px 0; border-bottom:1px solid var(--color-neutral-200); font-size:12.5px; align-items:center">
+                <span style="flex:0 0 156px; display:flex; align-items:center; gap:6px; overflow:hidden">
+                  <span style="width:7px; height:7px; border-radius:50%; background:{{ c.dot }}; flex:0 0 7px"></span>
+                  <span style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap">{{ c.name }}</span>
+                </span>
+                <span style="flex:0 0 50px; color:var(--color-neutral-600)">{{ c.version }}</span>
+                <span style="flex:0 0 112px; color:{{ c.transFg }}">{{ c.transport }}</span>
+                <span style="flex:0 0 58px; text-align:right">{{ c.events }}</span>
+                <span style="flex:0 0 58px; text-align:right; color:var(--color-neutral-700)">{{ c.rate }}</span>
+                <span style="flex:0 0 68px; text-align:right; color:{{ c.rejFg }}">{{ c.rejected }}</span>
+                <span style="flex:0 0 74px; text-align:right; color:var(--color-neutral-600)">{{ c.lastSeen }}</span>
+                <span style="flex:1; color:var(--color-neutral-600); overflow:hidden; text-overflow:ellipsis; white-space:nowrap">{{ c.emits }}</span>
+              </div>
+            </sc-for>
+          </div>
+
+          <div style="font-family:var(--font-heading); font-size:11px; font-weight:600; letter-spacing:.09em; text-transform:uppercase; color:var(--color-neutral-700); margin-bottom:5px">Schema conformance · are we getting the fields we expect?</div>
+          <div style="display:grid; grid-template-columns:repeat(2, minmax(0,1fr)); gap:var(--space-3) var(--space-6); margin-bottom:var(--space-4)">
+            <sc-for list="{{ conformRows }}" as="r" hint-placeholder-count="6">
+              <div>
+                <div style="display:flex; align-items:baseline; gap:6px; margin-bottom:3px">
+                  <span style="flex:1; font-size:12.5px; color:var(--color-neutral-800)">{{ r.field }}</span>
+                  <span style="font-family:var(--font-heading); font-size:14px; font-weight:600; color:{{ r.fg }}">{{ r.pct }}</span>
+                  <span style="font-size:11px; color:var(--color-neutral-600)">{{ r.n }}</span>
+                </div>
+                <div style="height:4px; background:var(--color-neutral-200)"><div style="height:100%; width:{{ r.w }}%; background:{{ r.bar }}"></div></div>
+                <div style="font-size:11px; color:var(--color-neutral-600); margin-top:3px; line-height:1.45; text-wrap:pretty">{{ r.note }}</div>
+              </div>
+            </sc-for>
+          </div>
+
+          <div style="display:flex; align-items:baseline; gap:var(--space-2); margin-bottom:4px">
+            <span style="font-family:var(--font-heading); font-size:11px; font-weight:600; letter-spacing:.09em; text-transform:uppercase; color:var(--color-accent-2-700)">Quarantined lines</span>
+            <span style="font-size:11px; color:var(--color-neutral-600); font-style:italic">{{ rejectedPath }}</span>
+          </div>
+          <sc-for list="{{ rejectedRows }}" as="r" hint-placeholder-count="3">
+            <div style="margin-bottom:var(--space-2); padding-left:var(--space-2); border-left:2px solid var(--color-accent-2)">
+              <div style="display:flex; gap:var(--space-2); font-size:12.5px">
+                <span style="flex:0 0 72px; color:var(--color-neutral-600)">{{ r.t }}</span>
+                <span style="flex:1; color:var(--color-accent-2-700)">{{ r.reason }}</span>
+                <span style="color:var(--color-neutral-600)">{{ r.origin }}</span>
+              </div>
+              <pre style="margin:2px 0 0; font-family:var(--font-body); font-size:11.5px; line-height:1.45; color:var(--color-neutral-700); white-space:pre-wrap; word-break:break-word">{{ r.raw }}</pre>
+            </div>
+          </sc-for>
+        </section>
+
+        <aside style="flex:0 0 300px; overflow:auto; padding:var(--space-2); border-left:1px solid var(--color-text)">
+          <div style="font-family:var(--font-heading); font-size:11px; font-weight:600; letter-spacing:.09em; text-transform:uppercase; color:var(--color-neutral-700); margin-bottom:3px">Ingestion</div>
+          <sc-for list="{{ ingestRows }}" as="r" hint-placeholder-count="11">
+            <div style="display:flex; gap:var(--space-2); padding:2px 0; font-size:12px">
+              <span style="flex:0 0 104px; color:var(--color-neutral-600)">{{ r.k }}</span>
+              <span style="flex:1; color:{{ r.fg }}; word-break:break-word">{{ r.v }}</span>
+            </div>
+          </sc-for>
+          <div style="font-family:var(--font-heading); font-size:11px; font-weight:600; letter-spacing:.09em; text-transform:uppercase; color:var(--color-neutral-700); margin:var(--space-3) 0 3px">Watchdog</div>
+          <sc-for list="{{ watched }}" as="w" hint-placeholder-count="4">
+            <div style="padding:3px 0">
+              <div style="display:flex; align-items:baseline; gap:6px">
+                <span style="flex:0 0 54px; font-size:12.5px; color:{{ w.fg }}">pid {{ w.pid }}</span>
+                <span style="flex:1; font-size:12px; color:var(--color-neutral-700); overflow:hidden; text-overflow:ellipsis; white-space:nowrap">{{ w.cmd }}</span>
+                <span style="font-size:11px; color:{{ w.fg }}">{{ w.state }}</span>
+              </div>
+              <div style="font-size:11px; color:var(--color-neutral-600)">{{ w.meta2 }}</div>
+            </div>
+          </sc-for>
+          <div style="font-family:var(--font-heading); font-size:11px; font-weight:600; letter-spacing:.09em; text-transform:uppercase; color:var(--color-neutral-700); margin:var(--space-3) 0 3px">Python sidecar · af python doctor</div>
+          <sc-for list="{{ doctorRows }}" as="r" hint-placeholder-count="7">
+            <div style="display:flex; gap:6px; padding:2px 0; font-size:12px; align-items:baseline">
+              <span style="width:6px; height:6px; border-radius:50%; background:{{ r.dot }}; flex:0 0 6px"></span>
+              <span style="flex:0 0 96px; color:var(--color-neutral-600)">{{ r.k }}</span>
+              <span style="flex:1; color:{{ r.fg }}; word-break:break-word">{{ r.v }}</span>
+            </div>
+          </sc-for>
+        </aside>
+      </div>
+    </sc-if>
+  </main>
+
+  <footer style="flex:0 0 auto; display:flex; align-items:baseline; gap:var(--space-3); padding:3px var(--space-3) 4px; border-top:1px solid var(--color-text); font-size:11px; color:var(--color-neutral-600)">
+    <span>{{ endpoint }}</span>
+    <span>{{ ingestedLabel }}</span>
+    <span style="color:{{ rejFg }}">{{ rejectedLabel }}</span>
+    <span>{{ spoolPath }}</span>
+    <div style="flex:1"></div>
+    <span>methodology {{ methodologyVersion }}</span>
+    <span>zone FRA · {{ gridLabel }}</span>
+    <span style="color:var(--color-neutral-800)">{{ clock }}</span>
+  </footer>
+</div>
+
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{
+  &quot;attributionPolicy&quot;: { &quot;editor&quot;:&quot;enum&quot;, &quot;options&quot;:[&quot;l1_wall_clock&quot;,&quot;l2_cpu_time&quot;,&quot;l3_cgroup&quot;], &quot;default&quot;:&quot;l2_cpu_time&quot;, &quot;tsType&quot;:&quot;string&quot;, &quot;section&quot;:&quot;Control plane&quot; },
+  &quot;windowSeconds&quot;: { &quot;editor&quot;:&quot;range&quot;, &quot;min&quot;:60, &quot;max&quot;:600, &quot;step&quot;:30, &quot;default&quot;:180, &quot;unit&quot;:&quot;s&quot;, &quot;tsType&quot;:&quot;number&quot;, &quot;section&quot;:&quot;Control plane&quot; },
+  &quot;showRemoteSpans&quot;: { &quot;editor&quot;:&quot;boolean&quot;, &quot;default&quot;:true, &quot;tsType&quot;:&quot;boolean&quot;, &quot;section&quot;:&quot;Control plane&quot; },
+  &quot;simulateFailures&quot;: { &quot;editor&quot;:&quot;boolean&quot;, &quot;default&quot;:true, &quot;tsType&quot;:&quot;boolean&quot;, &quot;section&quot;:&quot;Simulation&quot; },
+  &quot;defaultLayout&quot;: { &quot;editor&quot;:&quot;enum&quot;, &quot;options&quot;:[&quot;a&quot;,&quot;b&quot;,&quot;c&quot;], &quot;default&quot;:&quot;a&quot;, &quot;tsType&quot;:&quot;string&quot;, &quot;section&quot;:&quot;Layout&quot; }
+}">
+const INK = 'var(--color-text)';
+const N6 = 'var(--color-neutral-600)', N7 = 'var(--color-neutral-700)', N8 = 'var(--color-neutral-800)', N9 = 'var(--color-neutral-900)';
+const CY = 'var(--color-accent)', CY7 = 'var(--color-accent-700)', CY2 = 'var(--color-accent-200)', CY3 = 'var(--color-accent-300)';
+const MG = 'var(--color-accent-2)', MG7 = 'var(--color-accent-2-700)', MG2 = 'var(--color-accent-2-200)';
+const N2 = 'var(--color-neutral-200)', N3 = 'var(--color-neutral-300)', N4 = 'var(--color-neutral-400)';
+const HATCH = 'repeating-linear-gradient(45deg, var(--color-neutral-700) 0 1.5px, transparent 1.5px 4px)';
+const HATCH_MG = 'repeating-linear-gradient(45deg, var(--color-accent-2) 0 1.5px, transparent 1.5px 4px)';
+const NOHATCH = 'none';
+
+const TYPE_FG = {
+  llm_call: CY7, action_span: N9, energy_sample: CY7, process_sample: N7, session_meta: MG7
+};
+const TYPE_SW = {
+  llm_call: CY, action_span: N9, energy_sample: CY3, process_sample: N4, session_meta: MG
+};
+
+const TOOLS = [
+  { name:'Read',                   kind:'file_op',  locus:'local',  dur:[110,420],     cpu:0.15 },
+  { name:'Edit',                   kind:'file_op',  locus:'local',  dur:[140,620],     cpu:0.2  },
+  { name:'Grep',                   kind:'file_op',  locus:'local',  dur:[90,520],      cpu:0.5  },
+  { name:'Bash(cargo test)',       kind:'bash',     locus:'local',  dur:[9000,26000],  cpu:6.2  },
+  { name:'Bash(cargo build)',      kind:'bash',     locus:'local',  dur:[11000,34000], cpu:7.4  },
+  { name:'Bash(uv pip install)',   kind:'bash',     locus:'local',  dur:[3800,11000],  cpu:1.6  },
+  { name:'Bash(pytest -q)',        kind:'bash',     locus:'local',  dur:[2600,9000],   cpu:2.2  },
+  { name:'WebFetch',               kind:'web',      locus:'remote', dur:[600,2900],    cpu:0.05 },
+  { name:'mcp__github__get_issue', kind:'mcp',      locus:'remote', dur:[380,1800],    cpu:0.03 },
+  { name:'mcp__fs__watch',         kind:'mcp',      locus:'local',  dur:[300,1400],    cpu:0.1  },
+  { name:'Task(schema-verifier)',  kind:'subagent', locus:'local',  dur:[16000,42000], cpu:1.1  }
+];
+
+// solid ink = measured local work; hatch = modeled / not locally measurable
+const KIND = {
+  bash:     { bg:CY,  fg:'#fff',  bd:CY7, hatch:NOHATCH },
+  file_op:  { bg:CY3, fg:N9,      bd:CY7, hatch:NOHATCH },
+  mcp:      { bg:N3,  fg:N9,      bd:N7,  hatch:NOHATCH },
+  web:      { bg:'transparent', fg:N7, bd:N7, hatch:HATCH },
+  subagent: { bg:N4,  fg:N9,      bd:N8,  hatch:NOHATCH },
+  other:    { bg:N2,  fg:N8,      bd:N6,  hatch:NOHATCH }
+};
+
+const MODELS = [
+  { id:'claude-sonnet-4-5-20250929', w:62, wh:[0.0022,0.0041] },
+  { id:'claude-haiku-4-5-20251001',  w:24, wh:[0.0006,0.0011] },
+  { id:'claude-opus-4-1-20250805',   w:11, wh:[0.0089,0.0163] },
+  { id:'claude-sonnet-5-20260701',   w:3,  wh:null }
+];
+
+const SESSION = 'ses_01K9Y7QZP4XB3M8NR2VT6HGWDA';
+const HOST_CPU = 'AMD Ryzen 9 7950X';
+const HOST_GPU = 'NVIDIA GeForce RTX 4090 #0';
+const GRID = 56;
+
+const f = (n, d = 0) => (Number.isFinite(n) ? n : 0).toLocaleString('en-US', { minimumFractionDigits:d, maximumFractionDigits:d });
+const fj = j => j === 0 ? '0 J' : j < 10 ? f(j, 2) + ' J' : j < 1000 ? f(j, 0) + ' J' : f(j / 1000, 2) + ' kJ';
+const fdur = m => m < 1000 ? f(m, 0) + 'ms' : (m < 60000 ? f(m / 1000, m < 10000 ? 2 : 1) + 's' : Math.floor(m / 60000) + 'm' + f((m % 60000) / 1000, 0) + 's');
+const fk = n => n < 1000 ? f(n, 0) : f(n / 1000, 1) + 'k';
+const hhmmss = t => { const d = new Date(t), p = x => String(x).padStart(2, '0'); return p(d.getHours()) + ':' + p(d.getMinutes()) + ':' + p(d.getSeconds()); };
+const hms3 = t => hhmmss(t) + '.' + String(new Date(t).getMilliseconds()).padStart(3, '0');
+const iso = t => new Date(t).toISOString();
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+
+class Component extends DCLogic {
+  state = { tab:'timeline', layout:null, live:true, now:Date.now(), selId:null, selSampleId:null, hidden:{}, rev:0 };
+
+  s = 20260725;
+  n = 0;
+  spanSeq = 0;
+  events = [];
+  spans = [];
+  samples = [];
+  llms = [];
+  rejects = [];
+  slots = {};
+  t0 = Date.now() - 200000;
+  cursor = 0;
+  eCursor = 0;
+  gapAt = 0;
+  seeded = false;
+
+  componentDidMount() {
+    if (window.__afTimer) clearInterval(window.__afTimer);
+    this.seed();
+    this.timer = window.__afTimer = setInterval(() => {
+      if (this.state.live) this.advance();
+      this.setState({ now: this.state.live ? Date.now() : this.state.now, rev: this.state.rev + 1 });
+    }, 1000);
+  }
+  componentWillUnmount() { clearInterval(this.timer); clearInterval(window.__afTimer); }
+
+  r() { this.s = (this.s * 1664525 + 1013904223) >>> 0; return this.s / 4294967296; }
+  ri(a, b) { return Math.floor(a + this.r() * (b - a)); }
+  pick(a) { return a[Math.floor(this.r() * a.length)]; }
+  slotOf(t) { return Math.floor((t - this.t0) / 2000); }
+
+  spansOverlapping(a, b) {
+    const out = [], seen = new Set();
+    for (let k = this.slotOf(a); k <= this.slotOf(b); k++) {
+      const arr = this.slots[k]; if (!arr) continue;
+      for (const s of arr) if (s.t_start < b && s.t_end > a && !seen.has(s.span_id)) { seen.add(s.span_id); out.push(s); }
+    }
+    return out;
+  }
+
+  ev(type, ts, payload, attribution, collector) {
+    this.n++;
+    const e = {
+      schema_version:'0.1.0', event_id:'01K' + String(this.n).padStart(5, '0') + 'ZQK4NX', type, ts:iso(ts),
+      collector: collector || { name:'claude-code', version:'0.1.2' },
+      session_id:SESSION, ...(attribution ? { attribution } : {}), payload
+    };
+    e._t = ts;
+    this.events.push(e);
+    if (this.events.length > 2600) this.events.splice(0, 600);
+    return e;
+  }
+
+  seed() {
+    this.ev('session_meta', this.t0, {
+      agent_app:{ name:'claude-code', version:'2.1.4' }, os:'linux-6.9.7',
+      hardware:{ cpu_model:HOST_CPU, gpu_models:[HOST_GPU], ram_gb:64 },
+      geo_zone:'FRA', power_source:'ac'
+    });
+    this.cursor = this.t0 + 800;
+    const stop = Date.now() - 1400;
+    while (this.cursor < stop) this.cursor = this.step(this.cursor);
+    this.eCursor = this.t0;
+    while (this.eCursor < Date.now() - 2000) { this.energy(this.eCursor, this.eCursor + 2000); this.eCursor += 2000; }
+
+    const cand = this.spans.filter(s => s.tool_kind === 'bash' && s.t_end < Date.now() - 70000);
+    if (cand.length) {
+      const o = cand[Math.floor(cand.length * 0.55)];
+      o.orphaned = true; o.orphan_until = o.t_end + 47000; o.orphan_pid = o.pids[0];
+    }
+    const sid = SESSION.slice(4, 12);
+    this.rejects = this.props.simulateFailures === false ? [] : [
+      { t:this.t0 + 61200, reason:'missing required field: payload.usage_source', origin:'litellm-middleware.' + sid + '.jsonl:12',
+        raw:'{"schema_version":"0.1.0","event_id":"01KJ9…","type":"llm_call","collector":{"name":"litellm-middleware","version":"0.0.3"},"session_id":"ses_01K9Y7…","payload":{"provider":"anthropic","model_id_requested":"claude-sonnet-4-5-20250929","usage":{"input_tokens":14201,"output_tokens":812}}}' },
+      { t:this.t0 + 128400, reason:'unsupported schema_version "0.2.0" — control plane accepts ^0.1', origin:'litellm-middleware.' + sid + '.jsonl:31',
+        raw:'{"schema_version":"0.2.0","event_id":"01KJA…","type":"llm_call","ts":"2026-07-25T09:43:49.004Z", …}' },
+      { t:this.t0 + 178050, reason:'malformed JSON: unexpected end of input at byte offset 41822 — torn append', origin:'claude-code.' + sid + '.jsonl:846',
+        raw:'{"schema_version":"0.1.0","event_id":"01KJB…","type":"action_span","collector":{"name":"claude-code","version":"0.1.2"},"payload":{"span_id":"spn_0281","tool_name":"Bash(cargo test)","tool_ki' }
+    ];
+  }
+
+  step(t) {
+    const task = 'tsk_' + String(1 + Math.floor((t - this.t0) / 42000)).padStart(3, '0');
+    const dur = this.ri(900, 8400);
+    this.llm(t, dur, { agent_id:'main', task_id:task });
+    let cur = t + dur + this.ri(60, 340);
+    const n = this.ri(1, 4);
+    for (let i = 0; i < n; i++) {
+      const tool = this.pick(TOOLS);
+      const d = this.ri(tool.dur[0], tool.dur[1]);
+      this.span(tool, cur, cur + d, { agent_id:'main', task_id:task });
+      if (tool.kind === 'subagent') {
+        const sub = 'sub_' + this.ri(100, 999);
+        this.llm(cur + 260, this.ri(800, 3200), { agent_id:'main', subagent_id:sub, task_id:task });
+        let c2 = cur + 700;
+        const m = this.ri(2, 5);
+        for (let j = 0; j < m; j++) {
+          const tt = this.pick(TOOLS.filter(x => x.kind !== 'subagent'));
+          this.span(tt, c2, Math.min(c2 + this.ri(280, 4200), cur + d - 100), { agent_id:'main', subagent_id:sub, task_id:task });
+          c2 += this.ri(200, 1400);
+        }
+      }
+      if (this.r() < 0.24) {
+        const tt = this.pick(TOOLS.filter(x => x.kind === 'file_op' || x.kind === 'mcp'));
+        const s0 = cur + this.ri(50, Math.max(80, Math.floor(d * 0.4)));
+        this.span(tt, s0, s0 + this.ri(200, 2600), { agent_id:'main', task_id:task });
+      }
+      cur += d + this.ri(70, 620);
+    }
+    return cur + this.ri(200, 1700);
+  }
+
+  llm(t, dur, attribution) {
+    let acc = 0; const roll = this.r() * 100; let m = MODELS[0];
+    for (const mm of MODELS) { acc += mm.w; if (roll <= acc) { m = mm; break; } }
+    const inTok = this.ri(4200, 68000), outTok = this.ri(120, 3400);
+    const think = this.r() < 0.42 ? this.ri(200, 4100) : 0;
+    const src = this.r() < 0.84 ? 'agent_telemetry' : (this.r() < 0.7 ? 'transcript' : 'estimated');
+    const otel = src === 'agent_telemetry';
+    const e = this.ev('llm_call', t + dur, {
+      provider:'anthropic', model_id_requested:m.id,
+      ...(this.r() < 0.2 ? { model_id_served:m.id } : {}),
+      endpoint:'https://api.anthropic.com',
+      usage:{ input_tokens:inTok, output_tokens:outTok, thought_tokens:think, cached_read_tokens:this.ri(0, 52000), cached_write_tokens:this.ri(0, 9000) },
+      usage_source:src, duration_ms:dur, status:'ok', streaming:true
+    }, attribution, { name: otel ? 'otlp-cc' : 'claude-code', version: otel ? '0.1.0' : '0.1.2' });
+    const whMin = m.wh ? m.wh[0] * (outTok / 900 + inTok / 90000) : null;
+    e._llm = { model:m.id, inTok, outTok, think, dur, src, whMin, whMax: whMin ? whMin * 1.72 : null,
+      unknown: !m.wh, pendingUntil: t + dur + 9000 };
+    this.llms.push(e);
+    if (this.llms.length > 700) this.llms.splice(0, 150);
+    return e;
+  }
+
+  span(tool, a, b, attribution) {
+    if (b <= a) b = a + 60;
+    this.spanSeq++;
+    const s = {
+      span_id:'spn_' + String(this.spanSeq).padStart(4, '0'),
+      tool_name:tool.name, tool_kind:tool.kind, execution_locus:tool.locus,
+      t_start:a, t_end:b, pids: tool.locus === 'remote' ? [] : [this.ri(4600, 39000)],
+      status: this.r() < 0.06 ? 'error' : 'ok', cpuw:tool.cpu,
+      rssMiB: this.ri(40, 620), toolCallId: this.r() < 0.92 ? 'toolu_' + this.ri(10000000, 99999999) : null,
+      attribution
+    };
+    this.spans.push(s);
+    for (let k = this.slotOf(a); k <= this.slotOf(b); k++) (this.slots[k] = this.slots[k] || []).push(s);
+    if (this.spans.length > 560) {
+      for (const d of this.spans.splice(0, 120)) {
+        for (let k = this.slotOf(d.t_start); k <= this.slotOf(d.t_end); k++) {
+          const arr = this.slots[k]; if (!arr) continue;
+          const i = arr.indexOf(d); if (i >= 0) arr.splice(i, 1);
+          if (!arr.length) delete this.slots[k];
+        }
+      }
+    }
+    this.ev('action_span', b, {
+      span_id:s.span_id, tool_name:s.tool_name, tool_kind:s.tool_kind, execution_locus:s.execution_locus,
+      t_start:iso(a), t_end:iso(b), ...(s.pids.length ? { pids:s.pids } : {}), status:s.status
+    }, { ...attribution, ...(s.toolCallId ? { tool_call_id:s.toolCallId } : {}) });
+    return s;
+  }
+
+  energy(a, b) {
+    if (!this.gapAt) this.gapAt = this.t0 + 138000;
+    if (a >= this.gapAt && a < this.gapAt + 14000) return;
+    const dt = (b - a) / 1000;
+    const overlapping = this.spansOverlapping(a, b);
+    const active = overlapping.filter(s => s.execution_locus !== 'remote');
+    let load = 0;
+    for (const s of active) load += s.cpuw * (Math.min(b, s.t_end) - Math.max(a, s.t_start)) / (b - a);
+    const cpuW = 11.5 + Math.min(122, load * 13) + this.r() * 3;
+    const dramW = 2.4 + Math.min(6, load * 0.5);
+    const gpuW = 14 + (this.r() < 0.18 ? this.r() * 96 : this.r() * 6);
+    const comps = [
+      { kind:'cpu',  label:HOST_CPU,    energy_j:+(cpuW * dt).toFixed(2),  method:'rapl' },
+      { kind:'dram', label:'DDR5 64 GB', energy_j:+(dramW * dt).toFixed(2), method:'rapl' },
+      { kind:'gpu',  label:HOST_GPU,    energy_j:+(gpuW * dt).toFixed(2),  method:'nvml' }
+    ];
+    const e = this.ev('energy_sample', b, { t_start:iso(a), t_end:iso(b), components:comps, host_id:'h_9f2c41ab' },
+      null, { name:'codecarbon-sampler', version:'0.1.0' });
+    e._sample = { a, b, comps, total:comps.reduce((x, c) => x + c.energy_j, 0), watts:cpuW + dramW + gpuW };
+    e._overlap = overlapping;
+
+    const procs = [];
+    for (const s of active) {
+      const ov = Math.min(b, s.t_end) - Math.max(a, s.t_start);
+      procs.push({ pid:s.pids[0], cpu_time_delta_ms:Math.round(ov * s.cpuw * (0.65 + this.r() * 0.5)),
+        memory_rss_bytes:s.rssMiB * 1048576, io_read_bytes:this.ri(0, 42) * 1048576, io_write_bytes:this.ri(0, 22) * 1048576, _span:s.span_id });
+    }
+    procs.push({ pid:4412, cpu_time_delta_ms:Math.round((b - a) * (0.09 + this.r() * 0.12)),
+      memory_rss_bytes:612 * 1048576, io_read_bytes:0, io_write_bytes:0, _span:null, _agent:true });
+    e._procs = procs;
+    this.ev('process_sample', b, { t_start:iso(a), t_end:iso(b), processes:procs.map(({ _span, _agent, ...p }) => p) },
+      null, { name:'codecarbon-sampler', version:'0.1.0' });
+
+    this.samples.push(e);
+    if (this.samples.length > 200) this.samples.splice(0, 40);
+    this.allocFor(e);
+  }
+
+  advance() {
+    const now = Date.now();
+    let g = 0;
+    while (this.cursor < now - 1400 && g++ < 30) this.cursor = this.step(this.cursor);
+    g = 0;
+    while (this.eCursor < now - 2000 && g++ < 30) { this.energy(this.eCursor, this.eCursor + 2000); this.eCursor += 2000; }
+  }
+
+  allocFor(sample) {
+    if (!sample || !sample._sample) return null;
+    if (sample._alloc) return sample._alloc;
+    const { a, b, total } = sample._sample;
+    const procs = sample._procs || [];
+    const spans = sample._overlap || this.spansOverlapping(a, b);
+    // denominator is the MACHINE's cpu-time in the interval (16 cores), not just the
+    // watched trees — otherwise attributed + agent always sums to 100% and the
+    // baseline/idle remainder is zero by construction.
+    const watchedCpu = procs.reduce((x, p) => x + p.cpu_time_delta_ms, 0);
+    const cpuTotal = Math.max(watchedCpu, (b - a) * 8) || 1;
+    const rows = spans.map(s => {
+      const overlap = Math.min(b, s.t_end) - Math.max(a, s.t_start);
+      const p = procs.find(x => x._span === s.span_id);
+      const cpu = s.execution_locus === 'remote' ? 0 : (p ? p.cpu_time_delta_ms : 0);
+      return { span:s, overlap, cpu, share:cpu / cpuTotal, l2: total * (cpu / cpuTotal), l1: total * (overlap / (b - a)) };
+    });
+    const agent = procs.find(p => p._agent);
+    const attributed = rows.reduce((x, r) => x + r.l2, 0);
+    const agentJ = agent ? total * (agent.cpu_time_delta_ms / cpuTotal) : 0;
+    const l1Sum = rows.filter(r => r.span.execution_locus !== 'remote').reduce((x, r) => x + r.l1, 0);
+    const out = { a, b, total, rows, agent, agentJ, attributed, remainder:Math.max(0, total - attributed - agentJ), cpuTotal, l1Over:l1Sum / total };
+    sample._alloc = out;
+    return out;
+  }
+
+  totals() {
+    if (this._tc && Date.now() - this._tc.at < 1500) return this._tc.v;
+    let whMin = 0, whMax = 0, calls = 0, inTok = 0, outTok = 0, think = 0, pending = 0, unknown = 0, transcript = 0;
+    const now = Date.now();
+    for (const e of this.llms) {
+      const l = e._llm; calls++;
+      inTok += l.inTok; outTok += l.outTok; think += l.think;
+      if (l.src === 'transcript') transcript++;
+      if (l.unknown) { unknown++; continue; }
+      if (l.pendingUntil > now) { pending++; continue; }
+      whMin += l.whMin; whMax += l.whMax;
+    }
+    let attributed = 0, idle = 0, agent = 0;
+    for (const s of this.samples) { const al = this.allocFor(s); if (al) { attributed += al.attributed; idle += al.remainder; agent += al.agentJ; } }
+    let orphanJ = 0;
+    const orph = this.spans.find(s => s.orphaned);
+    if (orph) for (const s of this.samples) { const { a, b, total } = s._sample; if (a >= orph.t_end && b <= orph.orphan_until) orphanJ += total * 0.34; }
+    const v = { whMin, whMax, calls, inTok, outTok, think, pending, unknown, transcript,
+      localWh:attributed / 3600, idleWh:idle / 3600, agentWh:agent / 3600, orphanWh:orphanJ / 3600 };
+    this._tc = { at:Date.now(), v };
+    return v;
+  }
+
+  renderVals() {
+    const st = this.state, p = this.props;
+    const key = [st.rev, st.tab, st.layout, st.selId, st.selSampleId, st.live, st.now,
+      Object.keys(st.hidden).join(','), p.attributionPolicy, p.windowSeconds, p.showRemoteSpans, p.defaultLayout].join('|');
+    if (this._rv && this._rv.k === key) return this._rv.v;
+    const v = this.build();
+    this._rv = { k:key, v };
+    return v;
+  }
+
+  build() {
+    const st = this.state;
+    const policy = this.props.attributionPolicy || 'l2_cpu_time';
+    const layout = st.layout || this.props.defaultLayout || 'a';
+    const winMs = (this.props.windowSeconds || 180) * 1000;
+    const now = st.now, tStart = now - winMs;
+    const pctOf = t => ((t - tStart) / winMs) * 100;
+    const onTL = st.tab === 'timeline';
+    const set = (k, x) => this.setState({ [k]: x });
+
+    const tabs = [['timeline','Timeline', this.spans.length], ['stream','Stream', this.events.length],
+      ['attribution','Attribution', this.samples.length], ['impact','Impact', this.llms.length],
+      ['health','Health', this.rejects.length]].map(([k, label, n]) => {
+      const on = st.tab === k;
+      return { label, count:fk(n), onClick:() => set('tab', k), bd: on ? INK : 'transparent', fg: on ? INK : N6, wt: on ? 600 : 400 };
+    });
+    const layouts = [['a','A rail','Rail · chart · inspector'], ['b','B lanes','Wide lanes per tool kind + live tail'],
+      ['c','C stream','Overview strip · event table · drawer']].map(([k, label, title]) => {
+      const on = layout === k;
+      return { label, title, onClick:() => set('layout', k), bd: on ? CY : 'transparent', fg: on ? CY7 : N6 };
+    });
+
+    const axisTicks = [];
+    for (let i = 0; i <= 6; i++) {
+      const rel = Math.round((tStart + i * (winMs / 6) - now) / 1000);
+      axisTicks.push({ left:+((i / 6) * 100).toFixed(3),
+        label: i === 6 ? 'now' : '−' + fdur(Math.abs(rel) * 1000),
+        // the last tick sits on the right edge; pull its label inside so it is not clipped
+        shift: i === 6 ? '-100%' : '0' });
+    }
+
+    const showRemote = this.props.showRemoteSpans !== false;
+    const vis = this.spans.filter(s => s.t_end > tStart && s.t_start < now && (showRemote || s.execution_locus !== 'remote'));
+    const orph = this.spans.find(s => s.orphaned);
+    const winSamples = this.samples.filter(s => s._sample.b > tStart);
+    const maxW = Math.max(60, ...winSamples.map(s => s._sample.watts));
+
+    /* ── one flat bar list + lane labels, geometry per layout ── */
+    const bars = [], laneLabels = [];
+    let ganttH = 40;
+    const pos = (a, b) => { const l = clamp(pctOf(a), 0, 100), r = clamp(pctOf(b), 0, 100); return { left:+l.toFixed(3), width:+Math.max(0.12, r - l).toFixed(3) }; };
+    const spanBar = (s, topPx, h, withName) => {
+      const k = KIND[s.tool_kind] || KIND.other;
+      const remote = s.execution_locus === 'remote';
+      const on = st.selId === s.span_id;
+      return { ...pos(s.t_start, s.t_end), topPx, h,
+        bg: remote ? 'transparent' : k.bg, hatch: remote ? HATCH : NOHATCH,
+        border: '1px solid ' + (s.status === 'error' ? MG : k.bd),
+        ring: on ? '0 0 0 2px ' + INK : 'none',
+        fg: k.fg, name: withName ? s.tool_name : '',
+        title: s.tool_name + ' · ' + fdur(s.t_end - s.t_start) + ' · ' + s.execution_locus +
+          (remote ? ' · excluded from local energy join' : ' · pid ' + s.pids[0]) + ' · ' + s.span_id,
+        onClick: () => this.setState({ selId:s.span_id }) };
+    };
+    const energyBar = (e, laneTop, laneH) => {
+      const { a, b, watts, total, comps } = e._sample;
+      const h = Math.max(1, Math.round((watts / maxW) * laneH));
+      const on = st.selSampleId === e.event_id;
+      return { ...pos(a, b), topPx: laneTop + laneH - h, h,
+        bg: on ? CY7 : CY, hatch:NOHATCH, border:'0', ring:'none', fg:'#fff', name:'',
+        title: f(watts, 1) + ' W avg · ' + fj(total) + ' over ' + fdur(b - a) +
+          ' · cpu ' + f(comps[0].energy_j, 0) + ' J rapl · dram ' + f(comps[1].energy_j, 0) + ' J rapl · gpu ' + f(comps[2].energy_j, 0) + ' J nvml',
+        onClick: () => this.setState({ selSampleId:e.event_id, selId:e.event_id }) };
+    };
+    const gapBars = (laneTop, laneH) => (this.gapAt && this.gapAt + 14000 > tStart && this.gapAt < now)
+      ? [{ ...pos(this.gapAt, this.gapAt + 14000), topPx:laneTop, h:laneH, bg:'transparent', hatch:HATCH_MG,
+          border:'1px dashed ' + MG, ring:'none', fg:MG7, name:'',
+          title:'NO COVERAGE · 14.0 s — codecarbon sampler restarted. Reported as a coverage gap, never as zero energy.', onClick:() => {} }]
+      : [];
+    const orphBar = (topPx, h) => (orph && orph.orphan_until > tStart && orph.t_end < now)
+      ? [{ ...pos(orph.t_end, orph.orphan_until), topPx, h, bg:'transparent', hatch:HATCH_MG,
+          border:'1px dashed ' + MG, ring:'none', fg:MG7, name:'orphaned',
+          title:'ORPHANED · pid ' + orph.orphan_pid + ' outlived ' + orph.span_id + ' by ' + fdur(orph.orphan_until - orph.t_end), onClick:() => this.setState({ selId:orph.span_id }) }]
+      : [];
+    const label = (text, topPx, h, size, wt, fg) => laneLabels.push({ label:text, topPx, h, size, wt, fg });
+
+    if (onTL && layout === 'a') {
+      let y = 0;
+      label('llm_call', y, 22, 11.5, 600, CY7);
+      for (const e of this.llms) {
+        if (e._t <= tStart) continue;
+        const l = e._llm, bad = l.src === 'transcript' || l.unknown;
+        bars.push({ ...pos(e._t - l.dur, e._t), topPx:y + 5, h:12, bg: bad ? 'transparent' : CY2,
+          hatch: bad ? HATCH : NOHATCH, border:'1px solid ' + (st.selId === e.event_id ? INK : CY7), ring:'none', fg:N9, name:'',
+          title: l.model + ' · in ' + fk(l.inTok) + ' / out ' + fk(l.outTok) + (l.think ? ' / think ' + fk(l.think) : '') + ' · ' + l.src + ' · ' + fdur(l.dur),
+          onClick: () => this.setState({ selId:e.event_id }) });
+      }
+      y += 26;
+      const tracks = [];
+      for (const s of [...vis].sort((a, b) => a.t_start - b.t_start)) {
+        let t = tracks.find(tr => tr.end <= s.t_start);
+        if (!t) { if (tracks.length >= 7) continue; t = { end:0, i:tracks.length }; tracks.push(t); }
+        t.end = s.t_end;
+        bars.push(spanBar(s, y + t.i * 21 + 2, 17, true));
+      }
+      const nTracks = Math.max(1, tracks.length);
+      label('action_span', y, nTracks * 21, 11.5, 600, N9);
+      const spansBottom = y + nTracks * 21;
+      bars.push(...orphBar(y + 2, 17));
+      y = spansBottom + 8;
+      label('energy_sample', y, 54, 11.5, 600, CY7);
+      bars.push(...gapBars(y, 54));
+      for (const e of winSamples) bars.push(energyBar(e, y, 54));
+      y += 60;
+      label('process_sample', y, 34, 11.5, 600, N7);
+      for (const e of winSamples) {
+        const cpu = (e._procs || []).reduce((x, q) => x + q.cpu_time_delta_ms, 0);
+        const h = Math.max(1, Math.round(clamp(cpu / 2600, 0, 1) * 34));
+        bars.push({ ...pos(e._sample.a, e._sample.b), topPx:y + 34 - h, h, bg:N4, hatch:NOHATCH, border:'0', ring:'none', fg:N9, name:'',
+          title: f(cpu, 0) + ' ms cpu across ' + (e._procs || []).length + ' watched trees', onClick:() => {} });
+      }
+      ganttH = y + 40;
+    } else if (onTL && layout === 'b') {
+      let y = 0;
+      const order = ['bash','file_op','mcp','web','subagent','other'];
+      const groups = {};
+      for (const s of vis) (groups[s.tool_kind] = groups[s.tool_kind] || []).push(s);
+      for (const kind of order) {
+        const items = groups[kind]; if (!items) continue;
+        const rowsUsed = [];
+        for (const s of [...items].sort((a, b) => a.t_start - b.t_start)) {
+          let idx = rowsUsed.findIndex(end => end <= s.t_start);
+          if (idx < 0) { if (rowsUsed.length >= 3) continue; idx = rowsUsed.length; rowsUsed.push(0); }
+          rowsUsed[idx] = s.t_end;
+          bars.push(spanBar(s, y + idx * 9 + 1, 7, false));
+        }
+        const h = Math.max(1, rowsUsed.length) * 9 + 4;
+        label(kind + '  ' + items.length, y, h, 12, 400, (KIND[kind] || KIND.other).bd);
+        if (kind === 'bash') bars.push(...orphBar(y + 1, 7));
+        y += h + 5;
+      }
+      y += 6;
+      label('machine power', y, 92, 12, 600, CY7);
+      bars.push(...gapBars(y, 92));
+      for (const e of winSamples) {
+        const { a, b, comps, watts } = e._sample;
+        const dt = (b - a) / 1000;
+        const gpuH = Math.max(1, Math.round((watts / maxW) * 92));
+        const cpuH = Math.max(1, Math.round(((comps[0].energy_j + comps[1].energy_j) / dt / maxW) * 92));
+        bars.push({ ...pos(a, b), topPx:y + 92 - gpuH, h:gpuH - cpuH > 0 ? gpuH - cpuH : 1, bg:N3, hatch:NOHATCH, border:'0', ring:'none', fg:N9, name:'',
+          title:'gpu ' + f(comps[2].energy_j / dt, 1) + ' W (nvml)', onClick:() => this.setState({ selSampleId:e.event_id, selId:e.event_id }) });
+        bars.push({ ...pos(a, b), topPx:y + 92 - cpuH, h:cpuH, bg:CY, hatch:NOHATCH, border:'0', ring:'none', fg:'#fff', name:'',
+          title:'cpu+dram ' + f((comps[0].energy_j + comps[1].energy_j) / dt, 1) + ' W (rapl)', onClick:() => this.setState({ selSampleId:e.event_id, selId:e.event_id }) });
+      }
+      ganttH = y + 100;
+    } else if (onTL && layout === 'c') {
+      ganttH = 78;
+      bars.push(...gapBars(0, 58));
+      for (const e of winSamples) bars.push(energyBar(e, 0, 58));
+      let i = 0;
+      for (const s of vis.slice(-140)) { bars.push(spanBar(s, (i % 7) * 8, 5, false)); i++; }
+      bars.push(...orphBar(0, 5));
+    }
+
+    /* ── event stream rows ── */
+    const hidden = st.hidden;
+    const typeCounts = {};
+    for (const e of this.events) typeCounts[e.type] = (typeCounts[e.type] || 0) + 1;
+    const typeFilters = ['llm_call','action_span','energy_sample','process_sample','session_meta'].map(t => ({
+      name:t, count:fk(typeCounts[t] || 0), swatch:TYPE_SW[t], op: hidden[t] ? '0.25' : '1',
+      fg: hidden[t] ? N6 : INK, onClick:() => this.setState({ hidden:{ ...hidden, [t]: !hidden[t] } })
+    }));
+
+    const summarize = e => {
+      const p = e.payload;
+      if (e.type === 'llm_call') return p.model_id_requested + ' · in ' + fk(p.usage.input_tokens) + ' · out ' + fk(p.usage.output_tokens) + (p.usage.thought_tokens ? ' · think ' + fk(p.usage.thought_tokens) : '') + ' · ' + fdur(p.duration_ms);
+      if (e.type === 'action_span') return p.tool_name + ' · ' + fdur(new Date(p.t_end) - new Date(p.t_start)) + ' · ' + p.tool_kind + '/' + p.execution_locus + (p.pids ? ' · pid ' + p.pids.join(',') : ' · no pids');
+      if (e.type === 'energy_sample') return 'total ' + fj(e._sample.total) + ' · cpu ' + f(p.components[0].energy_j, 0) + ' J · dram ' + f(p.components[1].energy_j, 0) + ' J · gpu ' + f(p.components[2].energy_j, 0) + ' J';
+      if (e.type === 'process_sample') return p.processes.length + ' trees · Σcpu ' + f(p.processes.reduce((x, q) => x + q.cpu_time_delta_ms, 0), 0) + ' ms';
+      return p.agent_app.name + ' ' + p.agent_app.version + ' · ' + p.os + ' · zone ' + p.geo_zone;
+    };
+    const badgeOf = e => {
+      if (e.type === 'llm_call') { const s = e.payload.usage_source; return { text:s, fg: s === 'agent_telemetry' ? CY7 : s === 'transcript' ? MG7 : s === 'estimated' ? MG7 : N7 }; }
+      if (e.type === 'energy_sample') return { text:'rapl + nvml', fg:CY7 };
+      if (e.type === 'process_sample') return { text:'psutil', fg:N6 };
+      if (e.type === 'action_span') return { text: e.payload.execution_locus === 'remote' ? 'excluded · remote' : 'local', fg: e.payload.execution_locus === 'remote' ? MG7 : N6 };
+      return { text:'meta', fg:MG7 };
+    };
+    const shown = this.events.filter(e => !hidden[e.type]);
+    const need = st.tab === 'stream' ? 120 : (onTL ? (layout === 'c' ? 120 : layout === 'b' ? 320 : 0) : 0);
+    const streamRows = (need ? shown.slice(-need * 2).sort((a, b) => b._t - a._t).slice(0, need) : []).map(e => {
+      const b = badgeOf(e), on = st.selId === e.event_id;
+      const status = e.payload.status || '—';
+      return { t:hms3(e._t), type:e.type, typeFg:TYPE_FG[e.type], collector:e.collector.name + ' ' + e.collector.version,
+        attr: e.attribution ? (e.attribution.subagent_id || e.attribution.task_id || e.attribution.agent_id || '—') : '—',
+        summary:summarize(e), badge:b.text, badgeFg:b.fg, status,
+        statusFg: status === 'error' ? MG7 : N6, bg: on ? CY2 : 'transparent',
+        onClick: () => this.setState({ selId:e.event_id, ...(e.type === 'energy_sample' ? { selSampleId:e.event_id } : {}) }) };
+    });
+
+    /* ── decision log ── */
+    const PFX = { '[ingest]':N6, '[span open]':N9, '[attr]':CY7, '[orphan]':MG7 };
+    const decisionRows = [];
+    if (onTL && layout === 'a') {
+      const d = [];
+      for (const e of this.events.slice(-70)) {
+        if (e.type === 'action_span') d.push({ t:e._t, pfx:'[span open]', text:e.payload.span_id + ' ' + e.payload.tool_name + ' locus=' + e.payload.execution_locus + ' pids=' + (e.payload.pids ? e.payload.pids.join(',') : 'none') });
+        else if (e.type === 'energy_sample') { const al = this.allocFor(e); if (al) d.push({ t:e._t, pfx:'[attr]', text:'sample ' + f(al.total, 1) + 'J policy=' + policy + ' spans=' + al.rows.length + ' attributed=' + f(al.attributed, 1) + 'J baseline=' + f(al.remainder, 1) + 'J' + (al.l1Over > 1.02 ? ' l1_would_sum=' + f(al.l1Over * 100, 0) + '%' : '') }); }
+        else if (e.type === 'llm_call') d.push({ t:e._t, pfx:'[ingest]', text:'llm_call ' + e.payload.model_id_requested + ' source=' + e.payload.usage_source + ' in=' + e.payload.usage.input_tokens + ' out=' + e.payload.usage.output_tokens });
+      }
+      if (orph) d.push({ t:orph.orphan_until, pfx:'[orphan]', text:'pid ' + orph.orphan_pid + ' outlived ' + orph.span_id + ' by ' + fdur(orph.orphan_until - orph.t_end) + ' — energy reported as orphaned local compute' });
+      d.sort((x, y) => y.t - x.t);
+      let nAttr = 0;
+      for (const x of d) {
+        if (x.pfx === '[attr]' && ++nAttr > 8) continue;
+        decisionRows.push({ pfx:x.pfx, fg:PFX[x.pfx], wt: x.pfx === '[orphan]' ? 600 : 400, t:hms3(x.t), text:x.text });
+        if (decisionRows.length >= 30) break;
+      }
+    }
+
+    /* ── inspector ── */
+    let inspKind = 'inspector', inspTitle = 'Nothing selected', inspSub = 'click a bar, row or sample',
+      inspRows = [], inspJson = '—', inspAlloc = [], hasInspAlloc = false;
+    const selSpan = this.spans.find(s => s.span_id === st.selId);
+    const selEv = this.events.find(e => e.event_id === st.selId);
+    if (selSpan) {
+      const remote = selSpan.execution_locus === 'remote';
+      inspKind = 'action_span'; inspTitle = selSpan.tool_name;
+      inspSub = selSpan.span_id + ' · ' + fdur(selSpan.t_end - selSpan.t_start);
+      inspRows = [
+        { k:'tool_kind', v:selSpan.tool_kind, fg:INK },
+        { k:'execution_locus', v:selSpan.execution_locus + (remote ? ' — excluded from join' : ''), fg: remote ? MG7 : INK },
+        { k:'t_start', v:iso(selSpan.t_start), fg:N7 },
+        { k:'t_end', v:iso(selSpan.t_end), fg:N7 },
+        { k:'pids', v:selSpan.pids.length ? selSpan.pids.join(', ') : 'none observed', fg:selSpan.pids.length ? INK : MG7 },
+        { k:'tool_call_id', v:selSpan.toolCallId || 'missing — cannot correlate to its llm_call', fg:selSpan.toolCallId ? N7 : MG7 },
+        { k:'cgroup', v:'not set — L3 deferred', fg:N6 },
+        { k:'status', v:selSpan.status, fg:selSpan.status === 'error' ? MG7 : INK },
+        { k:'task_id', v:(selSpan.attribution && selSpan.attribution.task_id) || '—', fg:N7 },
+        { k:'subagent_id', v:(selSpan.attribution && selSpan.attribution.subagent_id) || '—', fg:N7 }
+      ];
+      if (selSpan.orphaned) inspRows.push({ k:'watchdog', v:'ORPHANED — pid ' + selSpan.orphan_pid + ' lived ' + fdur(selSpan.orphan_until - selSpan.t_end) + ' past t_end', fg:MG7 });
+      const over = this.samples.filter(s => s._sample.a < selSpan.t_end && s._sample.b > selSpan.t_start);
+      let mine = 0, tot = 0;
+      for (const s of over) { const al = this.allocFor(s); if (!al) continue; tot += al.total; const r = al.rows.find(x => x.span.span_id === selSpan.span_id); if (r) mine += r.l2; }
+      inspRows.push({ k:'energy · ' + policy, v: remote ? 'not measurable — remote' : fj(mine) + ' · ' + f(mine / 3600 * 1000, 2) + ' mWh', fg: remote ? MG7 : CY7 });
+      inspRows.push({ k:'machine in window', v:fj(tot) + ' — share ' + f(tot ? mine / tot * 100 : 0, 1) + '%', fg:N7 });
+      const src = this.events.find(e => e.type === 'action_span' && e.payload.span_id === selSpan.span_id);
+      inspJson = src ? JSON.stringify(src, (k, x) => k.startsWith('_') ? undefined : x, 2) : '// event pruned from the ring buffer';
+      if (!remote && over.length) {
+        const al = this.allocFor(over[Math.floor(over.length / 2)]);
+        const mx = Math.max(...al.rows.map(r => r.l2), al.remainder, al.agentJ) || 1;
+        hasInspAlloc = true;
+        inspAlloc = [
+          ...al.rows.filter(r => r.l2 > 0).map(r => ({ name:r.span.tool_name, j:fj(r.l2), pct:f(r.l2 / al.total * 100, 1) + '%',
+            w:+(r.l2 / mx * 100).toFixed(1), bar:(KIND[r.span.tool_kind] || KIND.other).bd, hatch:NOHATCH,
+            fg: r.span.span_id === selSpan.span_id ? INK : N7 })),
+          { name:'claude-code · pid 4412', j:fj(al.agentJ), pct:f(al.agentJ / al.total * 100, 1) + '%', w:+(al.agentJ / mx * 100).toFixed(1), bar:CY3, hatch:NOHATCH, fg:N7 },
+          { name:'baseline / idle · unattributed', j:fj(al.remainder), pct:f(al.remainder / al.total * 100, 1) + '%', w:+(al.remainder / mx * 100).toFixed(1), bar:N3, hatch:HATCH, fg:N6 }
+        ];
+      }
+    } else if (selEv) {
+      inspKind = selEv.type;
+      const p = selEv.payload;
+      if (selEv.type === 'llm_call') {
+        const l = selEv._llm;
+        inspTitle = p.model_id_requested; inspSub = 'llm_call · ' + fdur(p.duration_ms) + ' · ' + p.usage_source;
+        inspRows = [
+          { k:'provider', v:p.provider, fg:INK },
+          { k:'model_served', v:p.model_id_served || 'not reported', fg:p.model_id_served ? INK : N6 },
+          { k:'usage_source', v:p.usage_source + (p.usage_source === 'transcript' ? ' — known undercount' : ''), fg:p.usage_source === 'transcript' ? MG7 : CY7 },
+          { k:'input_tokens', v:f(p.usage.input_tokens), fg:INK },
+          { k:'output_tokens', v:f(p.usage.output_tokens), fg:INK },
+          { k:'thought_tokens', v:p.usage.thought_tokens ? f(p.usage.thought_tokens) : '0 — not reported', fg:p.usage.thought_tokens ? INK : N6 },
+          { k:'cached_read', v:f(p.usage.cached_read_tokens), fg:N7 },
+          { k:'cached_write', v:f(p.usage.cached_write_tokens), fg:N7 },
+          { k:'estimation_status', v: l.unknown ? 'unknown_model — no factors' : (l.pendingUntil > now ? 'pending — sidecar batch' : 'ok'), fg: l.unknown ? MG7 : (l.pendingUntil > now ? N7 : CY7) },
+          { k:'energy', v: l.whMin && !l.unknown ? f(l.whMin * 1000, 2) + '–' + f(l.whMax * 1000, 2) + ' mWh' : 'not estimated', fg: l.whMin && !l.unknown ? INK : N6 },
+          { k:'gwp', v: l.whMin && !l.unknown ? f(l.whMin / 1000 * GRID * 1000, 3) + '–' + f(l.whMax / 1000 * GRID * 1000, 3) + ' mgCO₂e' : 'not estimated', fg: l.whMin && !l.unknown ? INK : N6 }
+        ];
+      } else if (selEv.type === 'energy_sample') {
+        const al = this.allocFor(selEv);
+        inspTitle = fj(selEv._sample.total);
+        inspSub = 'energy_sample · ' + fdur(selEv._sample.b - selEv._sample.a) + ' · ' + f(selEv._sample.watts, 1) + ' W avg';
+        inspRows = [
+          { k:'t_start', v:p.t_start, fg:N7 }, { k:'t_end', v:p.t_end, fg:N7 },
+          ...p.components.map(c => ({ k:c.kind + ' · ' + c.method, v:f(c.energy_j, 1) + ' J', fg: c.method === 'tdp_model' ? MG7 : INK })),
+          { k:'host_id', v:p.host_id, fg:N6 },
+          { k:'overlapping spans', v:al ? String(al.rows.length) : '0', fg:INK },
+          { k:'idle remainder', v:al ? fj(al.remainder) + ' · ' + f(al.remainder / al.total * 100, 1) + '%' : '—', fg:N7 }
+        ];
+        if (al) {
+          const mx = Math.max(...al.rows.map(r => r.l2), al.remainder, al.agentJ) || 1;
+          hasInspAlloc = true;
+          inspAlloc = [
+            ...al.rows.map(r => ({ name:r.span.tool_name + (r.span.execution_locus === 'remote' ? ' · remote' : ''), j: r.l2 ? fj(r.l2) : 'excluded',
+              pct:f(r.l2 / al.total * 100, 1) + '%', w:+(r.l2 / mx * 100).toFixed(1),
+              bar:(KIND[r.span.tool_kind] || KIND.other).bd, hatch: r.span.execution_locus === 'remote' ? HATCH : NOHATCH, fg:N7 })),
+            { name:'claude-code · pid 4412', j:fj(al.agentJ), pct:f(al.agentJ / al.total * 100, 1) + '%', w:+(al.agentJ / mx * 100).toFixed(1), bar:CY3, hatch:NOHATCH, fg:N7 },
+            { name:'baseline / idle · unattributed', j:fj(al.remainder), pct:f(al.remainder / al.total * 100, 1) + '%', w:+(al.remainder / mx * 100).toFixed(1), bar:N3, hatch:HATCH, fg:N6 }
+          ];
+        }
+      } else {
+        inspTitle = selEv.type; inspSub = selEv.event_id;
+        inspRows = Object.entries(p).slice(0, 10).map(([k, x]) => ({ k, v: typeof x === 'object' ? JSON.stringify(x).slice(0, 80) : String(x), fg:INK }));
+      }
+      inspJson = JSON.stringify(selEv, (k, x) => k.startsWith('_') ? undefined : x, 2);
+    }
+
+    let correlated = [];
+    if (selEv || selSpan) {
+      const t = selSpan ? selSpan.t_start : selEv._t;
+      correlated = this.events.filter(e => Math.abs(e._t - t) < 6000 && (!selEv || e.event_id !== selEv.event_id))
+        .slice(-7).reverse().map(e => ({ type:e.type, typeFg:TYPE_FG[e.type], summary:summarize(e),
+          rel:(e._t - t >= 0 ? '+' : '−') + fdur(Math.abs(e._t - t)), onClick:() => this.setState({ selId:e.event_id }) }));
+    }
+
+    /* ── attribution tab ── */
+    const onAT = st.tab === 'attribution';
+    const sel = this.samples.find(s => s.event_id === st.selSampleId) || this.samples[this.samples.length - 3] || this.samples[this.samples.length - 1] || null;
+    const al = this.allocFor(sel);
+    const sampleList = !onAT ? [] : this.samples.slice(-60).reverse().map(e => {
+      const a2 = this.allocFor(e), on = sel && e.event_id === sel.event_id;
+      return { t:hhmmss(e._sample.a) + ' → ' + hhmmss(e._sample.b), total:fj(e._sample.total),
+        meta:(a2 ? a2.rows.length : 0) + ' spans · idle ' + (a2 ? f(a2.remainder / a2.total * 100, 0) : '—') + '%  ',
+        warn: a2 && a2.l1Over > 1.02 ? 'L1 ' + f(a2.l1Over * 100, 0) + '%' : '', warnFg:MG7,
+        bg: on ? CY2 : 'transparent', mark: on ? CY : 'transparent',
+        onClick:() => this.setState({ selSampleId:e.event_id }) };
+    });
+    const selSampleStats = !al ? [] : [
+      { k:'total measured', v:fj(al.total), fg:CY7 },
+      { k:'avg power', v:f(sel._sample.watts, 1) + ' W', fg:INK },
+      { k:'overlapping spans', v:String(al.rows.length), fg:INK },
+      { k:'attributed', v:f((al.total - al.remainder) / al.total * 100, 1) + '%', fg:INK },
+      { k:'baseline / idle', v:fj(al.remainder), fg:N7 },
+      { k:'l1 would sum to', v:f(al.l1Over * 100, 0) + '%', fg: al.l1Over > 1.02 ? MG7 : N7 }
+    ];
+    const overlapRows = !al ? [] : al.rows.slice(0, 8).map((r, i) => {
+      const k = KIND[r.span.tool_kind] || KIND.other, remote = r.span.execution_locus === 'remote';
+      const l = clamp((Math.max(al.a, r.span.t_start) - al.a) / (al.b - al.a) * 100, 0, 100);
+      const rr = clamp((Math.min(al.b, r.span.t_end) - al.a) / (al.b - al.a) * 100, 0, 100);
+      return { top:2 + i * 19, left:+l.toFixed(2), width:+Math.max(1.5, rr - l).toFixed(2),
+        bg: remote ? 'transparent' : k.bg, hatch: remote ? HATCH : NOHATCH, border:'1px solid ' + k.bd, fg:k.fg,
+        name: r.span.tool_name + ' · ' + fdur(r.overlap) + ' in sample' + (remote ? ' · remote' : '') };
+    });
+    const componentRows = !sel ? [] : sel._sample.comps.map(c => ({
+      kind:c.kind, label:c.label, j:f(c.energy_j, 2), w:f(c.energy_j / ((sel._sample.b - sel._sample.a) / 1000), 1) + ' W',
+      method:c.method + (c.method === 'tdp_model' ? ' · modeled' : ' · measured'), mFg: c.method === 'tdp_model' ? MG7 : CY7 }));
+    const allocRows = !al ? [] : [
+      ...al.rows.map(r => {
+        const k = KIND[r.span.tool_kind] || KIND.other, remote = r.span.execution_locus === 'remote';
+        return { name:r.span.tool_name + ' · ' + r.span.span_id, fg: remote ? N6 : INK,
+          locus:r.span.execution_locus, locusFg: remote ? MG7 : N7,
+          overlap:fdur(r.overlap), cpu: remote ? '—' : f(r.cpu, 0) + ' ms',
+          w:+clamp(r.share * 100, 0, 100).toFixed(1), pct: remote ? '—' : f(r.share * 100, 1) + '%',
+          bar: remote ? N3 : k.bd, hatch: remote ? HATCH : NOHATCH,
+          j: remote ? 'excluded' : fj(r.l2), jFg: remote ? MG7 : INK, j1:fj(r.l1),
+          rowBg: st.selId === r.span.span_id ? CY2 : 'transparent', onClick:() => this.setState({ selId:r.span.span_id }) };
+      }),
+      { name:'claude-code agent process · pid 4412', fg:CY7, locus:'local', locusFg:N7, overlap:fdur(al.b - al.a),
+        cpu:f(al.agent ? al.agent.cpu_time_delta_ms : 0, 0) + ' ms', w:+(al.agentJ / al.total * 100).toFixed(1),
+        pct:f(al.agentJ / al.total * 100, 1) + '%', bar:CY3, hatch:NOHATCH, j:fj(al.agentJ), jFg:INK, j1:fj(al.total),
+        rowBg:'transparent', onClick:() => {} },
+      { name:'baseline / idle · not attributed to any action', fg:N6, locus:'—', locusFg:N6, overlap:'—', cpu:'—',
+        w:+(al.remainder / al.total * 100).toFixed(1), pct:f(al.remainder / al.total * 100, 1) + '%', bar:N3, hatch:HATCH,
+        j:fj(al.remainder), jFg:N7, j1:'n/a', rowBg:'transparent', onClick:() => {} }
+    ];
+    const allocNotes = !al ? [] : [
+      ...(al.l1Over > 1.02 ? [{ tag:'over-attribution', fg:MG7,
+        text:'Under L1 wall-clock slicing these ' + al.rows.length + ' overlapping spans would claim ' + f(al.l1Over * 100, 0) + '% of the sample — the same joules counted more than once. L2 CPU-time weighting keeps the sum at or below 100% and reports the rest as idle.' }] : []),
+      ...(al.rows.some(r => r.span.execution_locus === 'remote') ? [{ tag:'remote', fg:MG7,
+        text:'Remote spans overlap this interval but are excluded from the local join — there is no local process tree to weight. They are counted as unmeasured remote activity rather than silently absorbing machine energy.' }] : []),
+      { tag:'idle', fg:N7, text:f(al.remainder / al.total * 100, 1) + '% of measured energy in this interval matched no watched process tree. It is reported as baseline/idle and never spread across actions.' }
+    ];
+    const policyText = policy === 'l2_cpu_time'
+      ? 'Overlapping spans share each energy sample in proportion to their process-tree CPU-time delta. Active versus idle stays explicit: the unattributed remainder is reported as baseline, never spread over actions.'
+      : policy === 'l1_wall_clock'
+        ? 'Energy inside [t_start, t_end] is assigned wholesale to the span. Simple, and wrong under concurrency — overlapping spans double-count the same joules.'
+        : 'cgroup isolation per tool on Linux: measured per-action shares, no apportionment guesswork. Deferred — the schema already carries cgroup, but L2 gets field-tested first.';
+    const formulaText = !al ? '' : [
+      'total_j        = ' + f(al.total, 2),
+      'Σ cpu_delta_ms = ' + f(al.cpuTotal, 0),
+      '',
+      'per span i:',
+      '  w_i = cpu_i / Σ cpu',
+      '  j_i = total_j × w_i',
+      '',
+      'remainder = total − Σ j_i − agent_j',
+      '          = ' + f(al.total, 1) + ' − ' + f(al.attributed, 1) + ' − ' + f(al.agentJ, 1),
+      '          = ' + f(al.remainder, 1) + '  → baseline/idle'
+    ].join('\n');
+    const procRows = !al ? [] : (sel._procs || []).map(pr => ({
+      pid:String(pr.pid), fg: pr._agent ? CY7 : INK,
+      cmd: pr._agent ? 'claude-code (agent)' : ((al.rows.find(r => r.span.span_id === pr._span) || { span:{ tool_name:'?' } }).span.tool_name),
+      cpu:f(pr.cpu_time_delta_ms, 0) + ' ms' }));
+    const gridRows = [
+      { k:'zone (user-configured)', v:'FRA', fg:INK }, { k:'intensity', v:GRID + ' gCO₂e/kWh', fg:INK },
+      { k:'source', v:'codecarbon data v2026.06', fg:N7 }, { k:'power_source', v:'ac', fg:N7 },
+      { k:'auto-geolocated', v:'never', fg:CY7 }
+    ];
+
+    /* ── impact tab ── */
+    const T = this.totals();
+    const onIM = st.tab === 'impact';
+    const remoteSpans = this.spans.filter(s => s.execution_locus === 'remote').length;
+    const impactCards = !onIM ? [] : [
+      { label:'local · measured', dot:CY, hatch:NOHATCH, fg:CY7, value:f(T.localWh, 3), unit:'Wh',
+        range:'±6% counter tolerance · ' + f(T.localWh * 0.94, 3) + '–' + f(T.localWh * 1.06, 3),
+        second:f(T.localWh / 1000 * GRID * 1000, 1) + ' mgCO₂e at ' + GRID + ' gCO₂e/kWh',
+        badges:[{ text:'rapl + nvml', bg:CY2, fg:'var(--color-accent-800)' }, { text:'coverage 94%', bg:MG2, fg:MG7 }, { text:'idle excluded', bg:N2, fg:N8 }] },
+      { label:'remote · modeled', dot:N3, hatch:HATCH, fg:N9, value:f(T.whMax, 3), unit:'Wh',
+        range:f(T.whMin, 3) + '–' + f(T.whMax, 3) + ' Wh · ecologits range',
+        second:T.calls + ' llm_calls · ' + fk(T.inTok) + ' in / ' + fk(T.outTok) + ' out / ' + fk(T.think) + ' think',
+        badges:[{ text:'ecologits 0.7.1', bg:N2, fg:N8 },
+          ...(T.unknown ? [{ text:T.unknown + ' unknown_model', bg:MG2, fg:MG7 }] : []),
+          ...(T.pending ? [{ text:T.pending + ' pending', bg:N2, fg:N8 }] : [])] },
+      { label:'combined · cross-paradigm', dot:CY, hatch:HATCH, fg:INK,
+        value:f(T.localWh + (T.whMin + T.whMax) / 2, 3), unit:'Wh',
+        range:f(T.localWh * 0.94 + T.whMin, 3) + '–' + f(T.localWh * 1.06 + T.whMax, 3) + ' Wh · ranges preserved',
+        second:'measured plus modeled — not a homogeneous quantity',
+        badges:[{ text:policy, bg:CY2, fg:'var(--color-accent-800)' }, { text:remoteSpans + ' unmeasured remote spans', bg:MG2, fg:MG7 }] }
+    ];
+    const critDefs = [
+      ['energy','Wh', T.localWh, T.whMin, T.whMax, 3],
+      ['gwp','mgCO₂e', T.localWh / 1000 * GRID * 1000, T.whMin / 1000 * GRID * 1000, T.whMax / 1000 * GRID * 1000, 2],
+      ['adpe','µgSbeq', 0, T.whMin * 61, T.whMax * 61, 2],
+      ['pe','kJ', 0, T.whMin * 10.4, T.whMax * 10.4, 2],
+      ['water','mL', 0, T.whMin * 1.82, T.whMax * 1.82, 2]
+    ];
+    const criteriaRows = !onIM ? [] : critDefs.map(([name, unit, local, rmin, rmax, d]) => {
+      const tot = local + rmax || 1, noLocal = local === 0;
+      return { name, unit, local: noLocal ? 'not measured' : f(local, d), localFg: noLocal ? N6 : CY7,
+        remote:f(rmin, d) + '–' + f(rmax, d),
+        combined: noLocal ? f(rmin, d) + '–' + f(rmax, d) + ' · remote only' : f(local * 0.94 + rmin, d) + '–' + f(local * 1.06 + rmax, d),
+        localW:+clamp(local / tot * 100, 0, 100).toFixed(1), remoteW:+clamp(rmax / tot * 100, 0, 100).toFixed(1),
+        localTitle:'local measured ' + f(local, d) + ' ' + unit, remoteTitle:'remote estimated ' + f(rmax, d) + ' ' + unit };
+    });
+    const byModel = {};
+    if (onIM) for (const e of this.llms) {
+      const l = e._llm;
+      const m = (byModel[l.model] = byModel[l.model] || { calls:0, in:0, out:0, think:0, cached:0, whMin:0, whMax:0, unknown:l.unknown });
+      m.calls++; m.in += l.inTok; m.out += l.outTok; m.think += l.think; m.cached += e.payload.usage.cached_read_tokens;
+      if (l.whMin) { m.whMin += l.whMin; m.whMax += l.whMax; }
+      if (l.unknown) m.unknown = true;
+    }
+    const modelRows = Object.entries(byModel).sort((a, b) => b[1].calls - a[1].calls).map(([model, m]) => ({
+      model, fg: m.unknown ? MG7 : INK, calls:String(m.calls), in:fk(m.in), out:fk(m.out), thought:fk(m.think), cached:fk(m.cached),
+      energy: m.whMin ? f(m.whMin, 4) + '–' + f(m.whMax, 4) : '—',
+      gwp: m.whMin ? f(m.whMin / 1000 * GRID * 1000, 2) + '–' + f(m.whMax / 1000 * GRID * 1000, 2) : '—',
+      status: m.unknown ? 'unknown_model' : 'ok', stFg: m.unknown ? MG7 : CY7 }));
+    const missRows = !onIM ? [] : [
+      { label:'Local tool energy', value:f(T.localWh, 3) + ' Wh', fg:CY7, sub:'cargo build/test, pytest, file ops — invisible to token accounting' },
+      { label:'Orphaned compute', value:f(T.orphanWh, 3) + ' Wh', fg:MG7, sub:orph ? 'pid ' + orph.orphan_pid + ' outlived ' + orph.span_id + ' by ' + fdur(orph.orphan_until - orph.t_end) : 'none detected' },
+      { label:'Agent process itself', value:f(T.agentWh, 3) + ' Wh', fg:CY7, sub:'claude-code pid 4412 — TUI, diffing, context assembly' },
+      { label:'Idle baseline (separated)', value:f(T.idleWh, 3) + ' Wh', fg:N7, sub:'reported, never spread across actions' },
+      { label:'Unmeasured remote spans', value:String(remoteSpans), fg:MG7, sub:'MCP and WebFetch — no local factors yet' },
+      { label:'Transcript-sourced calls', value:String(T.transcript), fg:MG7, sub:'flagged: token counts known to undercount (Annex B)' }
+    ];
+    const statusRows = !onIM ? [] : [
+      { name:'ok', n:String(T.calls - T.pending - T.unknown), dot:CY, fg:INK },
+      { name:'pending', n:String(T.pending), dot:N4, fg:N7 },
+      { name:'unknown_model', n:String(T.unknown), dot:MG, fg:MG7 },
+      { name:'missing_zone', n:'0', dot:N3, fg:N6 }
+    ];
+    const methodRows = !onIM ? [] : [
+      { k:'methodology', v:'v2026.06.1', fg:INK }, { k:'source', v:'bundled', fg:INK },
+      { k:'ecologits', v:'0.7.1', fg:INK }, { k:'codecarbon', v:'3.0.4', fg:INK },
+      { k:'schema_version', v:'0.1.0', fg:INK }, { k:'attribution_policy', v:policy, fg:CY7 },
+      { k:'replayable', v:'yes — raw facts stored separately', fg:CY7 }
+    ];
+    const whMean = T.localWh + (T.whMin + T.whMax) / 2;
+    const statuslineText = 'gwp wcf energy adpe pe\n' + [f(whMean / 1000 * GRID, 4), f(whMean * 1.82 / 1000, 5),
+      f(whMean * 0.0036, 5), f(whMean * 61 / 1e6, 8), f(whMean * 10.4 / 1000, 5)].join(' ');
+
+    /* ── health tab ── */
+    const onHE = st.tab === 'health';
+    const meta = {
+      'claude-code':{ transport:'jsonl spool', transFg:N7 },
+      'otlp-cc':{ transport:'POST /v1/logs', transFg:CY7 },
+      'codecarbon-sampler':{ transport:'stdio sidecar', transFg:N7 },
+      'litellm-middleware':{ transport:'jsonl spool', transFg:N6 }
+    };
+    const perCollector = {};
+    if (onHE || (onTL && layout === 'a')) for (const e of this.events) {
+      const c = (perCollector[e.collector.name] = perCollector[e.collector.name] || { n:0, version:e.collector.version, last:0, types:{} });
+      c.n++; c.last = Math.max(c.last, e._t); c.types[e.type] = 1;
+    }
+    const litellmRej = this.rejects.filter(r => r.origin.startsWith('litellm')).length;
+    const collectors = [
+      ...Object.entries(perCollector).map(([name, c]) => {
+        const idle = Math.max(0, now - c.last), rej = this.rejects.filter(r => r.origin.startsWith(name)).length;
+        const m = meta[name] || { transport:'jsonl spool', transFg:N6 };
+        return { name, version:c.version, dot: idle < 12000 ? CY : idle < 45000 ? N4 : MG,
+          events:fk(c.n), rate:f(c.n / Math.max(1, (now - this.t0) / 1000), 2) + '/s',
+          rejected: String(rej), rejFg: rej ? MG7 : N6,
+          railLine: fk(c.n) + ' ev · ' + f(c.n / Math.max(1, (now - this.t0) / 1000), 1) + '/s' + (rej ? ' · ' + rej + ' rejected' : ''),
+          lastSeen:fdur(idle) + ' ago', emits:Object.keys(c.types).join(', '), transport:m.transport, transFg:m.transFg };
+      }),
+      { name:'litellm-middleware', version:'0.0.3', dot:MG, events:'0', rate:'0.00/s', rejected:String(litellmRej), rejFg:MG7,
+        railLine:'0 ev · ' + litellmRej + ' rejected', lastSeen:'never', emits:'llm_call (all rejected)',
+        transport:'jsonl spool', transFg:N6 }
+    ];
+    const conf = (field, n, total, note) => {
+      const pc = total ? n / total : 0;
+      return { field, pct:f(pc * 100, 1) + '%', n:n + '/' + total, w:+(pc * 100).toFixed(1),
+        fg: pc > 0.9 ? CY7 : pc > 0.6 ? N8 : MG7, bar: pc > 0.9 ? CY : pc > 0.6 ? N4 : MG, note };
+    };
+    const spanEvents = onHE ? this.events.filter(e => e.type === 'action_span') : [];
+    const conformRows = !onHE ? [] : [
+      conf('action_span.pids[]', this.spans.filter(s => s.pids.length).length, this.spans.length, 'No pids means the span cannot enter the L2 join. Remote spans legitimately have none.'),
+      conf('attribution.tool_call_id', spanEvents.filter(e => e.attribution && e.attribution.tool_call_id).length, spanEvents.length || 1, 'Needed to correlate a span back to the llm_call that requested it.'),
+      conf('attribution.task_id on llm_call', this.llms.filter(e => e.attribution && e.attribution.task_id).length, this.llms.length, 'Task-level impact_join depends on this. Emitted by the hook, not by the OTel export.'),
+      conf('usage_source = agent_telemetry', this.llms.filter(e => e._llm.src === 'agent_telemetry').length, this.llms.length, 'Annex B ranking: OTel export preferred over transcript parsing.'),
+      conf('usage.thought_tokens > 0', this.llms.filter(e => e.payload.usage.thought_tokens > 0).length, this.llms.length, 'Absent on non-thinking turns — a low value here is expected, not a defect.'),
+      conf('energy_sample coverage', this.samples.length * 2000, Math.max(1, now - this.t0), 'Wall time covered by samples. The 14 s hole is a sampler restart.')
+    ];
+    const rejectedRows = this.rejects.slice().reverse().map(r => ({ t:hhmmss(r.t), reason:r.reason, origin:r.origin, raw:r.raw }));
+    const sid = SESSION.slice(4, 12);
+    const ingestRows = !onHE ? [] : [
+      { k:'mode', v:'af watch --debug', fg:CY7 },
+      { k:'debug stream', v:'SSE 127.0.0.1:9414/debug/stream', fg:INK },
+      { k:'$AF_STATE_DIR', v:'~/.local/state/agentic-footprint', fg:N7 },
+      { k:'spool files', v:'claude-code.' + sid + '.jsonl · otlp-cc.' + sid + '.jsonl', fg:N7 },
+      { k:'byte offsets', v:'claude-code +2.4 MiB · otlp-cc +810 KiB', fg:N7 },
+      { k:'otlp receiver', v:'POST /v1/logs · http/json only', fg:CY7 },
+      { k:'/v1/metrics', v:'accepted, body discarded (200)', fg:N6 },
+      { k:'events ingested', v:fk(this.events.length), fg:INK },
+      { k:'quarantined', v:String(this.rejects.length), fg:this.rejects.length ? MG7 : CY7 },
+      { k:'sqlite', v:'state.db — raw and derived stored separately', fg:N7 }
+    ];
+    const openSpans = this.spans.filter(s => s.t_end > now - 500);
+    const watched = [
+      ...openSpans.filter(s => s.pids.length).slice(-3).map(s => ({ pid:String(s.pids[0]), cmd:s.tool_name, state:'open', fg:CY7,
+        meta:f(s.cpuw * 100, 0) + '% cpu · ' + s.rssMiB + ' MiB', meta2:'span ' + s.span_id + ' · ' + s.rssMiB + ' MiB' })),
+      { pid:'4412', cmd:'claude-code (agent)', state:'agent', fg:N7, meta:'11% cpu · 612 MiB', meta2:'span — · 612 MiB' },
+      ...(orph ? [{ pid:String(orph.orphan_pid), cmd:orph.tool_name + ' → cargo/rustc', state:'ORPHANED', fg:MG7,
+        meta:'38% cpu · 1.8 GiB', meta2:'span ' + orph.span_id + ' · outlived by ' + fdur(orph.orphan_until - orph.t_end) }] : [])
+    ];
+    const doctorRows = !onHE ? [] : [
+      { k:'venv', v:'$AF_STATE_DIR/py/venv', dot:CY, fg:N7 },
+      { k:'python', v:'3.12.9 · python-build-standalone', dot:CY, fg:INK },
+      { k:'uv', v:'0.9.4 · vendored', dot:CY, fg:INK },
+      { k:'ecologits', v:'0.7.1 · hash-locked', dot:CY, fg:INK },
+      { k:'codecarbon', v:'3.0.4 · multi-process observer patch', dot:N4, fg:N8 },
+      { k:'estimator', v:'warm · 1 worker · 4.1 ms p50', dot:CY, fg:INK },
+      { k:'network', v:'offline — bundled snapshot in use', dot:N4, fg:N8 }
+    ];
+
+    const kpis = !(onTL && layout === 'b') ? [] : [
+      { label:'machine power now', value:winSamples.length ? f(winSamples[winSamples.length - 1]._sample.watts, 1) : '—', sub:'W', fg:CY7 },
+      { label:'spans in window', value:String(vis.length), sub:'open ' + openSpans.length, fg:INK },
+      { label:'llm calls', value:String(this.llms.length), sub:fk(T.outTok) + ' out', fg:INK },
+      { label:'local measured', value:f(T.localWh, 3), sub:'Wh', fg:CY7 },
+      { label:'remote modeled', value:f(T.whMax, 3), sub:'Wh max', fg:N9 },
+      { label:'idle separated', value:f(T.idleWh, 3), sub:'Wh', fg:N7 },
+      { label:'orphaned', value:f(T.orphanWh, 3), sub:'Wh', fg: T.orphanWh > 0 ? MG7 : N6 }
+    ];
+
+    return {
+      tabs, layouts, policy,
+      isTimeline:onTL, isStream: st.tab === 'stream', isAttr:onAT, isImpact:onIM, isHealth:onHE,
+      showA: onTL && layout === 'a', showB: onTL && layout === 'b', showC: onTL && layout === 'c',
+      sseLabel: st.live ? 'SSE connected' : 'SSE paused · buffering',
+      sseFg: st.live ? CY7 : MG7,
+      sessionShort: SESSION.slice(0, 15) + '…',
+      sessionAge: fdur(now - this.t0) + ' elapsed',
+      liveLabel: st.live ? 'live' : 'paused',
+      liveBg: st.live ? CY2 : 'transparent', liveBd: st.live ? CY : N4, liveFg: st.live ? 'var(--color-accent-800)' : N7,
+      toggleLive: () => set('live', !st.live),
+      clock:hhmmss(now),
+      endpoint:'GET /debug/stream',
+      spoolPath:'$AF_STATE_DIR/spool/',
+      ingestedLabel: fk(this.events.length) + ' events ingested',
+      rejectedLabel: this.rejects.length + ' quarantined',
+      rejFg: this.rejects.length ? MG7 : N6,
+      rejectedPath:'spool/rejected/',
+      methodologyVersion:'v2026.06.1',
+      gridLabel: GRID + ' gCO₂e/kWh',
+      ingestRate: f(this.events.length / Math.max(1, (now - this.t0) / 1000), 1) + ' ev/s',
+
+      axisTicks, bars, laneLabels, ganttH,
+      windowLabel:'last ' + fdur(winMs),
+      spanCountLabel: vis.length + ' spans · ' + openSpans.length + ' open',
+      peakWattsLabel:'peak ' + f(maxW, 0) + ' W',
+      legend: [
+        { label:'bash', bg:KIND.bash.bg, bd:KIND.bash.bd, hatch:NOHATCH },
+        { label:'file_op', bg:KIND.file_op.bg, bd:KIND.file_op.bd, hatch:NOHATCH },
+        { label:'mcp', bg:KIND.mcp.bg, bd:KIND.mcp.bd, hatch:NOHATCH },
+        { label:'remote · modeled', bg:'transparent', bd:N7, hatch:HATCH },
+        { label:'orphaned / gap', bg:'transparent', bd:MG, hatch:HATCH_MG }
+      ],
+      kpis, collectors, typeFilters, watched,
+      orphanSummary: orph ? '1 orphaned tree · pid ' + orph.orphan_pid + ' · +' + fdur(orph.orphan_until - orph.t_end) : 'no orphans detected',
+      orphanFg: orph ? MG7 : N6,
+
+      streamRows, decisionRows,
+      clearFilters: () => this.setState({ hidden:{} }),
+      streamCountLabel: fk(shown.length) + ' shown of ' + fk(this.events.length) + ' · newest first',
+      // the sampler emits ~1 process_sample + 1 energy_sample per second, which would
+      // otherwise bury every llm_call and action_span in the tail
+      tailRows: streamRows.filter(r => r.type !== 'process_sample' && r.type !== 'energy_sample').slice(0, 40),
+
+      inspKind, inspTitle, inspSub, inspRows, inspJson, inspAlloc, hasInspAlloc, correlated,
+
+      sampleList, sampleCountLabel: this.samples.length + ' samples',
+      selSampleInterval: al ? hms3(al.a) + ' → ' + hms3(al.b) + ' · ' + fdur(al.b - al.a) : '—',
+      selSampleId: sel ? sel.event_id : '—',
+      selSampleStats, overlapRows, overlapH: Math.max(42, (al ? Math.min(8, al.rows.length) : 1) * 19 + 4),
+      componentRows, allocRows, allocNotes, policyText, formulaText, procRows, gridRows,
+
+      impactCards, criteriaRows, modelRows, missRows, statusRows, methodRows, statuslineText,
+      joinInterval: hhmmss(this.t0) + ' → ' + hhmmss(now) + ' · ' + fdur(now - this.t0),
+
+      conformRows, rejectedRows, ingestRows, doctorRows
+    };
+  }
+}
+
+</script>
+</body>
+</html>

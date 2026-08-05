@@ -1,0 +1,118 @@
+{
+  "_fixture_meta": "REAL capture \u2014 sanitized OTLP MetricsData body from the same claude -p session as logs-api-request.json. user.id/user.email/user.account_uuid/user.account_id/organization.id redacted. Receiver currently reads+discards /v1/metrics bodies entirely (200 OK, no normalization), so this fixture documents shape only; it is not consumed by normalize_logs.",
+  "resourceMetrics": [
+    {
+      "resource": {
+        "attributes": [
+          {
+            "key": "host.arch",
+            "value": {
+              "stringValue": "arm64"
+            }
+          },
+          {
+            "key": "os.type",
+            "value": {
+              "stringValue": "darwin"
+            }
+          },
+          {
+            "key": "os.version",
+            "value": {
+              "stringValue": "25.3.0"
+            }
+          },
+          {
+            "key": "service.name",
+            "value": {
+              "stringValue": "claude-code"
+            }
+          },
+          {
+            "key": "service.version",
+            "value": {
+              "stringValue": "2.1.220"
+            }
+          }
+        ],
+        "droppedAttributesCount": 0
+      },
+      "scopeMetrics": [
+        {
+          "scope": {
+            "name": "com.anthropic.claude_code",
+            "version": "2.1.220"
+          },
+          "metrics": [
+            {
+              "name": "claude_code.session.count",
+              "description": "Count of CLI sessions started",
+              "unit": "",
+              "sum": {
+                "aggregationTemporality": 1,
+                "isMonotonic": true,
+                "dataPoints": [
+                  {
+                    "attributes": [
+                      {
+                        "key": "user.id",
+                        "value": {
+                          "stringValue": "REDACTED"
+                        }
+                      },
+                      {
+                        "key": "session.id",
+                        "value": {
+                          "stringValue": "a238442e-16d9-4c00-8a66-635495f32251"
+                        }
+                      },
+                      {
+                        "key": "organization.id",
+                        "value": {
+                          "stringValue": "REDACTED"
+                        }
+                      },
+                      {
+                        "key": "user.email",
+                        "value": {
+                          "stringValue": "REDACTED"
+                        }
+                      },
+                      {
+                        "key": "user.account_uuid",
+                        "value": {
+                          "stringValue": "REDACTED"
+                        }
+                      },
+                      {
+                        "key": "user.account_id",
+                        "value": {
+                          "stringValue": "REDACTED"
+                        }
+                      },
+                      {
+                        "key": "terminal.type",
+                        "value": {
+                          "stringValue": "ghostty"
+                        }
+                      },
+                      {
+                        "key": "start_type",
+                        "value": {
+                          "stringValue": "fresh"
+                        }
+                      }
+                    ],
+                    "startTimeUnixNano": "1785001491488000000",
+                    "timeUnixNano": "1785001493475000000",
+                    "asDouble": 1
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

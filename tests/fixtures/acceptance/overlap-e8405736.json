@@ -1,0 +1,117 @@
+{
+  "_provenance": {
+    "what": "Overlap evidence for docs/poc-walkthrough.md §2.2. The acceptance session (4848dec5-…) had no overlapping spans; this is the sibling run that did.",
+    "session_id": "e8405736-5793-4e27-bd35-4a1522fef6f8",
+    "run": "run 1 of 3 on 2026-07-25 — plain `claude -p` defaults, permission-blocked, never applied a fix (walkthrough §5 issue 2). Also predates the `PostToolUseFailure` fix (commit 510fd9b), so 14 of its 28 spans closed `status: \"unknown\"` in the `Stop` sweep (walkthrough §5 issue 1).",
+    "sources": [
+      "spans[]: verbatim `action_span` payload fields from the run's `cc-hooks.<session>.jsonl` spool (scratch AF_STATE_DIR, not preserved beyond this extract)",
+      "live_allocation_trace: verbatim from `GET /debug/snapshot` taken while `af watch --debug` was running — this is the allocator's own recorded decision, not a recomputation",
+      "windows_during_agent_span[]: energy-sample bounds and totals verbatim from the run's `codecarbon.<session>.jsonl` spool; `recomputed_shadow_sum_share` is derived here, see `derived_note`"
+    ],
+    "sanitization": "No absolute paths, usernames, home directories, hostnames or cwd appear here or in the source spools — the collectors never write them. Session id, tool-use ids, timestamps and energy values are real and unaltered. The `claude` pid of this run (71290) appears in the live trace as captured.",
+    "reproduce": "docs/poc-walkthrough.md §1 with plain `claude -p` (no permission flags), on a build predating 510fd9b, with `af watch --debug` and `GET /debug/snapshot` before teardown."
+  },
+
+  "spans": [
+    {"span_id": "session-boot-e8405736-5793-4e27-bd35-4a1522fef6f8", "tool_name": "__session__", "t_start": "2026-07-25T22:48:06.474Z", "t_end": "2026-07-25T22:48:06.474Z", "status": "ok"},
+    {"span_id": "toolu_0188CEa6eKtcyvxHyJNreDLd", "tool_name": "Skill", "t_start": "2026-07-25T22:48:09.851Z", "t_end": "2026-07-25T22:48:09.914Z", "status": "ok"},
+    {"span_id": "toolu_01Cy2PTYAaqWAfSWWkVdKwro", "tool_name": "Bash", "t_start": "2026-07-25T22:48:13.189Z", "t_end": "2026-07-25T22:48:14.432Z", "status": "ok"},
+    {"span_id": "toolu_01B3KZ37BF8NGg5zfs2p5T5H", "tool_name": "Bash", "t_start": "2026-07-25T22:48:13.674Z", "t_end": "2026-07-25T22:49:47.403Z", "status": "unknown"},
+    {"span_id": "toolu_01GT7N8Y3wLtYgD41iM4j7cc", "tool_name": "Bash", "t_start": "2026-07-25T22:48:16.366Z", "t_end": "2026-07-25T22:49:47.461Z", "status": "unknown"},
+    {"span_id": "toolu_01QCnt8Er4hmhu1s459NuV7L", "tool_name": "Read", "t_start": "2026-07-25T22:48:18.893Z", "t_end": "2026-07-25T22:49:47.498Z", "status": "unknown"},
+    {"span_id": "toolu_012ohMQRweTo4fiyFxcaupGD", "tool_name": "Bash", "t_start": "2026-07-25T22:48:21.102Z", "t_end": "2026-07-25T22:49:47.319Z", "status": "unknown"},
+    {"span_id": "toolu_01LHfQ5hYtF7HW87whtaCbyN", "tool_name": "Read", "t_start": "2026-07-25T22:48:22.980Z", "t_end": "2026-07-25T22:49:47.479Z", "status": "unknown"},
+    {"span_id": "toolu_016bjvYw9FBMLywrTWwCMVxz", "tool_name": "Bash", "t_start": "2026-07-25T22:48:24.937Z", "t_end": "2026-07-25T22:49:47.383Z", "status": "unknown"},
+    {"span_id": "toolu_01CYGjrcT8BiSwYf8zWeguZT", "tool_name": "Read", "t_start": "2026-07-25T22:48:29.622Z", "t_end": "2026-07-25T22:49:47.442Z", "status": "unknown"},
+    {"span_id": "toolu_0121BKE3NCRQBexPRHjXet3b", "tool_name": "Read", "t_start": "2026-07-25T22:48:32.042Z", "t_end": "2026-07-25T22:49:47.297Z", "status": "unknown"},
+    {"span_id": "toolu_01F5sKq8a7rXuWb7BDXFxo7N", "tool_name": "Read", "t_start": "2026-07-25T22:48:34.190Z", "t_end": "2026-07-25T22:48:34.225Z", "status": "ok"},
+    {"span_id": "toolu_01WDaigUXVBuB3SJrWfeanww", "tool_name": "Read", "t_start": "2026-07-25T22:48:36.298Z", "t_end": "2026-07-25T22:49:47.536Z", "status": "unknown"},
+    {"span_id": "toolu_015FoTMYSL37uk12HY2QGwCX", "tool_name": "Agent", "t_start": "2026-07-25T22:48:39.366Z", "t_end": "2026-07-25T22:49:18.907Z", "status": "ok"},
+    {"span_id": "toolu_01K8RHhoSNi5npxagNnzv7Gj", "tool_name": "Bash", "t_start": "2026-07-25T22:48:44.311Z", "t_end": "2026-07-25T22:48:44.385Z", "status": "ok"},
+    {"span_id": "toolu_01SvMpTcNqozPsahXej88tud", "tool_name": "Bash", "t_start": "2026-07-25T22:48:48.507Z", "t_end": "2026-07-25T22:48:48.580Z", "status": "ok"},
+    {"span_id": "toolu_011WaKYBAnDr4P9MTbHpR3ff", "tool_name": "Bash", "t_start": "2026-07-25T22:48:51.163Z", "t_end": "2026-07-25T22:49:47.274Z", "status": "unknown"},
+    {"span_id": "toolu_01XdutXCaSHZEjJ7WoDnRjSS", "tool_name": "Bash", "t_start": "2026-07-25T22:48:53.530Z", "t_end": "2026-07-25T22:48:53.597Z", "status": "ok"},
+    {"span_id": "toolu_01Bso3y4bna2kjFMnQeStYGh", "tool_name": "Bash", "t_start": "2026-07-25T22:48:58.507Z", "t_end": "2026-07-25T22:49:47.422Z", "status": "unknown"},
+    {"span_id": "toolu_01Tic5Ma4ZxNwDsXdaYf3ieR", "tool_name": "Bash", "t_start": "2026-07-25T22:49:01.410Z", "t_end": "2026-07-25T22:49:47.517Z", "status": "unknown"},
+    {"span_id": "toolu_01CQCcVwtzjGiiBKhoAetGBY", "tool_name": "Bash", "t_start": "2026-07-25T22:49:04.346Z", "t_end": "2026-07-25T22:49:04.405Z", "status": "ok"},
+    {"span_id": "toolu_01EhvJmD8Nqo78njkVR2enSX", "tool_name": "Bash", "t_start": "2026-07-25T22:49:06.821Z", "t_end": "2026-07-25T22:49:06.882Z", "status": "ok"},
+    {"span_id": "toolu_01PgPUE2yz4cCyppyABWocFz", "tool_name": "Bash", "t_start": "2026-07-25T22:49:09.956Z", "t_end": "2026-07-25T22:49:10.015Z", "status": "ok"},
+    {"span_id": "toolu_01XrmKoj3ZTH6iN5UgmgYujU", "tool_name": "Bash", "t_start": "2026-07-25T22:49:12.114Z", "t_end": "2026-07-25T22:49:12.176Z", "status": "ok"},
+    {"span_id": "toolu_01TWzYSui23oa1bwnBoy5EJN", "tool_name": "Read", "t_start": "2026-07-25T22:49:21.163Z", "t_end": "2026-07-25T22:49:21.197Z", "status": "ok"},
+    {"span_id": "toolu_017Jyiojit9Hpek3rydtkPKE", "tool_name": "Read", "t_start": "2026-07-25T22:49:23.136Z", "t_end": "2026-07-25T22:49:23.170Z", "status": "ok"},
+    {"span_id": "toolu_012RmNTbABWAYpqnXQ6kYW4z", "tool_name": "Bash", "t_start": "2026-07-25T22:49:29.601Z", "t_end": "2026-07-25T22:49:47.342Z", "status": "unknown"},
+    {"span_id": "toolu_012vwbEvrhZ2HfrbKPF6BEyS", "tool_name": "Edit", "t_start": "2026-07-25T22:49:41.782Z", "t_end": "2026-07-25T22:49:47.363Z", "status": "unknown"}
+  ],
+
+  "agent_span_containment": {
+    "note": "The structural overlap the walkthrough cites: one Agent (subagent) span open for 39.5 s with 7 Bash spans opening and closing inside it. At no instant were 8 spans running at once — at most 2 were (the Agent plus one Bash). What exceeds 1.0 is the *sum of span-overlap over a sample window*, which is what l1_shadow_sum_share measures.",
+    "container": {"span_id": "toolu_015FoTMYSL37uk12HY2QGwCX", "tool_name": "Agent", "t_start": "2026-07-25T22:48:39.366Z", "t_end": "2026-07-25T22:49:18.907Z", "duration_ms": 39541},
+    "contained_span_ids": [
+      "toolu_01K8RHhoSNi5npxagNnzv7Gj",
+      "toolu_01SvMpTcNqozPsahXej88tud",
+      "toolu_01XdutXCaSHZEjJ7WoDnRjSS",
+      "toolu_01CQCcVwtzjGiiBKhoAetGBY",
+      "toolu_01EhvJmD8Nqo78njkVR2enSX",
+      "toolu_01PgPUE2yz4cCyppyABWocFz",
+      "toolu_01XrmKoj3ZTH6iN5UgmgYujU"
+    ]
+  },
+
+  "live_allocation_trace": {
+    "_note": "Verbatim allocation trace from GET /debug/snapshot for the window that recorded l1_shadow_sum_share 1.6296. Read the `_interpretation` below before citing it: the 14 rows are the Stop-swept `unknown` spans of walkthrough §5 issue 1, not the Agent/Bash containment above.",
+    "_interpretation": "Every row's t_end is the moment the Stop sweep wrote it (22:49:47.274 … 22:49:47.536), all inside this window, while every t_start is real and earlier than the window. So each row's overlap runs from the window start to its sweep timestamp: 623 + 646 + 668 + 691 + 712 + 732 + 752 + 771 + 791 + 810 + 828 + 847 + 866 + 885 = 10622 ms over a 6518 ms window = 1.6296. The shadow counter is doing its job — a naive L1 policy really would have paid out 163 % of this window — but the cause is fabricated close times, not concurrency.",
+    "attribution_policy": "l2_cpu_time",
+    "attribution_policy_id": "l2_cpu_time/v1",
+    "t_start": "2026-07-25T22:49:46.651Z",
+    "t_end": "2026-07-25T22:49:53.169Z",
+    "total_j": 39.49005999856116,
+    "denominator_cpu_ms": 6518.0,
+    "denominator_note": "wall-clock ms of the window: l2_cpu_time/v1 normalizes cpu-time against one core-second per second, never against the sum of the watched trees",
+    "l1_shadow_sum_share": 1.6296409941699908,
+    "sample_event_id": "8e766da4-ca9f-4fe5-b0b0-4256614316b7",
+    "components": [
+      {"kind": "cpu", "energy_j": 21.444887249590437, "label": null, "method": "tdp_model"},
+      {"kind": "dram", "energy_j": 18.045172748970817, "label": null, "method": "tdp_model"},
+      {"kind": "total", "energy_j": 39.49005999856116, "label": null, "method": "tdp_model"}
+    ],
+    "agent_process": {
+      "pid": 71290,
+      "cpu_delta_ms": 0.0,
+      "allocated_j": 0.0,
+      "note": "orphaned/unclaimed compute: l2_cpu_time/v1 has no separate agent-process bucket, so this is observed cpu that no span claimed (including the agent's own tree while no span was running, and any orphan tail)"
+    },
+    "baseline": {"allocated_j": 39.49005999856116, "label": "baseline/idle", "share": 1.0},
+    "rows": [
+      {"span_id": "toolu_011WaKYBAnDr4P9MTbHpR3ff", "tool_name": "Bash", "execution_locus": "local", "overlap_ms": 623.0, "cpu_delta_ms": 0.0, "share": 0.0, "allocated_j": 0.0, "l1_allocated_j": 3.774517855032771, "excluded": false, "excluded_reason": null},
+      {"span_id": "toolu_0121BKE3NCRQBexPRHjXet3b", "tool_name": "Read", "execution_locus": "local", "overlap_ms": 646.0, "cpu_delta_ms": 0.0, "share": 0.0, "allocated_j": 0.0, "l1_allocated_j": 3.9138660262458584, "excluded": false, "excluded_reason": null},
+      {"span_id": "toolu_012ohMQRweTo4fiyFxcaupGD", "tool_name": "Bash", "execution_locus": "local", "overlap_ms": 668.0, "cpu_delta_ms": 0.0, "share": 0.0, "allocated_j": 0.0, "l1_allocated_j": 4.047155581319247, "excluded": false, "excluded_reason": null},
+      {"span_id": "toolu_012RmNTbABWAYpqnXQ6kYW4z", "tool_name": "Bash", "execution_locus": "local", "overlap_ms": 691.0, "cpu_delta_ms": 0.0, "share": 0.0, "allocated_j": 0.0, "l1_allocated_j": 4.186503752532335, "excluded": false, "excluded_reason": null},
+      {"span_id": "toolu_012vwbEvrhZ2HfrbKPF6BEyS", "tool_name": "Edit", "execution_locus": "local", "overlap_ms": 712.0, "cpu_delta_ms": 0.0, "share": 0.0, "allocated_j": 0.0, "l1_allocated_j": 4.313734691466024, "excluded": false, "excluded_reason": null},
+      {"span_id": "toolu_016bjvYw9FBMLywrTWwCMVxz", "tool_name": "Bash", "execution_locus": "local", "overlap_ms": 732.0, "cpu_delta_ms": 0.0, "share": 0.0, "allocated_j": 0.0, "l1_allocated_j": 4.4349070142600135, "excluded": false, "excluded_reason": null},
+      {"span_id": "toolu_01B3KZ37BF8NGg5zfs2p5T5H", "tool_name": "Bash", "execution_locus": "local", "overlap_ms": 752.0, "cpu_delta_ms": 0.0, "share": 0.0, "allocated_j": 0.0, "l1_allocated_j": 4.556079337054003, "excluded": false, "excluded_reason": null},
+      {"span_id": "toolu_01Bso3y4bna2kjFMnQeStYGh", "tool_name": "Bash", "execution_locus": "local", "overlap_ms": 771.0, "cpu_delta_ms": 0.0, "share": 0.0, "allocated_j": 0.0, "l1_allocated_j": 4.671193043708293, "excluded": false, "excluded_reason": null},
+      {"span_id": "toolu_01CYGjrcT8BiSwYf8zWeguZT", "tool_name": "Read", "execution_locus": "local", "overlap_ms": 791.0, "cpu_delta_ms": 0.0, "share": 0.0, "allocated_j": 0.0, "l1_allocated_j": 4.792365366502282, "excluded": false, "excluded_reason": null},
+      {"span_id": "toolu_01GT7N8Y3wLtYgD41iM4j7cc", "tool_name": "Bash", "execution_locus": "local", "overlap_ms": 810.0, "cpu_delta_ms": 0.0, "share": 0.0, "allocated_j": 0.0, "l1_allocated_j": 4.907479073156573, "excluded": false, "excluded_reason": null},
+      {"span_id": "toolu_01LHfQ5hYtF7HW87whtaCbyN", "tool_name": "Read", "execution_locus": "local", "overlap_ms": 828.0, "cpu_delta_ms": 0.0, "share": 0.0, "allocated_j": 0.0, "l1_allocated_j": 5.016534163671162, "excluded": false, "excluded_reason": null},
+      {"span_id": "toolu_01QCnt8Er4hmhu1s459NuV7L", "tool_name": "Read", "execution_locus": "local", "overlap_ms": 847.0, "cpu_delta_ms": 0.0, "share": 0.0, "allocated_j": 0.0, "l1_allocated_j": 5.131647870325453, "excluded": false, "excluded_reason": null},
+      {"span_id": "toolu_01Tic5Ma4ZxNwDsXdaYf3ieR", "tool_name": "Bash", "execution_locus": "local", "overlap_ms": 866.0, "cpu_delta_ms": 0.0, "share": 0.0, "allocated_j": 0.0, "l1_allocated_j": 5.246761576979743, "excluded": false, "excluded_reason": null},
+      {"span_id": "toolu_01WDaigUXVBuB3SJrWfeanww", "tool_name": "Read", "execution_locus": "local", "overlap_ms": 885.0, "cpu_delta_ms": 0.0, "share": 0.0, "allocated_j": 0.0, "l1_allocated_j": 5.361875283634032, "excluded": false, "excluded_reason": null}
+    ]
+  },
+
+  "windows_during_agent_span": {
+    "_note": "The Agent-containment overlap the walkthrough cites, quantified. No live allocation trace survives for these windows — `af watch`'s trace ring had already evicted them by the time `/debug/snapshot` was taken (its oldest entry is 22:49:46.651Z). `recomputed_shadow_sum_share` is therefore DERIVED here from the preserved span and energy-window bounds, counting only the 14 spans that closed `ok` (excluding the Stop-swept ones), i.e. Σ overlap_ms / wall_ms.",
+    "_live_allocator_caveat": "Live, the allocator never saw this overlap at all: a span is ingested when it CLOSES, and the Agent span closed at 22:49:18.907 — after every window it overlapped had already been attributed. The `[attr]` lines for these windows name only the short Bash spans. The over-100 % sum below is what a correctly-ordered ingest would have exposed, not what was recorded.",
+    "windows": [
+      {"t_start": "2026-07-25T22:48:34.755Z", "t_end": "2026-07-25T22:48:41.289Z", "wall_ms": 6534, "total_j": 40.14233, "observed_ok_spans": [{"span_id": "toolu_015FoTMYSL37uk12HY2QGwCX", "tool_name": "Agent", "overlap_ms": 1923}], "recomputed_shadow_sum_share": 0.2943},
+      {"t_start": "2026-07-25T22:48:41.296Z", "t_end": "2026-07-25T22:48:47.831Z", "wall_ms": 6535, "total_j": 37.950669, "observed_ok_spans": [{"span_id": "toolu_01K8RHhoSNi5npxagNnzv7Gj", "tool_name": "Bash", "overlap_ms": 74}, {"span_id": "toolu_015FoTMYSL37uk12HY2QGwCX", "tool_name": "Agent", "overlap_ms": 6535}], "recomputed_shadow_sum_share": 1.0113},
+      {"t_start": "2026-07-25T22:48:47.840Z", "t_end": "2026-07-25T22:48:54.362Z", "wall_ms": 6522, "total_j": 38.610133, "observed_ok_spans": [{"span_id": "toolu_01SvMpTcNqozPsahXej88tud", "tool_name": "Bash", "overlap_ms": 73}, {"span_id": "toolu_01XdutXCaSHZEjJ7WoDnRjSS", "tool_name": "Bash", "overlap_ms": 67}, {"span_id": "toolu_015FoTMYSL37uk12HY2QGwCX", "tool_name": "Agent", "overlap_ms": 6522}], "recomputed_shadow_sum_share": 1.0215},
+      {"t_start": "2026-07-25T22:48:54.366Z", "t_end": "2026-07-25T22:49:00.885Z", "wall_ms": 6519, "total_j": 38.919041, "observed_ok_spans": [{"span_id": "toolu_015FoTMYSL37uk12HY2QGwCX", "tool_name": "Agent", "overlap_ms": 6519}], "recomputed_shadow_sum_share": 1.0},
+      {"t_start": "2026-07-25T22:49:00.896Z", "t_end": "2026-07-25T22:49:07.423Z", "wall_ms": 6527, "total_j": 39.227759, "observed_ok_spans": [{"span_id": "toolu_01CQCcVwtzjGiiBKhoAetGBY", "tool_name": "Bash", "overlap_ms": 59}, {"span_id": "toolu_01EhvJmD8Nqo78njkVR2enSX", "tool_name": "Bash", "overlap_ms": 61}, {"span_id": "toolu_015FoTMYSL37uk12HY2QGwCX", "tool_name": "Agent", "overlap_ms": 6527}], "recomputed_shadow_sum_share": 1.0184},
+      {"t_start": "2026-07-25T22:49:07.429Z", "t_end": "2026-07-25T22:49:13.961Z", "wall_ms": 6532, "total_j": 38.785786, "observed_ok_spans": [{"span_id": "toolu_01PgPUE2yz4cCyppyABWocFz", "tool_name": "Bash", "overlap_ms": 59}, {"span_id": "toolu_01XrmKoj3ZTH6iN5UgmgYujU", "tool_name": "Bash", "overlap_ms": 62}, {"span_id": "toolu_015FoTMYSL37uk12HY2QGwCX", "tool_name": "Agent", "overlap_ms": 6532}], "recomputed_shadow_sum_share": 1.0185},
+      {"t_start": "2026-07-25T22:49:13.969Z", "t_end": "2026-07-25T22:49:20.487Z", "wall_ms": 6518, "total_j": 46.45859, "observed_ok_spans": [{"span_id": "toolu_015FoTMYSL37uk12HY2QGwCX", "tool_name": "Agent", "overlap_ms": 4938}], "recomputed_shadow_sum_share": 0.7576}
+    ]
+  },
+
+  "derived_note": "Everything under `windows_during_agent_span` and the arithmetic in `live_allocation_trace._interpretation` is recomputed from the bounds recorded in this file. `live_allocation_trace` itself is the allocator's own output and was not recomputed."
+}

@@ -1,0 +1,18 @@
+[package]
+name = "af-otlp"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Bounded OTLP HTTP receiver for Agentic Footprint"
+
+[dependencies]
+af-events = { path = "../af-events" }
+af-spool = { path = "../af-spool" }
+anyhow.workspace = true
+serde_json = "1"
+tiny_http = "0.12"
+time.workspace = true
+
+[dev-dependencies]
+tempfile = "3"

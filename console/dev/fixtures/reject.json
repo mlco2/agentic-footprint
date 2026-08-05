@@ -1,0 +1,8 @@
+{
+  "ts": "2026-07-25T09:40:58.826Z",
+  "reason": "malformed JSON: unexpected end of input at byte offset 41822",
+  "origin": "claude-code.01K9Y7QZ.jsonl",
+  "line": 846,
+  "byte_offset": 41822,
+  "raw": "{\"schema_version\":\"0.1.0\",\"event_id\":\"01K9Y7QZ3F7Q5V8\",\"type\":\"llm_call\",\"ts\":\"2026-07-25T09:40:58"
+}

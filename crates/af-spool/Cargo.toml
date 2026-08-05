@@ -1,0 +1,13 @@
+[package]
+name = "af-spool"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Append-only collector spool for Agentic Footprint"
+
+[dependencies]
+af-events = { path = "../af-events" }
+
+[dev-dependencies]
+tempfile = "3"

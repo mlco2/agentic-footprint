@@ -1,0 +1,21 @@
+[package]
+name = "af-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Correlation, estimation, and energy attribution for Agentic Footprint"
+
+[dependencies]
+af-events = { path = "../af-events" }
+af-sidecar = { path = "../af-sidecar" }
+af-store = { path = "../af-store" }
+anyhow.workspace = true
+serde_json = "1"
+time.workspace = true
+
+[dev-dependencies]
+af-events = { path = "../af-events", features = ["test-support"] }
+rusqlite = { version = "0.32", features = ["bundled"] }
+proptest = "1"
+tempfile = "3"

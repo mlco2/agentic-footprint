@@ -1,0 +1,118 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agentic-footprint.dev/schemas/v0.1/derived.schema.json",
+  "title": "agentic-footprint derived records (Contract #2 — informative in v0.1)",
+  "description": "Control-plane outputs. This contract is informative in v0.1; it will be made normative in a later RFC aligned with GSF SCI / OTel GenAI semantic conventions.",
+  "$defs": {
+    "range": {
+      "type": "object",
+      "description": "Uncertainty range. min == max expresses a point value.",
+      "required": ["min", "max"],
+      "properties": {
+        "min": { "type": "number" },
+        "max": { "type": "number" }
+      }
+    },
+    "criterion": {
+      "type": "object",
+      "description": "One impact criterion with usage/embodied life-cycle split when the methodology provides it.",
+      "required": ["unit", "total"],
+      "properties": {
+        "unit": { "type": "string", "description": "e.g. kWh, kgCO2eq, kgSbeq, MJ, L" },
+        "total": { "$ref": "#/$defs/range" },
+        "usage": { "$ref": "#/$defs/range" },
+        "embodied": { "$ref": "#/$defs/range" }
+      }
+    },
+    "impacts": {
+      "type": "object",
+      "description": "Full EcoLogits criteria set.",
+      "properties": {
+        "energy": { "$ref": "#/$defs/criterion" },
+        "gwp": { "$ref": "#/$defs/criterion" },
+        "adpe": { "$ref": "#/$defs/criterion" },
+        "pe": { "$ref": "#/$defs/criterion" },
+        "water": { "$ref": "#/$defs/criterion" }
+      }
+    },
+    "impact_estimate": {
+      "type": "object",
+      "description": "Estimated impacts of one llm_call event (remote inference).",
+      "required": ["event_id", "estimation_status", "methodology"],
+      "properties": {
+        "event_id": { "type": "string", "description": "The llm_call event this estimate derives from." },
+        "estimation_status": {
+          "enum": ["ok", "unknown_model", "missing_zone", "missing_usage", "pending", "error"],
+          "description": "Failure honesty: an unestimable call is surfaced, never skipped or zeroed. `missing_usage` is a call whose llm_call carried no token count — it never reaches the estimator, and reporting it as `error` or `pending` would attribute the gap to the estimator rather than to the collector that could not observe the usage."
+        },
+        "impacts": { "$ref": "#/$defs/impacts" },
+        "methodology": {
+          "type": "object",
+          "required": ["version", "source"],
+          "properties": {
+            "version": { "type": "string", "description": "Version of the methodology data artifact used." },
+            "source": { "enum": ["bundled", "local_dataset", "ecologits_api", "self_hosted_api"] },
+            "ecologits_version": { "type": "string" }
+          }
+        }
+      }
+    },
+    "impact_join": {
+      "type": "object",
+      "description": "Joined local-measured + remote-estimated impacts for one attribution unit over an interval. The combined total crosses measurement paradigms (measured + modeled) and MUST be presented as such.",
+      "required": ["unit", "t_start", "t_end", "attribution_policy"],
+      "properties": {
+        "unit": {
+          "type": "object",
+          "required": ["level"],
+          "properties": {
+            "level": { "enum": ["session", "task", "tool_call"] },
+            "session_id": { "type": "string" },
+            "task_id": { "type": "string" },
+            "tool_call_id": { "type": "string" }
+          }
+        },
+        "t_start": { "type": "string", "format": "date-time" },
+        "t_end": { "type": "string", "format": "date-time" },
+        "attribution_policy": {
+          "enum": ["l1_wall_clock", "l2_cpu_time", "l3_cgroup"],
+          "description": "Policy used to apportion machine energy to this unit. Recorded so results are interpretable and re-computable."
+        },
+        "local_measured": {
+          "type": "object",
+          "properties": {
+            "energy": { "$ref": "#/$defs/criterion" },
+            "gwp": { "$ref": "#/$defs/criterion" },
+            "baseline_share_excluded": {
+              "type": "boolean",
+              "description": "True when idle/baseline energy was separated out rather than attributed to actions."
+            },
+            "coverage": {
+              "type": "number", "minimum": 0, "maximum": 1,
+              "description": "Fraction of the unit's wall time covered by energy samples."
+            }
+          }
+        },
+        "remote_estimated": {
+          "type": "object",
+          "properties": {
+            "impacts": { "$ref": "#/$defs/impacts" },
+            "llm_calls": { "type": "integer", "minimum": 0 }
+          }
+        },
+        "combined_total": {
+          "type": "object",
+          "description": "Sum of local measured + remote estimated per criterion, ranges preserved. Cross-paradigm: label accordingly in presentation.",
+          "properties": {
+            "energy": { "$ref": "#/$defs/criterion" },
+            "gwp": { "$ref": "#/$defs/criterion" }
+          }
+        },
+        "unmeasured_remote_spans": {
+          "type": "integer", "minimum": 0,
+          "description": "Count of execution_locus=remote action spans excluded from the local join and not (yet) estimable."
+        }
+      }
+    }
+  }
+}

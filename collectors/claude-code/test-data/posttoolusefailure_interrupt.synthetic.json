@@ -1,0 +1,17 @@
+{
+  "session_id": "76cb257d-0251-4eca-825c-42ab7dff67cd",
+  "transcript_path": "/home/user/.claude/projects/example/76cb257d-0251-4eca-825c-42ab7dff67cd.jsonl",
+  "cwd": "/home/user/project",
+  "prompt_id": "561329b9-dee1-4c08-a296-deceb59a00a4",
+  "permission_mode": "default",
+  "hook_event_name": "PostToolUseFailure",
+  "tool_name": "Bash",
+  "tool_input": {
+    "command": "sleep 600",
+    "description": "Sleep for ten minutes"
+  },
+  "tool_use_id": "toolu_01T5hc6hVET4FefryaS5iXFk",
+  "error": "The user doesn't want to proceed with this tool use.",
+  "is_interrupt": true,
+  "duration_ms": 4210
+}

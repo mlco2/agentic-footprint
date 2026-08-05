@@ -1,0 +1,15 @@
+# Pins for the managed Python venv that `af-sidecar` provisions via `uv`.
+#
+# `crates/af-sidecar` embeds this file at compile time (`include_str!`) so
+# the `af` binary is self-contained — no external file lookup at runtime.
+# Bumping a pin here and rebuilding is the only supported way to change
+# versions; sidecar protocol and provisioning are owned by the Rust control
+# plane and documented in docs/api-boundaries.md.
+
+[python]
+version = "3.12"
+
+[packages]
+ecologits = "0.11.1"
+codecarbon = "3.2.8"
+psutil = ">=6"
