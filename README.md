@@ -5,15 +5,23 @@ Footprint combines measured local energy, process-level action attribution, and
 modeled remote inference impacts while keeping uncertainty and coverage gaps
 explicit.
 
-Install from the current source checkout and configure detected coding agents:
+Install from the current source checkout and configure detected coding agents.
+On macOS or Linux:
 
 ```sh
 ./install.sh
 ```
 
-The installer places the native binary in `~/.local/bin/af`, provisions the
-managed CodeCarbon/EcoLogits runtime, and globally wires detected Codex and
-Claude Code installations.
+On Windows 11 PowerShell:
+
+```powershell
+.\install.ps1
+```
+
+The installer places the native binary on the user `PATH`, provisions the
+managed CodeCarbon/EcoLogits runtime, and runs the receiver-first setup wizard.
+macOS and Linux can install a per-user background receiver; Windows uses a
+foreground `af watch` process by default.
 
 - **Documentation:** [docs/index.md](docs/index.md)
 - **Contributor onboarding:** [CONTRIBUTING.md](CONTRIBUTING.md)

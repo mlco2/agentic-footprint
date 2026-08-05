@@ -97,19 +97,27 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v9
+      - uses: astral-sh/setup-uv@v7
       - run: scripts/check-repository-hygiene.sh
       - run: scripts/docs.sh build
 
-  test-windows:
+  test-platforms:
     needs: console
-    runs-on: windows-latest
+    name: Test ${{ matrix.name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS
+            os: macos-14
+          - name: Windows
+            os: windows-2025
+    runs-on: ${{ matrix.os }}
     steps:
-      # Before checkout: the repo's golden-string tests and the embedded
-      # af-hook.sh (include_str! in setup.rs) are byte-exact contracts;
-      # windows runners default to autocrlf=true, which would rewrite every
-      # text file to CRLF on checkout and break them.
-      - run: git config --global core.autocrlf input
+      # The embedded shell hook and golden strings are byte-exact contracts;
+      # disable Windows checkout's default CRLF rewriting before checkout.
+      - if: runner.os == 'Windows'
+        run: git config --global core.autocrlf input
       - uses: actions/checkout@v4
       - name: Install pinned Rust toolchain
         run: |
@@ -119,12 +127,26 @@ jobs:
         with:
           name: console-dist
           path: console/dist
-      # No fmt/clippy (the ubuntu job covers lints), no sh-based collector
-      # suites, no Python tests yet — this job gates compilation and the
-      # Rust test suite on the msvc target.
+      # Ubuntu owns formatting and clippy. This matrix exercises runtime and
+      # filesystem behavior on the native macOS and Windows targets.
       - run: cargo test --workspace
-      - name: Build the release af.exe artifact
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install pytest
+      - run: python -m pytest python/tests -q
+      - name: macOS collector and statusline tests
+        if: runner.os == 'macOS'
+        run: |
+          collectors/claude-code/test_hooks.sh
+          statusline/test_statusline.sh
+      - name: macOS installer test
+        if: runner.os == 'macOS'
+        run: scripts/test-install.sh
+      - name: Build the Windows release binary
+        if: runner.os == 'Windows'
         run: cargo build --release -p af-cli
-      - name: PowerShell installer tests
-        shell: powershell
+      - name: Windows installer test
+        if: runner.os == 'Windows'
+        shell: pwsh
         run: scripts/test-install.ps1

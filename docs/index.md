@@ -15,8 +15,8 @@ It combines:
 ## Start here
 
 - Follow the [quickstart](tutorials/quickstart.md) for a first measured session.
-- Use the [installation guide](how-to/installation.md) for service and setup
-  options.
+- Use the [installation guide](how-to/installation.md) for platform-specific
+  receiver and setup options.
 - Choose the [Claude Code](how-to/claude-code.md) or
   [Codex](how-to/codex.md) integration guide.
 - Read [energy attribution](explanation/energy-attribution.md) to understand how

@@ -5,31 +5,46 @@ and opens the local debug console.
 
 ## 1. Install from a checkout
 
-```sh
-git clone <repository-url>
-cd agentic-footprint
-./install.sh --yes
-```
+=== "macOS / Linux"
 
-The installer builds `af`, provisions the managed CodeCarbon and EcoLogits
-runtime, starts the resident receiver, and configures detected Claude Code and
-Codex installations.
+    ```sh
+    git clone <repository-url>
+    cd agentic-footprint
+    ./install.sh --yes
+    ```
+
+    The installer builds `af`, provisions the managed CodeCarbon and EcoLogits
+    runtime, starts the per-user receiver, and configures detected Claude Code
+    and Codex installations.
+
+=== "Windows 11"
+
+    ```powershell
+    git clone <repository-url>
+    cd agentic-footprint
+    .\install.ps1 -Yes
+    af watch
+    ```
+
+    Keep the `af watch` PowerShell window running. In another terminal, run
+    `af setup --yes`; agent configuration is not inspected until the receiver
+    responds.
 
 ## 2. Verify the receiver
 
 ```sh
-af service status
 af setup --check
 af python doctor
 ```
 
-All three commands should complete successfully. `af python doctor` explains
-how to repair a missing or incomplete managed Python environment.
+On macOS and Linux, `af service status` also checks the installed per-user
+service. `af python doctor` explains how to repair a missing or incomplete
+managed Python environment.
 
 ## 3. Run an agent session
 
 Start a new Claude Code or Codex session after setup. Agentic Footprint records
-usage facts and action spans in the background.
+usage facts and action spans while the receiver is running.
 
 ## 4. Inspect the result
 
@@ -37,16 +52,12 @@ usage facts and action spans in the background.
 af report
 ```
 
-For a live diagnostic view, run a foreground debug process without starting a
-second OTLP receiver:
+For a live diagnostic view:
 
-```sh
-af watch --debug --no-otlp
-```
+- with a macOS/Linux background receiver, run `af watch --debug --no-otlp`;
+- with a foreground receiver, start it as `af watch --debug` instead.
 
-Open `http://127.0.0.1:9414/` in a browser. The resident service continues to
-own collection on `127.0.0.1:4318`; the foreground process only exposes the
-debug interface.
+Open `http://127.0.0.1:9414/` in a browser.
 
 ## Next steps
 

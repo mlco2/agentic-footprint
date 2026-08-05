@@ -23,16 +23,20 @@ Or, when `af` is already installed:
 af setup
 ```
 
-The wizard installs and verifies a resident `af watch` user service, detects
-Codex and Claude Code, configures Codex OTLP automatically when safe, and
-installs/merges Claude Code collection. See
+The wizard verifies that an `af watch` receiver is healthy before inspecting
+agents. On macOS/Linux it can install a per-user service; on Windows start
+`af watch` in a persistent PowerShell window first. It then detects Codex and
+Claude Code, configures Codex OTLP automatically when safe, and installs or
+merges Claude Code collection. See
 [`installation.md`](installation.md) for automation flags.
 
-Confirm the installed receiver is healthy:
+Confirm receiver health:
 
 ```sh
-af service status
+af setup --check
 ```
+
+On macOS/Linux, `af service status` additionally checks the installed service.
 
 For manual development from the repository root:
 
@@ -145,7 +149,7 @@ codex
 codex exec "Inspect this repository and summarize the test layout"
 ```
 
-Ensure `af service status` succeeds first. The receiver needs the initial
+Ensure `af setup --check` passes first. The receiver needs the initial
 `codex.conversation_starts` record to associate later calls with their session
 and provider.
 

@@ -166,7 +166,8 @@ mod shutdown {
         use std::sync::OnceLock;
 
         use anyhow::bail;
-        use windows_sys::Win32::Foundation::{BOOL, FALSE, TRUE};
+        use windows_sys::core::BOOL;
+        use windows_sys::Win32::Foundation::{FALSE, TRUE};
         use windows_sys::Win32::System::Console::SetConsoleCtrlHandler;
 
         // The handler runs on a system-spawned thread with no user data

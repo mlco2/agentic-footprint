@@ -1,8 +1,8 @@
 # Install and setup wizard
 
-`install.sh` is the single bootstrap entry point for the current source-stage
-distribution. It installs the native `af` binary and immediately runs the same
-`af setup` wizard available from the CLI.
+`install.sh` is the macOS/Linux bootstrap entry point and `install.ps1` is its
+Windows counterpart. Both install the native `af` binary and run the same
+receiver-first `af setup` wizard available from the CLI.
 
 ## From a source checkout
 
@@ -10,7 +10,7 @@ distribution. It installs the native `af` binary and immediately runs the same
 ./install.sh
 ```
 
-The script builds a release binary, installs it to `~/.local/bin/af`,
+The shell script builds a release binary, installs it to `~/.local/bin/af`,
 provisions the managed Python runtime and embedded sidecar sources, installs
 and starts a resident `af watch` user service, verifies its OTLP receiver, then
 opens the agent setup prompt. Claude Code is configured in user settings so
@@ -120,7 +120,9 @@ The current wizard:
 - detects Codex and Claude Code on `PATH`;
 - safely appends Codex native OTLP configuration when no `[otel]` setup exists;
 - refuses to overwrite an existing conflicting Codex exporter;
-- installs the embedded Claude Code hook under `$AF_STATE_DIR/integrations/`;
+- on macOS/Linux, installs the embedded Claude Code shell hook under
+  `$AF_STATE_DIR/integrations/`; on Windows, registers the built-in `af hook`
+  collector;
 - merges Claude hooks and OTLP environment into either the selected project's
   `.claude/settings.json` or, with `--global`, `~/.claude/settings.json`;
 - creates timestamped backups before changing existing configuration files;
@@ -134,7 +136,7 @@ If you decline the recommended background receiver, setup exits without
 inspecting or changing agent configuration. Start the foreground receiver with
 the command printed by the wizard, keep it running, then rerun `af setup`.
 
-Service commands are idempotent:
+On macOS and Linux, service commands are idempotent:
 
 ```sh
 af service install

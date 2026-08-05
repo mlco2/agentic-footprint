@@ -2,16 +2,29 @@
 
 For a new installation, prefer the unified installer and project setup wizard:
 
-```sh
-./install.sh
-# or, when af is already installed:
-af setup --agents claude-code --global
-```
+=== "macOS / Linux"
 
-The wizard installs and verifies a resident `af watch` user service, installs
-the embedded hook under `$AF_STATE_DIR/integrations/`, merges
-`.claude/settings.json`, and backs up an existing settings file. The manual
-procedure below remains useful for auditing or custom deployments.
+    ```sh
+    ./install.sh
+    # or, when af is already installed:
+    af setup --agents claude-code --global
+    ```
+
+=== "Windows 11"
+
+    ```powershell
+    .\install.ps1
+    af watch
+    # in another PowerShell window:
+    af setup --agents claude-code --global --yes
+    ```
+
+The wizard checks receiver health before inspecting Claude Code. On
+macOS/Linux it can install a per-user receiver; Windows uses the foreground
+receiver shown above. The wizard installs a shell hook on Unix or configures
+the built-in `af hook` collector on Windows, merges `.claude/settings.json`,
+and backs up an existing settings file. The manual procedure below remains
+useful for auditing or custom deployments.
 
 This guide installs and runs `agentic-footprint` locally for Claude Code.
 The complete collection path uses three complementary inputs:
@@ -22,15 +35,16 @@ The complete collection path uses three complementary inputs:
   with remotely estimated inference impacts.
 
 All data remains under one local state directory. The default is
-`~/.local/state/agentic-footprint`; set `AF_STATE_DIR` everywhere if you want
-another location.
+`~/.local/state/agentic-footprint` on macOS/Linux and
+`%LOCALAPPDATA%\agentic-footprint` on Windows; set `AF_STATE_DIR` everywhere
+if you want another location.
 
 ## 1. Prerequisites
 
 Install:
 
 - Rust and Cargo;
-- `jq`, required by the Claude Code hook and optional statusline;
+- `jq` on macOS/Linux, required by the shell hook and richer shell statusline;
 - `uv`, used by `af python setup` to create the managed Python environment;
 - Claude Code.
 
@@ -38,10 +52,12 @@ From the repository root, verify the external commands:
 
 ```sh
 cargo --version
-jq --version
 uv --version
 claude --version
 ```
+
+On macOS/Linux, also verify `jq --version`. Windows setup uses the built-in
+`af hook` collector and does not require `jq` or a Unix shell.
 
 ## 2. Build and expose `af`
 
@@ -78,6 +94,10 @@ can still run without it, but local energy will not be sampled and remote LLM
 calls will remain pending until the environment is repaired and replayed.
 
 ## 4. Install the Claude Code hooks
+
+The manual shell-hook instructions in this section apply to macOS/Linux. On
+Windows, use `af setup --agents claude-code`; it registers the native
+`"C:\path\to\af.exe" hook` command instead.
 
 Make the hook executable:
 
@@ -177,15 +197,16 @@ Claude Code session. Internal hook errors are written best-effort to
 
 ## 5. Start the control plane
 
-The unified installer starts the resident receiver automatically. Verify it
-before launching Claude Code:
+On macOS/Linux, the unified installer starts the resident receiver
+automatically. Verify it before launching Claude Code:
 
 ```sh
 af service status
 ```
 
-For a manual development checkout or an unsupported service manager, choose
-the state directory and keep a foreground receiver running:
+On Windows, for a manual development checkout, or when no supported service
+manager is available, choose the state directory and keep a foreground
+receiver running:
 
 ```sh
 export AF_STATE_DIR="$HOME/.local/state/agentic-footprint"
@@ -211,7 +232,7 @@ Optional location settings:
 "$AF_BIN" watch --debug --remote-region FRA
 ```
 
-The installed background service does not enable debug mode. On macOS inspect
+The installed macOS/Linux background service does not enable debug mode. On macOS inspect
 `$AF_STATE_DIR/logs/watch.stderr.log`; on Linux run
 `journalctl --user -u agentic-footprint-watch.service`. For the debug console,
 temporarily stop the service or run a separate `af watch --debug --no-otlp`.
@@ -279,8 +300,8 @@ seconds for the OTLP exporter to flush before stopping the watch process.
 The included statusline reads already-computed local data; it performs no
 network request and does not ingest or estimate anything itself.
 
-Create an executable wrapper so the statusline always knows the absolute
-binary and script paths:
+On macOS/Linux, create an executable wrapper so the richer shell statusline
+always knows the absolute binary and script paths:
 
 ```sh
 mkdir -p "$HOME/.claude"
@@ -321,6 +342,18 @@ Configure displayed metrics in `~/.claude/ecologits.config.sh`, for example:
 : "${ECOLOGITS_METRICS:=gwp wcf energy adpe pe model}"
 ```
 
+On Windows, configure Claude Code to invoke the native read-only command
+directly, replacing the path with the installed executable:
+
+```json
+{
+  "statusLine": {
+    "type": "command",
+    "command": "\"C:\\Users\\you\\AppData\\Local\\Programs\\agentic-footprint\\af.exe\" statusline"
+  }
+}
+```
+
 ## 9. Verify collection
 
 After starting one Claude Code session and running at least one tool, check:
@@ -339,15 +372,18 @@ because `af watch` estimates asynchronously.
 
 ### No `cc-hooks.*` file
 
-- Confirm `jq` is available in the environment inherited by Claude Code.
-- Confirm the hook path is absolute and executable.
+- On macOS/Linux, confirm `jq` is available in the environment inherited by
+  Claude Code and that the hook path is absolute and executable.
+- On Windows, rerun `af setup --agents claude-code` and confirm the configured
+  command points to the installed `af.exe hook`.
 - Confirm the hook is registered directly, without `sh -c`.
 - Inspect `$AF_STATE_DIR/tmp/hook-errors.log`.
 - Run `collectors/claude-code/test_hooks.sh` from the repository root.
 
 ### No `otlp-cc.*` file
 
-- Run `af service status` and confirm the resident receiver is reachable.
+- Run `af setup --check` and confirm the receiver is reachable. On
+  macOS/Linux, `af service status` also diagnoses the installed service.
 - Confirm telemetry and OTLP variables are exported in the Claude Code
   process's environment.
 - Confirm the endpoint is `http://127.0.0.1:4318` and the protocol is
@@ -376,5 +412,4 @@ because `af watch` estimates asynchronously.
   read-only backend separately.
 
 For collector internals and payload details, see
-The repository also contains collector-internal notes at
 `collectors/claude-code/README.md`.

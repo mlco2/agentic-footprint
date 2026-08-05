@@ -5,9 +5,9 @@ The release binary is named `af`.
 | Command | Purpose |
 |---|---|
 | `af setup` | Check or start the receiver, then detect and configure supported coding agents. |
-| `af service install` | Install, start, and verify the resident receiver. |
-| `af service start` | Restart an installed resident receiver. |
-| `af service status` | Check the service manager and OTLP endpoint. |
+| `af service install` | Install, start, and verify the macOS/Linux per-user receiver. |
+| `af service start` | Restart an installed macOS/Linux receiver. |
+| `af service status` | Check the macOS/Linux service manager and OTLP endpoint. |
 | `af report` | Ingest pending facts, update derived results, and print a report. |
 | `af replay` | Rebuild derived estimates and joins from retained raw facts. |
 | `af watch` | Run resident ingestion, sampling, estimation, and optional debugging. |
@@ -31,6 +31,11 @@ are excluded from the default build and public setup surface.
 Set `AF_STATE_DIR` to override the default state location. The directory owns
 the spool, SQLite store, managed Python environment, integration helpers,
 reject evidence, and resident-service logs.
+
+The default is `~/.local/state/agentic-footprint` on macOS/Linux and
+`%LOCALAPPDATA%\agentic-footprint` on Windows. Windows runs `af watch` in the
+foreground by default; the `af service` lifecycle is currently available only
+through macOS launchd and Linux systemd user services.
 
 ## Output contract
 

@@ -119,6 +119,7 @@ fn smoke_fresh_session_reaches_debug_console() {
 /// skipped — a live run that silently skips its point is worse than one
 /// that says what to install.
 #[test]
+#[cfg(unix)]
 #[ignore = "live: spawns a real Claude Code session and needs `af python setup` — run scripts/test-live.sh"]
 fn energy_sampling_attributes_local_compute() {
     let agent = ClaudeCode::preflight();

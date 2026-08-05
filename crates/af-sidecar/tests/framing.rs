@@ -26,6 +26,25 @@ fn spawn_fake() -> Sidecar {
         .expect("spawn fake_sidecar.py")
 }
 
+#[cfg(unix)]
+fn kill_process(pid: u32) {
+    let status = Command::new("kill")
+        .arg("-9")
+        .arg(pid.to_string())
+        .status()
+        .expect("run `kill`");
+    assert!(status.success(), "kill -9 {pid} failed");
+}
+
+#[cfg(windows)]
+fn kill_process(pid: u32) {
+    let status = Command::new("taskkill")
+        .args(["/PID", &pid.to_string(), "/F"])
+        .status()
+        .expect("run `taskkill`");
+    assert!(status.success(), "taskkill /PID {pid} /F failed");
+}
+
 #[test]
 fn request_response_matches_by_id() {
     let mut sidecar = spawn_fake();
@@ -100,17 +119,12 @@ fn a_killed_sidecar_fails_its_next_request_and_a_fresh_spawn_recovers() {
         .expect("initial request should succeed");
     assert_eq!(resp["echo"]["value"], "before");
 
-    // Kill the child process out from under the Sidecar (SIGKILL, from
-    // outside — not via any Sidecar API).
+    // Force-stop the child process from outside the Sidecar API: SIGKILL on
+    // Unix and taskkill /F on Windows.
     let pid = sidecar.pid();
-    let status = Command::new("kill")
-        .arg("-9")
-        .arg(pid.to_string())
-        .status()
-        .expect("run `kill`");
-    assert!(status.success(), "kill -9 {pid} failed");
+    kill_process(pid);
 
-    // Give the OS a moment to deliver SIGKILL and close the pipe so the
+    // Give the OS a moment to terminate the child and close the pipe so the
     // reader thread observes EOF.
     std::thread::sleep(Duration::from_millis(200));
 
