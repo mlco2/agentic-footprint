@@ -3,7 +3,8 @@
 //! so the `af` binary is self-contained (no runtime file lookup).
 //!
 //! Layout under `state_dir`: `venv/` (created by `uv venv`), with the
-//! interpreter at `venv/bin/python`.
+//! interpreter at `venv/bin/python` (unix) or `venv\Scripts\python.exe`
+//! (Windows) — see [`venv_interpreter`].
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -63,31 +64,47 @@ fn venv_dir(state_dir: &Path) -> PathBuf {
     state_dir.join("venv")
 }
 
-/// `state_dir/venv/bin/python`, if it exists and is executable. Returns
-/// `None` for any other condition (missing venv, missing interpreter, not
+/// The venv's interpreter path: `bin/python` on unix, `Scripts\python.exe`
+/// on Windows. The single source of truth for the layout — provisioning,
+/// resolution, and doctor messages all go through here.
+fn venv_interpreter(venv: &Path) -> PathBuf {
+    #[cfg(unix)]
+    return venv.join("bin").join("python");
+    #[cfg(windows)]
+    return venv.join("Scripts").join("python.exe");
+}
+
+/// The venv interpreter, if it exists and is executable. Returns `None`
+/// for any other condition (missing venv, missing interpreter, not
 /// executable) — callers that need to distinguish those should use
 /// [`doctor`] instead.
 pub fn venv_python(state_dir: &Path) -> Option<PathBuf> {
-    let python = venv_dir(state_dir).join("bin").join("python");
+    let python = venv_interpreter(&venv_dir(state_dir));
     let meta = std::fs::metadata(&python).ok()?;
     if !meta.is_file() {
         return None;
     }
-    if !is_executable(&meta) {
+    if !is_executable(&python, &meta) {
         return None;
     }
     Some(python)
 }
 
-/// Unix only, deliberately: this PoC targets macOS/Linux (see
-/// `crates/af-cli/src/paths.rs`). The `#[cfg(not(unix))]` companion that
-/// used to sit here answered `true` unconditionally, which is not a
-/// portability shim but a permission check that always passes — on the one
-/// platform where nobody would notice it was wrong. A build failure is the
-/// honest outcome for a target this project does not support.
-fn is_executable(meta: &std::fs::Metadata) -> bool {
+/// Whether the interpreter can actually be executed. On unix that is a
+/// mode-bit check; on Windows there are no execute bits, so the honest
+/// equivalent is the `.exe` extension — and [`venv_interpreter`] only ever
+/// hands this a `python.exe` path, so no other launcher extension needs
+/// recognizing.
+#[cfg(unix)]
+fn is_executable(_path: &Path, meta: &std::fs::Metadata) -> bool {
     use std::os::unix::fs::PermissionsExt;
     meta.permissions().mode() & 0o111 != 0
+}
+
+#[cfg(windows)]
+fn is_executable(path: &Path, _meta: &std::fs::Metadata) -> bool {
+    path.extension()
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("exe"))
 }
 
 fn uv_on_path() -> bool {
@@ -130,7 +147,7 @@ fn setup_with_uv(manifest: &Manifest, venv: &Path, requirements: &[String]) -> R
         );
     }
 
-    let venv_python_path = venv.join("bin").join("python");
+    let venv_python_path = venv_interpreter(venv);
     let install_status = Command::new("uv")
         .args(["pip", "install", "--python"])
         .arg(&venv_python_path)
@@ -148,15 +165,29 @@ fn setup_with_uv(manifest: &Manifest, venv: &Path, requirements: &[String]) -> R
     Ok(())
 }
 
-fn setup_with_stdlib(manifest: &Manifest, venv: &Path, requirements: &[String]) -> Result<()> {
-    let candidates = [
-        format!("python{}", manifest.python.version),
-        "python3".to_string(),
+/// System-interpreter candidates for the stdlib fallback, as
+/// `(program, leading args)` pairs — the Windows `py` launcher selects the
+/// version through an argument (`py -3.12`), not the program name.
+fn stdlib_python_candidates(version: &str) -> Vec<(String, Vec<String>)> {
+    #[cfg(unix)]
+    return vec![
+        (format!("python{version}"), vec![]),
+        ("python3".to_string(), vec![]),
     ];
-    let python = candidates
+    #[cfg(windows)]
+    return vec![
+        ("py".to_string(), vec![format!("-{version}")]),
+        ("python".to_string(), vec![]),
+    ];
+}
+
+fn setup_with_stdlib(manifest: &Manifest, venv: &Path, requirements: &[String]) -> Result<()> {
+    let candidates = stdlib_python_candidates(&manifest.python.version);
+    let (python, python_args) = candidates
         .iter()
-        .find(|candidate| {
-            Command::new(candidate)
+        .find(|(program, args)| {
+            Command::new(program)
+                .args(args)
                 .args(["-c", "import venv"])
                 .status()
                 .map(|status| status.success())
@@ -165,6 +196,7 @@ fn setup_with_stdlib(manifest: &Manifest, venv: &Path, requirements: &[String]) 
         .context("neither uv nor a usable python3 with the venv module was found on PATH")?;
 
     let venv_status = Command::new(python)
+        .args(python_args)
         .args(["-m", "venv"])
         .arg(venv)
         .status()
@@ -176,7 +208,7 @@ fn setup_with_stdlib(manifest: &Manifest, venv: &Path, requirements: &[String]) 
         );
     }
 
-    let venv_python_path = venv.join("bin").join("python");
+    let venv_python_path = venv_interpreter(venv);
     let install_status = Command::new(&venv_python_path)
         .args(["-m", "pip", "install"])
         .args(requirements)
@@ -249,7 +281,7 @@ fn venv_finding(state_dir: &Path) -> Option<DoctorFinding> {
             severity: Severity::Error,
             message: format!(
                 "venv interpreter missing or not executable: {}",
-                venv.join("bin").join("python").display()
+                venv_interpreter(&venv).display()
             ),
             fix_hint: "run `af python setup` to rebuild the venv".to_string(),
         });
@@ -307,6 +339,36 @@ mod tests {
     fn venv_python_none_when_state_dir_empty() {
         let dir = tempfile::tempdir().unwrap();
         assert_eq!(venv_python(dir.path()), None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn venv_interpreter_uses_bin_python() {
+        assert_eq!(
+            venv_interpreter(Path::new("/s/venv")),
+            PathBuf::from("/s/venv/bin/python")
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn venv_interpreter_uses_scripts_python_exe() {
+        assert_eq!(
+            venv_interpreter(Path::new(r"C:\s\venv")),
+            PathBuf::from(r"C:\s\venv")
+                .join("Scripts")
+                .join("python.exe")
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn venv_python_found_by_extension_on_windows() {
+        let dir = tempfile::tempdir().unwrap();
+        let scripts = dir.path().join("venv").join("Scripts");
+        std::fs::create_dir_all(&scripts).unwrap();
+        std::fs::write(scripts.join("python.exe"), b"").unwrap();
+        assert_eq!(venv_python(dir.path()), Some(scripts.join("python.exe")));
     }
 
     #[test]

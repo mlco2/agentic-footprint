@@ -5,6 +5,11 @@
 //! Everything here drives the real binary against a tempdir `AF_STATE_DIR`
 //! with `--no-sidecars` and `--no-otlp`: no Python, no venv, no network,
 //! nothing bound but the ephemeral debug port this test picks itself.
+//!
+//! Unix-only for now: every scenario ends by asserting the graceful
+//! `SIGTERM` exit via `kill(1)`, which has no direct Windows analogue —
+//! Windows shutdown coverage is planned around `GenerateConsoleCtrlEvent`.
+#![cfg(unix)]
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};

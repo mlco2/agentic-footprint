@@ -130,27 +130,81 @@ pub struct WatchArgs {
     pub remote_region: Option<String>,
 }
 
-/// Runs the resident loop until `SIGINT`/`SIGTERM`.
+/// Termination-request plumbing: one flag, set by the platform's stop
+/// signal, polled by the resident loop.
+///
+/// Two reactions per signal, and the order is the feature: the first
+/// Ctrl-C (or SIGTERM / console-close) sets the flag and runs the graceful
+/// path (shutdown ops, final ingest pass), while a **second** signal exits
+/// immediately with 130. Without the escape hatch a user watching a
+/// sampler take its time to flush has nothing to press — graceful shutdown
+/// becomes a hang they can only answer with `kill -9`, which is the
+/// outcome the graceful path existed to avoid.
+mod shutdown {
+    use std::sync::atomic::AtomicBool;
+    use std::sync::Arc;
+
+    use anyhow::Result;
+
+    #[cfg(unix)]
+    pub fn install(term: &Arc<AtomicBool>) -> Result<()> {
+        use anyhow::Context;
+        // The *conditional* handler exits only if the flag is already set,
+        // so the first signal falls through to the flag registration below.
+        for signal in [signal_hook::consts::SIGINT, signal_hook::consts::SIGTERM] {
+            signal_hook::flag::register_conditional_shutdown(signal, 130, Arc::clone(term))
+                .with_context(|| format!("registering the second-signal escape for {signal}"))?;
+            signal_hook::flag::register(signal, Arc::clone(term))
+                .with_context(|| format!("registering signal handler for {signal}"))?;
+        }
+        Ok(())
+    }
+
+    #[cfg(windows)]
+    pub fn install(term: &Arc<AtomicBool>) -> Result<()> {
+        use std::sync::atomic::Ordering;
+        use std::sync::OnceLock;
+
+        use anyhow::bail;
+        use windows_sys::Win32::Foundation::{BOOL, FALSE, TRUE};
+        use windows_sys::Win32::System::Console::SetConsoleCtrlHandler;
+
+        // The handler runs on a system-spawned thread with no user data
+        // pointer, so the flag rides in a process-wide static.
+        static TERM: OnceLock<Arc<AtomicBool>> = OnceLock::new();
+
+        // Ctrl+C, Ctrl+Break, console close, logoff, and shutdown all
+        // request the same graceful stop; a second event is the immediate
+        // escape, mirroring the unix double-signal contract (exit 130).
+        unsafe extern "system" fn handler(_ctrl_type: u32) -> BOOL {
+            if let Some(term) = TERM.get() {
+                if term.swap(true, Ordering::SeqCst) {
+                    std::process::exit(130);
+                }
+                return TRUE;
+            }
+            FALSE
+        }
+
+        TERM.set(Arc::clone(term)).ok();
+        // SAFETY: `handler` is a valid console-control callback for the
+        // life of the process, and TERM is initialized before registration.
+        if unsafe { SetConsoleCtrlHandler(Some(handler), TRUE) } == 0 {
+            bail!("registering the console control handler failed");
+        }
+        Ok(())
+    }
+}
+
+/// Runs the resident loop until the platform stop signal
+/// (`SIGINT`/`SIGTERM` on unix, Ctrl+C / console close on Windows).
 pub fn run(state_dir: &Path, args: WatchArgs) -> Result<()> {
     let spool_dir = state_dir.join("spool");
     std::fs::create_dir_all(&spool_dir)
         .with_context(|| format!("creating spool dir {}", spool_dir.display()))?;
 
-    // Two handlers per signal, in this order, and the order is the feature:
-    // the *conditional* one exits only if the flag is already set, so the
-    // first Ctrl-C falls through to the flag registration below and runs the
-    // graceful path (shutdown ops, final ingest pass), while a **second**
-    // Ctrl-C exits immediately with 130. Without the escape hatch a user
-    // watching a sampler take its time to flush has nothing to press —
-    // graceful shutdown becomes a hang they can only answer with `kill -9`,
-    // which is the outcome the graceful path existed to avoid.
     let term = Arc::new(AtomicBool::new(false));
-    for signal in [signal_hook::consts::SIGINT, signal_hook::consts::SIGTERM] {
-        signal_hook::flag::register_conditional_shutdown(signal, 130, Arc::clone(&term))
-            .with_context(|| format!("registering the second-signal escape for {signal}"))?;
-        signal_hook::flag::register(signal, Arc::clone(&term))
-            .with_context(|| format!("registering signal handler for {signal}"))?;
-    }
+    shutdown::install(&term)?;
 
     // The OTLP receiver is best-effort: a port already in use (a second
     // `af watch`, or Claude Code pointed at someone else's collector) must

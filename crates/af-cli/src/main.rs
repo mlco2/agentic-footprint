@@ -112,6 +112,12 @@ enum Commands {
     /// (range means). Read-only and never fails: no ingest, no estimation,
     /// no writes, zeros when the session has no stored join yet.
     Statusline,
+    /// Claude Code hooks collector: read one hook event's JSON on stdin
+    /// and append Contract #1 events to the spool. Registered by
+    /// `af setup` for every hook event; dispatches on the payload's
+    /// `hook_event_name`. Best-effort and always exits 0 — it must never
+    /// be the reason a Claude Code turn fails.
+    Hook,
     /// Validate one Contract #1 event line from stdin (hidden test helper)
     #[command(hide = true)]
     ValidateLine,
@@ -221,6 +227,9 @@ fn main() {
         }
         Commands::Statusline => {
             std::process::exit(statusline::run());
+        }
+        Commands::Hook => {
+            std::process::exit(cmd::hook::run());
         }
         Commands::ValidateLine => {
             std::process::exit(cmd::validate_line::run());

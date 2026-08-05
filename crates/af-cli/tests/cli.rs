@@ -129,6 +129,32 @@ fn test_setup_applies_codex_and_claude_configuration_idempotently() {
     receiver.join().unwrap();
 }
 
+#[cfg(unix)]
+#[test]
+fn test_setup_dry_run_stops_before_agent_inspection_when_receiver_is_unhealthy() {
+    let dir = tempfile::tempdir().unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let endpoint = format!("http://{}/v1/logs", listener.local_addr().unwrap());
+    drop(listener);
+
+    let mut setup = Command::cargo_bin("af").unwrap();
+    setup
+        .env("AF_STATE_DIR", dir.path().join("state"))
+        .env("AF_SERVICE_MANAGER", "unsupported")
+        .args(["setup", "--dry-run", "--endpoint"])
+        .arg(endpoint)
+        .arg("--project")
+        .arg(dir.path().join("project-does-not-exist"))
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("receiver: unavailable"))
+        .stdout(predicate::str::contains("Start the receiver manually"))
+        .stdout(predicate::str::contains(
+            "Agent configuration is not inspected until the receiver is healthy.",
+        ))
+        .stdout(predicate::str::contains("Detected agents:").not());
+}
+
 #[cfg(feature = "experimental-opencode")]
 #[test]
 fn test_opencode_offline_mode_is_finite_and_surfaces_sequence_gaps() {

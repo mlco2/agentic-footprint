@@ -1,0 +1,130 @@
+name: CI
+
+on:
+  push:
+    branches: [main, poc-iteration-1]
+  pull_request:
+
+jobs:
+  console:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: console
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: console/package-lock.json
+      - run: npm ci
+      - run: npm run gen:types:check
+      - run: npm run lint:hex
+      - run: npm run lint:arith
+      - run: npm run check
+      - run: npm test
+      - run: npm run build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: console-dist
+          path: console/dist
+
+  # Separate from `console` and NOT a dependency of the cargo jobs below —
+  # an e2e flake must never block the Rust workstream (existing CI-coupling
+  # friction the final reviewer flagged; this job adds no more of it).
+  # Reuses the `console` job's already-built `dist` artifact instead of
+  # rebuilding: playwright.config.ts's `webServer` only runs `vite preview`,
+  # never `vite build`, specifically so this doesn't pay for a second build.
+  console-e2e:
+    needs: console
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: console
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: console/package-lock.json
+      - run: npm ci
+      - uses: actions/download-artifact@v4
+        with:
+          name: console-dist
+          path: console/dist
+      - run: npx playwright install chromium --with-deps
+      - run: npx playwright test
+
+  test:
+    needs: console
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install pinned Rust toolchain
+        run: |
+          rustup toolchain install 1.97.1 --profile minimal --component clippy,rustfmt
+          rustup override set 1.97.1
+      # af-console embeds console/dist at compile time (crates/af-console/build.rs);
+      # download the console job's build so cargo test exercises the real
+      # bundle instead of the "not built" placeholder.
+      - uses: actions/download-artifact@v4
+        with:
+          name: console-dist
+          path: console/dist
+      - run: cargo fmt --check
+      # --all-targets so tests, benches and examples are linted too: most of
+      # the crate's surface lives in integration tests.
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo test --workspace
+      - name: Verify default release surface excludes OpenCode
+        run: |
+          cargo run --locked -q -p af-cli -- setup --help > /tmp/af-setup-help
+          ! grep -qi opencode /tmp/af-setup-help
+      - run: cargo test -p af-cli --features experimental-opencode
+      - name: claude-code hook collector tests
+        run: collectors/claude-code/test_hooks.sh
+      - name: statusline bar tests
+        run: statusline/test_statusline.sh
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install pytest
+      - run: python -m pytest python/tests -q
+
+  docs-and-hygiene:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v9
+      - run: scripts/check-repository-hygiene.sh
+      - run: scripts/docs.sh build
+
+  test-windows:
+    needs: console
+    runs-on: windows-latest
+    steps:
+      # Before checkout: the repo's golden-string tests and the embedded
+      # af-hook.sh (include_str! in setup.rs) are byte-exact contracts;
+      # windows runners default to autocrlf=true, which would rewrite every
+      # text file to CRLF on checkout and break them.
+      - run: git config --global core.autocrlf input
+      - uses: actions/checkout@v4
+      - name: Install pinned Rust toolchain
+        run: |
+          rustup toolchain install 1.97.1 --profile minimal
+          rustup override set 1.97.1
+      - uses: actions/download-artifact@v4
+        with:
+          name: console-dist
+          path: console/dist
+      # No fmt/clippy (the ubuntu job covers lints), no sh-based collector
+      # suites, no Python tests yet — this job gates compilation and the
+      # Rust test suite on the msvc target.
+      - run: cargo test --workspace
+      - name: Build the release af.exe artifact
+        run: cargo build --release -p af-cli
+      - name: PowerShell installer tests
+        shell: powershell
+        run: scripts/test-install.ps1

@@ -74,6 +74,27 @@ The shell script only obtains and places the binary. All agent detection and
 configuration logic lives in `af setup`, so future curl, Homebrew, npm, and
 other distribution methods share exactly the same onboarding behavior.
 
+## Windows 11
+
+From a PowerShell prompt in a source checkout:
+
+```powershell
+.\install.ps1
+```
+
+For a published release binary, provide its URL and checksum:
+
+```powershell
+$env:AF_BINARY_URL = 'https://example.invalid/releases/af-x86_64-pc-windows-msvc.exe'
+$env:AF_BINARY_SHA256 = '<sha256>'
+.\install.ps1 -Yes
+```
+
+The installer upgrades `%LOCALAPPDATA%\Programs\agentic-footprint\af.exe`
+atomically and adds that directory to the user `PATH`. Windows runs the
+receiver in the foreground by default; start `af watch` in a persistent
+PowerShell window, then rerun `af setup` to configure agents.
+
 ## Wizard commands
 
 ```sh
@@ -89,9 +110,13 @@ af setup --endpoint http://127.0.0.1:5000/v1/logs
 
 The current wizard:
 
-- installs, enables, and starts `af watch` through macOS launchd or a Linux
-  systemd user service;
-- verifies `POST /v1/logs` responds before writing agent configuration;
+- checks the receiver before inspecting any agent configuration;
+- on macOS and Linux, when needed, offers to install and start `af watch`
+  through the supported per-user service manager;
+- on Windows, prints the foreground `af watch` command instead of installing
+  a background task;
+- verifies `POST /v1/logs` responds before detecting or proposing agent
+  changes;
 - detects Codex and Claude Code on `PATH`;
 - safely appends Codex native OTLP configuration when no `[otel]` setup exists;
 - refuses to overwrite an existing conflicting Codex exporter;
@@ -102,7 +127,12 @@ The current wizard:
 
 `--check` exits non-zero when the resident receiver is unreachable, an
 installed selected agent needs changes, or a configuration conflict exists.
-`--dry-run` prints the agent plan without writing files or changing services.
+When the receiver is unavailable, `--dry-run` prints only the receiver plan;
+agent configuration is not inspected until receiver health passes.
+
+If you decline the recommended background receiver, setup exits without
+inspecting or changing agent configuration. Start the foreground receiver with
+the command printed by the wizard, keep it running, then rerun `af setup`.
 
 Service commands are idempotent:
 

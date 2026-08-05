@@ -19,8 +19,9 @@ Releases are produced only from tags matching `v*.*.*`.
 - The console uses `npm ci` and the committed lockfile.
 - Every binary is built twice in independent target directories and compared
   byte-for-byte before packaging.
-- Release archives use sorted entries, fixed ownership, fixed permissions, and
-  `SOURCE_DATE_EPOCH` as their timestamp.
+- Unix release archives use sorted entries, fixed ownership, fixed permissions,
+  and `SOURCE_DATE_EPOCH` as their timestamp. Windows publishes the reproducible
+  `af-x86_64-pc-windows-msvc.exe` binary directly.
 - Checksums, keyless signatures, and GitHub provenance are attached to the
   release.
 

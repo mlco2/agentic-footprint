@@ -1,0 +1,140 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build ${{ matrix.target }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+          - runner: macos-15-intel
+            target: x86_64-apple-darwin
+          - runner: macos-14
+            target: aarch64-apple-darwin
+          - runner: windows-2025
+            target: x86_64-pc-windows-msvc
+    runs-on: ${{ matrix.runner }}
+    env:
+      CARGO_INCREMENTAL: "0"
+      RUSTFLAGS: "--remap-path-prefix=${{ github.workspace }}=."
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Verify release version
+        if: runner.os != 'Windows'
+        run: scripts/check-release-version.sh "$GITHUB_REF_NAME"
+      - name: Verify release version
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $version = (Select-String '^version = "(.+)"' crates/af-cli/Cargo.toml).Matches[0].Groups[1].Value
+          if ("v$version" -ne $env:GITHUB_REF_NAME) { throw "tag $env:GITHUB_REF_NAME does not match af-cli $version" }
+      - name: Install pinned Rust toolchain
+        run: |
+          rustup toolchain install 1.97.1 --profile minimal
+          rustup target add "${{ matrix.target }}" --toolchain 1.97.1
+          rustup override set 1.97.1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.22.2
+          cache: npm
+          cache-dependency-path: console/package-lock.json
+      - name: Build embedded console
+        working-directory: console
+        run: npm ci && npm run build
+      - name: Build twice and compare
+        if: runner.os != 'Windows'
+        run: |
+          epoch=$(git show -s --format=%ct HEAD)
+          export SOURCE_DATE_EPOCH="$epoch"
+          export CARGO_TARGET_DIR="$RUNNER_TEMP/repro-target"
+          cargo build --release --locked -p af-cli --target "${{ matrix.target }}"
+          cp "$CARGO_TARGET_DIR/${{ matrix.target }}/release/af" "$RUNNER_TEMP/af-first"
+          rm -rf "$CARGO_TARGET_DIR"
+          cargo build --release --locked -p af-cli --target "${{ matrix.target }}"
+          cmp \
+            "$RUNNER_TEMP/af-first" \
+            "$CARGO_TARGET_DIR/${{ matrix.target }}/release/af"
+          mkdir -p release
+          cp "$CARGO_TARGET_DIR/${{ matrix.target }}/release/af" \
+            "release/af-${{ matrix.target }}"
+          chmod 755 "release/af-${{ matrix.target }}"
+          python3 scripts/package-release.py \
+            --binary "release/af-${{ matrix.target }}" \
+            --target "${{ matrix.target }}" \
+            --version "${GITHUB_REF_NAME#v}" \
+            --epoch "$epoch" \
+            --output "release/agentic-footprint-${GITHUB_REF_NAME}-${{ matrix.target }}.tar.gz"
+      - name: Build twice and compare
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $env:CARGO_TARGET_DIR = "$env:RUNNER_TEMP\repro-target"
+          cargo build --release --locked -p af-cli --target "${{ matrix.target }}"
+          Copy-Item "$env:CARGO_TARGET_DIR\${{ matrix.target }}\release\af.exe" "$env:RUNNER_TEMP\af-first.exe"
+          Remove-Item -Recurse -Force $env:CARGO_TARGET_DIR
+          cargo build --release --locked -p af-cli --target "${{ matrix.target }}"
+          if ((Get-FileHash "$env:RUNNER_TEMP\af-first.exe").Hash -ne (Get-FileHash "$env:CARGO_TARGET_DIR\${{ matrix.target }}\release\af.exe").Hash) {
+            throw 'release builds differ'
+          }
+          New-Item -ItemType Directory -Force release | Out-Null
+          Copy-Item "$env:CARGO_TARGET_DIR\${{ matrix.target }}\release\af.exe" "release\af-${{ matrix.target }}.exe"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.target }}
+          path: release/*
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          path: release
+          merge-multiple: true
+      - name: Generate checksums
+        working-directory: release
+        run: sha256sum af-* agentic-footprint-* > SHA256SUMS
+      - uses: sigstore/cosign-installer@v4.0.0
+      - name: Sign release assets with GitHub OIDC
+        working-directory: release
+        run: |
+          for artifact in af-* agentic-footprint-* SHA256SUMS; do
+            cosign sign-blob --yes \
+              --bundle "$artifact.sigstore.json" \
+              "$artifact"
+          done
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v4.1.1
+        with:
+          subject-path: |
+            release/af-*
+            release/agentic-footprint-*
+            release/SHA256SUMS
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" release/* \
+            --verify-tag \
+            --generate-notes \
+            --title "Agentic Footprint $GITHUB_REF_NAME"

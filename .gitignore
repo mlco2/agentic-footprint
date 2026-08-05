@@ -15,6 +15,7 @@ console/dist/
 console/test-results/
 /.playwright-mcp/
 *.log
+powermetrics_log.txt
 *.sqlite
 *.sqlite3
 *.db

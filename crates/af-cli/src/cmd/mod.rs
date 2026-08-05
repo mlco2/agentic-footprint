@@ -2,6 +2,7 @@ pub mod debug_frames;
 pub mod debug_server;
 pub mod estimator;
 pub mod estimator_worker;
+pub mod hook;
 pub mod ingest;
 #[cfg(feature = "experimental-opencode")]
 pub mod opencode;

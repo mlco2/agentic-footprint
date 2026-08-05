@@ -4,7 +4,7 @@ The release binary is named `af`.
 
 | Command | Purpose |
 |---|---|
-| `af setup` | Detect and configure supported coding agents. |
+| `af setup` | Check or start the receiver, then detect and configure supported coding agents. |
 | `af service install` | Install, start, and verify the resident receiver. |
 | `af service start` | Restart an installed resident receiver. |
 | `af service status` | Check the service manager and OTLP endpoint. |
@@ -17,6 +17,9 @@ The release binary is named `af`.
 
 Use `af <command> --help` for the authoritative option list from the installed
 version.
+
+`af setup` treats receiver health as a prerequisite: it does not inspect or
+propose agent-specific changes until the local OTLP receiver responds.
 
 ## Supported integrations
 

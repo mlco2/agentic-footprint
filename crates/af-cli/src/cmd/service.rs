@@ -65,6 +65,21 @@ pub fn check_for_setup(state_dir: &Path, endpoint: &str) -> Result<()> {
     status(manager(), state_dir, endpoint)
 }
 
+pub fn receiver_reachable(endpoint: &str) -> Result<()> {
+    verify_reachable(endpoint)
+}
+
+pub fn automatic_manager_available() -> bool {
+    manager() != Manager::Unsupported
+}
+
+pub fn foreground_setup_instructions(state_dir: &Path, endpoint: &str) -> String {
+    format!(
+        "Start the receiver manually with `{}` and keep it running, then rerun `af setup` to verify {endpoint}.",
+        manual_watch_command(state_dir)
+    )
+}
+
 fn ensure_installed(state_dir: &Path, binary: &Path, endpoint: &str) -> Result<()> {
     let manager = manager();
     let addr = endpoint_addr(endpoint)?;
@@ -98,16 +113,7 @@ fn ensure_installed(state_dir: &Path, binary: &Path, endpoint: &str) -> Result<(
 
 fn start(manager: Manager, state_dir: &Path, endpoint: &str) -> Result<()> {
     match manager {
-        Manager::Launchd => {
-            let domain = launchd_domain()?;
-            run_command(
-                Command::new("launchctl")
-                    .arg("kickstart")
-                    .arg("-k")
-                    .arg(format!("{domain}/{LABEL}")),
-                "restart launchd service",
-            )?;
-        }
+        Manager::Launchd => kickstart(&launchd_target()?, "restart launchd service")?,
         Manager::Systemd => {
             run_command(
                 Command::new("systemctl").args(["--user", "restart", SYSTEMD_UNIT]),
@@ -124,11 +130,10 @@ fn start(manager: Manager, state_dir: &Path, endpoint: &str) -> Result<()> {
 fn status(manager: Manager, state_dir: &Path, endpoint: &str) -> Result<()> {
     match manager {
         Manager::Launchd => {
-            let domain = launchd_domain()?;
             run_command(
                 Command::new("launchctl")
                     .arg("print")
-                    .arg(format!("{domain}/{LABEL}")),
+                    .arg(launchd_target()?),
                 "query launchd service",
             )?;
         }
@@ -151,12 +156,15 @@ fn status(manager: Manager, state_dir: &Path, endpoint: &str) -> Result<()> {
     Ok(())
 }
 
-fn install_launchd(state_dir: &Path, binary: &Path, addr: SocketAddr) -> Result<()> {
-    let home = home_dir()?;
-    let path = home
+fn launchd_plist_path() -> Result<PathBuf> {
+    Ok(home_dir()?
         .join("Library")
         .join("LaunchAgents")
-        .join(format!("{LABEL}.plist"));
+        .join(format!("{LABEL}.plist")))
+}
+
+fn install_launchd(state_dir: &Path, binary: &Path, addr: SocketAddr) -> Result<()> {
+    let path = launchd_plist_path()?;
     let logs = state_dir.join("logs");
     fs::create_dir_all(&logs)
         .with_context(|| format!("create service log directory {}", logs.display()))?;
@@ -349,17 +357,29 @@ fn run_command(command: &mut Command, action: &str) -> Result<()> {
     Ok(())
 }
 
+/// The launchd service specifier, `gui/<uid>/<LABEL>`.
+fn launchd_target() -> Result<String> {
+    Ok(format!("{}/{LABEL}", launchd_domain()?))
+}
+
+fn kickstart(target: &str, action: &str) -> Result<()> {
+    run_command(
+        Command::new("launchctl")
+            .arg("kickstart")
+            .arg("-k")
+            .arg(target),
+        action,
+    )
+}
+
 fn service_active(manager: Manager) -> Result<()> {
     match manager {
-        Manager::Launchd => {
-            let domain = launchd_domain()?;
-            run_command(
-                Command::new("launchctl")
-                    .arg("print")
-                    .arg(format!("{domain}/{LABEL}")),
-                "verify launchd service",
-            )
-        }
+        Manager::Launchd => run_command(
+            Command::new("launchctl")
+                .arg("print")
+                .arg(launchd_target()?),
+            "verify launchd service",
+        ),
         Manager::Systemd => run_command(
             Command::new("systemctl").args(["--user", "is-active", "--quiet", SYSTEMD_UNIT]),
             "verify systemd user service",
@@ -386,9 +406,7 @@ fn launchd_domain() -> Result<String> {
 }
 
 fn home_dir() -> Result<PathBuf> {
-    env::var_os("HOME")
-        .map(PathBuf::from)
-        .context("HOME must be set to install a user service")
+    crate::paths::home_dir().context("HOME must be set to install a user service")
 }
 
 fn systemd_config_dir() -> Result<PathBuf> {
@@ -406,13 +424,25 @@ fn logs_hint(manager: Manager, state_dir: &Path) -> String {
     }
 }
 
+/// How to start the receiver by hand, in the local shell's own syntax.
+#[cfg(unix)]
+fn manual_watch_command(state_dir: &Path) -> String {
+    format!("AF_STATE_DIR={} af watch", state_dir.display())
+}
+
+#[cfg(windows)]
+fn manual_watch_command(state_dir: &Path) -> String {
+    format!(
+        "$env:AF_STATE_DIR = '{}'; af watch  (PowerShell)",
+        state_dir.display()
+    )
+}
+
 fn manual_instructions(state_dir: &Path, endpoint: &str) -> anyhow::Error {
     anyhow!(
-        "no supported per-user service manager is available. Start the receiver manually with \
-         `AF_STATE_DIR={} af watch` and keep it running, then rerun `af setup` to verify \
-         {endpoint}. Supported automatic managers are macOS \
-         launchd and Linux systemd user services",
-        state_dir.display()
+        "no supported per-user service manager is available. {} Supported automatic managers \
+         are macOS launchd and Linux systemd user services",
+        foreground_setup_instructions(state_dir, endpoint)
     )
 }
 

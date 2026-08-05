@@ -1,6 +1,8 @@
 use std::collections::BTreeSet;
 use std::env;
-use std::fs::{self, File, OpenOptions};
+#[cfg(unix)]
+use std::fs::File;
+use std::fs::{self, OpenOptions};
 use std::io::{self, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -129,6 +131,11 @@ impl Change {
 
 pub fn run(state_dir: &Path, args: Args) -> Result<()> {
     validate_endpoint(&args.endpoint)?;
+    print_receiver_header(state_dir, &args.endpoint);
+    if !prepare_receiver(state_dir, &args)? {
+        return Ok(());
+    }
+
     let project = args
         .project
         .canonicalize()
@@ -136,15 +143,7 @@ pub fn run(state_dir: &Path, args: Args) -> Result<()> {
     let selected = selected_agents(args.agents.as_deref())?;
     let plans = inspect(state_dir, &project, args.global, &args.endpoint, &selected)?;
 
-    if args.check {
-        super::service::check_for_setup(state_dir, &args.endpoint)
-            .context("resident receiver needs attention")?;
-    } else if !args.dry_run {
-        super::service::ensure_for_setup(state_dir, &args.endpoint)
-            .context("cannot configure agents until the resident receiver is running")?;
-    }
-
-    print_header(state_dir, &project, args.global, &args.endpoint);
+    print_agent_header(&project, args.global);
     print_plans(&plans);
 
     let conflicts = plans
@@ -205,9 +204,92 @@ pub fn run(state_dir: &Path, args: Args) -> Result<()> {
     Ok(())
 }
 
-fn print_header(state_dir: &Path, project: &Path, global: bool, endpoint: &str) {
+fn prepare_receiver(state_dir: &Path, args: &Args) -> Result<bool> {
+    if super::service::receiver_reachable(&args.endpoint).is_ok() {
+        println!("  receiver: healthy at {}", args.endpoint);
+        return Ok(true);
+    }
+
+    if args.check {
+        return super::service::check_for_setup(state_dir, &args.endpoint)
+            .context("resident receiver needs attention")
+            .map(|()| true);
+    }
+
+    if args.dry_run {
+        println!("  receiver: unavailable at {}", args.endpoint);
+        print_receiver_plan(state_dir, &args.endpoint);
+        println!("\nAgent configuration is not inspected until the receiver is healthy.");
+        return Ok(false);
+    }
+
+    if !super::service::automatic_manager_available() {
+        println!("  receiver: unavailable at {}", args.endpoint);
+        println!(
+            "\nAutomatic receiver installation is unavailable on this platform.\n{}",
+            super::service::foreground_setup_instructions(state_dir, &args.endpoint)
+        );
+        return Ok(false);
+    }
+
+    if args.yes {
+        super::service::ensure_for_setup(state_dir, &args.endpoint)
+            .context("cannot configure agents until the resident receiver is running")?;
+        return Ok(true);
+    }
+
+    if !io::stdin().is_terminal() {
+        bail!("interactive setup requires a terminal; rerun with --yes");
+    }
+
+    println!("  receiver: unavailable at {}", args.endpoint);
+    println!("\nAgentic Footprint needs a local receiver for telemetry and energy sampling.");
+    println!("The recommended mode starts it automatically for your user account.");
+    print!("\nInstall and run the background receiver? [Y/n] ");
+    io::stdout().flush().context("flush receiver prompt")?;
+    let mut answer = String::new();
+    io::stdin()
+        .read_line(&mut answer)
+        .context("read receiver answer")?;
+    if !is_affirmative(&answer) {
+        println!("\nReceiver setup skipped; no agent configuration was inspected or changed.");
+        println!(
+            "{}",
+            super::service::foreground_setup_instructions(state_dir, &args.endpoint)
+        );
+        return Ok(false);
+    }
+
+    super::service::ensure_for_setup(state_dir, &args.endpoint)
+        .context("cannot configure agents until the resident receiver is running")?;
+    Ok(true)
+}
+
+fn print_receiver_plan(state_dir: &Path, endpoint: &str) {
+    if super::service::automatic_manager_available() {
+        println!("  planned: install, start, and verify the user background receiver");
+    } else {
+        println!(
+            "  required: {}",
+            super::service::foreground_setup_instructions(state_dir, endpoint)
+        );
+    }
+}
+
+fn is_affirmative(answer: &str) -> bool {
+    matches!(
+        answer.trim().to_ascii_lowercase().as_str(),
+        "" | "y" | "yes"
+    )
+}
+
+fn print_receiver_header(state_dir: &Path, endpoint: &str) {
     println!("Agentic Footprint setup");
     println!("  state:    {}", state_dir.display());
+    println!("  receiver: checking {endpoint}");
+}
+
+fn print_agent_header(project: &Path, global: bool) {
     println!(
         "  Claude:   {}",
         if global {
@@ -216,7 +298,6 @@ fn print_header(state_dir: &Path, project: &Path, global: bool, endpoint: &str) 
             format!("project settings in {}", project.display())
         }
     );
-    println!("  receiver: {endpoint}");
     println!("\nDetected agents:");
 }
 
@@ -329,19 +410,18 @@ fn inspect_claude(
     global: bool,
     endpoint: &str,
 ) -> Result<Vec<Plan>> {
-    if !command_exists("jq") {
+    let collector = hook_collector();
+    // jq is a dependency of the sh shim only; the built-in `af hook`
+    // collector needs nothing on PATH.
+    if collector == HookCollector::ShShim && !command_exists("jq") {
         return Ok(vec![Plan::Conflict {
             agent: Agent::ClaudeCode,
             detail: "jq is required by the Claude Code hook but was not found on PATH".to_string(),
         }]);
     }
-    let hook = state_dir
-        .join("integrations")
-        .join("claude-code")
-        .join("af-hook.sh");
     let settings = if global {
-        let home = env::var_os("HOME").context("HOME is not set")?;
-        PathBuf::from(home).join(".claude").join("settings.json")
+        let home = crate::paths::home_dir().context("HOME (or USERPROFILE) is not set")?;
+        home.join(".claude").join("settings.json")
     } else {
         project.join(".claude").join("settings.json")
     };
@@ -368,15 +448,24 @@ fn inspect_claude(
             }]);
         }
     }
-    let desired = merge_claude_settings(existing.clone(), &hook, endpoint)?;
+    let command = claude_hook_command(state_dir, collector)?;
+    let desired = merge_claude_settings(existing.clone(), &command, endpoint)?;
     let mut plans = Vec::new();
-    if fs::read_to_string(&hook).ok().as_deref() == Some(CLAUDE_HOOK) {
-        plans.push(Plan::Ready {
-            agent: Agent::ClaudeCode,
-            detail: format!("collector hook installed at {}", hook.display()),
-        });
-    } else {
-        plans.push(Plan::Change(Change::ClaudeHook { path: hook }));
+    match collector {
+        // The sh shim is a file installed from the embedded copy.
+        HookCollector::ShShim => {
+            let hook = sh_hook_path(state_dir);
+            if fs::read_to_string(&hook).ok().as_deref() == Some(CLAUDE_HOOK) {
+                plans.push(Plan::Ready {
+                    agent: Agent::ClaudeCode,
+                    detail: format!("collector hook installed at {}", hook.display()),
+                });
+            } else {
+                plans.push(Plan::Change(Change::ClaudeHook { path: hook }));
+            }
+        }
+        // The built-in subcommand ships inside af itself; nothing to install.
+        HookCollector::BuiltIn => {}
     }
     if desired == existing {
         plans.push(Plan::Ready {
@@ -395,19 +484,96 @@ fn inspect_claude(
     Ok(plans)
 }
 
+/// Which Claude Code collector implementation this setup registers. The
+/// two are behavioral equals (`af hook` is a port of the sh shim, pinned
+/// by shared tests); this one decision carries everything that differs —
+/// the jq prerequisite, whether a hook file is installed, and the command
+/// string — so switching a platform (or one day defaulting everyone to
+/// the built-in) is a change here, not a hunt through `inspect_claude`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HookCollector {
+    /// The embedded `collectors/claude-code/af-hook.sh`, installed under
+    /// the state dir. Needs `jq` on PATH.
+    ShShim,
+    /// The `af hook` subcommand built into this binary. No prerequisites,
+    /// no file to install.
+    BuiltIn,
+}
+
+fn hook_collector() -> HookCollector {
+    if cfg!(unix) {
+        HookCollector::ShShim
+    } else {
+        HookCollector::BuiltIn
+    }
+}
+
+/// Where the sh shim is installed from the embedded copy.
+fn sh_hook_path(state_dir: &Path) -> PathBuf {
+    state_dir
+        .join("integrations")
+        .join("claude-code")
+        .join("af-hook.sh")
+}
+
+/// The command string registered for every Claude Code hook event.
+///
+/// Both variants are bare executable paths, never `sh -c`/`cmd /c`
+/// wrappers: Claude Code then spawns the hook as a direct child, so the
+/// hook's parent PID is the Claude Code process itself — the property the
+/// SessionStart bootstrap span's `pids` (and with it process-tree energy
+/// attribution) depends on.
+fn claude_hook_command(state_dir: &Path, collector: HookCollector) -> Result<String> {
+    match collector {
+        HookCollector::ShShim => Ok(sh_hook_path(state_dir).to_string_lossy().to_string()),
+        HookCollector::BuiltIn => {
+            let exe = env::current_exe().context("resolve the af executable path")?;
+            // Always quoted: deterministic (the idempotence comparison in
+            // merge_claude_settings depends on that), and safe for
+            // installs under spaced paths like `C:\Program Files`.
+            Ok(format!("\"{}\" hook", exe.to_string_lossy()))
+        }
+    }
+}
+
+/// What makes a PATH entry an executable for [`command_exists`]: the bare
+/// name on unix, the launcher extensions Windows actually resolves on
+/// Windows (a fixed list rather than full `PATHEXT` parsing — the agents
+/// this setup detects all ship as one of these three).
+#[cfg(unix)]
+const EXECUTABLE_SUFFIXES: &[&str] = &[""];
+#[cfg(windows)]
+const EXECUTABLE_SUFFIXES: &[&str] = &[".exe", ".cmd", ".bat"];
+
 fn command_exists(command: &str) -> bool {
     let Some(path) = env::var_os("PATH") else {
         return false;
     };
-    env::split_paths(&path).any(|directory| directory.join(command).is_file())
+    find_in_path_dirs(command, env::split_paths(&path), EXECUTABLE_SUFFIXES)
+}
+
+/// Pure core of [`command_exists`], parameterized so both platforms'
+/// suffix rules are testable on any OS. Lazy over `dirs` so the probe
+/// stops at the first hit without materializing the whole PATH.
+fn find_in_path_dirs(
+    command: &str,
+    dirs: impl IntoIterator<Item = PathBuf>,
+    suffixes: &[&str],
+) -> bool {
+    let names: Vec<String> = suffixes
+        .iter()
+        .map(|suffix| format!("{command}{suffix}"))
+        .collect();
+    dirs.into_iter()
+        .any(|directory| names.iter().any(|name| directory.join(name).is_file()))
 }
 
 fn codex_config_path() -> Result<PathBuf> {
     if let Some(home) = env::var_os("CODEX_HOME").filter(|value| !value.is_empty()) {
         return Ok(PathBuf::from(home).join("config.toml"));
     }
-    let home = env::var_os("HOME").context("HOME is not set")?;
-    Ok(PathBuf::from(home).join(".codex").join("config.toml"))
+    let home = crate::paths::home_dir().context("HOME (or USERPROFILE) is not set")?;
+    Ok(home.join(".codex").join("config.toml"))
 }
 
 fn has_codex_otel(contents: &str) -> bool {
@@ -448,7 +614,7 @@ fn append_codex_otel(existing: &str, endpoint: &str) -> String {
     contents
 }
 
-fn merge_claude_settings(mut value: Value, hook: &Path, endpoint: &str) -> Result<Value> {
+fn merge_claude_settings(mut value: Value, command: &str, endpoint: &str) -> Result<Value> {
     let root = value
         .as_object_mut()
         .context("Claude Code settings root must be a JSON object")?;
@@ -473,7 +639,6 @@ fn merge_claude_settings(mut value: Value, hook: &Path, endpoint: &str) -> Resul
     );
 
     let hooks = object_entry(root, "hooks")?;
-    let command = hook.to_string_lossy().to_string();
     for event in CLAUDE_EVENTS {
         let entries = hooks
             .entry((*event).to_string())
@@ -485,7 +650,7 @@ fn merge_claude_settings(mut value: Value, hook: &Path, endpoint: &str) -> Resul
         });
         let exists = entries
             .iter()
-            .any(|entry| hook_entry_command(entry) == Some(command.as_str()));
+            .any(|entry| hook_entry_command(entry) == Some(command));
         if !exists {
             entries.push(json!({
                 "hooks": [{
@@ -498,9 +663,26 @@ fn merge_claude_settings(mut value: Value, hook: &Path, endpoint: &str) -> Resul
     Ok(value)
 }
 
+/// Whether a registered hook command is one of ours — any variant, any
+/// platform — so re-running setup replaces it instead of accumulating
+/// duplicates: the sh shim under the state dir or a checkout (forward or
+/// backslash paths), or the built-in `af hook` registration.
 fn is_managed_af_hook(command: &str) -> bool {
-    command.ends_with("/integrations/claude-code/af-hook.sh")
-        || command.ends_with("/collectors/claude-code/af-hook.sh")
+    let normalized = command.replace('\\', "/");
+    normalized.ends_with("/integrations/claude-code/af-hook.sh")
+        || normalized.ends_with("/collectors/claude-code/af-hook.sh")
+        || is_af_hook_command(&normalized)
+}
+
+/// Matches `<path to af or af.exe> hook`, with or without quotes around
+/// the executable path.
+fn is_af_hook_command(normalized: &str) -> bool {
+    let Some(executable) = normalized.trim().strip_suffix(" hook") else {
+        return false;
+    };
+    let executable = executable.trim().trim_matches('"');
+    let basename = executable.rsplit('/').next().unwrap_or(executable);
+    basename == "af" || basename.eq_ignore_ascii_case("af.exe")
 }
 
 fn object_entry<'a>(
@@ -580,6 +762,11 @@ fn write_config(path: &Path, bytes: &[u8]) -> Result<()> {
             .with_context(|| format!("sync temporary file {}", temporary.display()))?;
         fs::rename(&temporary, path)
             .with_context(|| format!("replace configuration {}", path.display()))?;
+        // Unix durability idiom only: fsyncing the directory makes the rename
+        // itself durable. Windows can't open a directory as a `File` (the
+        // call fails with PermissionDenied) and offers no equivalent through
+        // safe std, so the rename is as far as durability goes there.
+        #[cfg(unix)]
         File::open(parent)
             .and_then(|directory| directory.sync_all())
             .with_context(|| format!("sync configuration directory {}", parent.display()))?;
@@ -638,6 +825,27 @@ mod tests {
     use super::*;
 
     #[test]
+    fn receiver_prompt_defaults_to_yes() {
+        assert!(is_affirmative(""));
+        assert!(is_affirmative("   \n"));
+    }
+
+    #[test]
+    fn receiver_prompt_accepts_yes_variants() {
+        assert!(is_affirmative("y"));
+        assert!(is_affirmative("Y"));
+        assert!(is_affirmative("yes"));
+        assert!(is_affirmative(" YES "));
+    }
+
+    #[test]
+    fn receiver_prompt_rejects_other_answers() {
+        assert!(!is_affirmative("n"));
+        assert!(!is_affirmative("no"));
+        assert!(!is_affirmative("later"));
+    }
+
+    #[test]
     fn codex_append_preserves_existing_configuration() {
         let existing = "model = \"gpt-test\"\n";
         let merged = append_codex_otel(existing, DEFAULT_LOGS_ENDPOINT);
@@ -655,7 +863,7 @@ mod tests {
 
     #[test]
     fn claude_merge_preserves_settings_and_is_idempotent() {
-        let hook = Path::new("/tmp/af-hook.sh");
+        let hook = "/tmp/af-hook.sh";
         let input = json!({"permissions": {"allow": ["Read"]}});
         let once = merge_claude_settings(input, hook, DEFAULT_LOGS_ENDPOINT).unwrap();
         let twice = merge_claude_settings(once.clone(), hook, DEFAULT_LOGS_ENDPOINT).unwrap();
@@ -681,7 +889,7 @@ mod tests {
         });
         let merged = merge_claude_settings(
             input,
-            Path::new("/state/integrations/claude-code/af-hook.sh"),
+            "/state/integrations/claude-code/af-hook.sh",
             DEFAULT_LOGS_ENDPOINT,
         )
         .unwrap();
@@ -691,6 +899,52 @@ mod tests {
             hook_entry_command(&entries[0]),
             Some("/state/integrations/claude-code/af-hook.sh")
         );
+    }
+
+    #[test]
+    fn managed_hook_predicate_recognizes_every_variant() {
+        // sh shim, forward and backslash paths.
+        assert!(is_managed_af_hook(
+            "/state/integrations/claude-code/af-hook.sh"
+        ));
+        assert!(is_managed_af_hook(
+            "/checkout/collectors/claude-code/af-hook.sh"
+        ));
+        assert!(is_managed_af_hook(
+            r"C:\state\integrations\claude-code\af-hook.sh"
+        ));
+        // The built-in `af hook` registration, quoted and not.
+        assert!(is_managed_af_hook(r#""C:\Program Files\af\af.exe" hook"#));
+        assert!(is_managed_af_hook(r"C:\bin\af.exe hook"));
+        assert!(is_managed_af_hook("/usr/local/bin/af hook"));
+        // Not ours.
+        assert!(!is_managed_af_hook("/usr/local/bin/other-hook.sh"));
+        assert!(!is_managed_af_hook("af watch"));
+        assert!(!is_managed_af_hook(r"C:\bin\afx.exe hook"));
+        assert!(!is_managed_af_hook("daf hook"));
+    }
+
+    #[test]
+    fn path_probe_honors_platform_suffixes() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("codex"), "").unwrap();
+        std::fs::write(dir.path().join("claude.cmd"), "").unwrap();
+        let dirs = || [dir.path().to_path_buf()];
+        // Unix rule: bare name only.
+        assert!(find_in_path_dirs("codex", dirs(), &[""]));
+        assert!(!find_in_path_dirs("claude", dirs(), &[""]));
+        // Windows rule: launcher extensions only.
+        assert!(find_in_path_dirs(
+            "claude",
+            dirs(),
+            &[".exe", ".cmd", ".bat"]
+        ));
+        assert!(!find_in_path_dirs(
+            "codex",
+            dirs(),
+            &[".exe", ".cmd", ".bat"]
+        ));
+        assert!(!find_in_path_dirs("missing", dirs(), &[""]));
     }
 
     #[test]
