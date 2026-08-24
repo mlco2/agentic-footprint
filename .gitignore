@@ -20,5 +20,4 @@ powermetrics_log.txt
 *.sqlite
 *.sqlite3
 *.db
-/.playwright-mcp/
 /docs/archive/

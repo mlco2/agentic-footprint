@@ -1,5 +1,9 @@
 site_name: Agentic Footprint
 site_description: Measure and attribute the environmental impact of coding agents.
+site_url: https://mlco2.github.io/agentic-footprint/
+repo_url: https://github.com/mlco2/agentic-footprint
+repo_name: mlco2/agentic-footprint
+edit_uri: edit/main/docs/
 docs_dir: docs
 site_dir: site
 copyright: "Agentic Footprint contributors"
@@ -76,4 +80,3 @@ nav:
       - API boundaries: contributing/api-boundaries.md
       - Error handling: contributing/error-handling.md
       - Live tests: contributing/testing-live.md
-  - Archive: archive/README.md
