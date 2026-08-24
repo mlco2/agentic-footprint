@@ -2,11 +2,11 @@ SHELL := /bin/sh
 
 CARGO ?= cargo
 NPM ?= npm
-PYTHON ?= python3
+UV ?= uv
 
 .DEFAULT_GOAL := help
 
-.PHONY: help setup build build-release fmt fmt-check lint check test test-rust \
+.PHONY: help setup build build-release fmt fmt-check lint audit check test test-rust \
 	test-console test-console-e2e test-python test-collectors test-install test-live console-install \
 	console-build console-dev docs docs-serve hygiene ci clean
 
@@ -36,6 +36,9 @@ lint: fmt-check console-install ## Run Rust and console static checks
 
 check: lint test hygiene ## Run the standard local validation suite
 
+audit: ## Audit Rust dependencies for known vulnerabilities
+	$(CARGO) audit --deny warnings
+
 test: test-rust test-console test-python test-collectors ## Run deterministic tests
 
 test-rust: console-build ## Run Rust workspace and feature tests
@@ -49,7 +52,7 @@ test-console-e2e: console-install ## Run console Playwright tests
 	$(NPM) --prefix console run e2e
 
 test-python: ## Run Python sidecar tests
-	$(PYTHON) -m pytest python/tests -q
+	$(UV) run --frozen --group test pytest python/tests -q
 
 test-collectors: ## Run collector and statusline shell tests
 	collectors/claude-code/test_hooks.sh

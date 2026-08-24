@@ -7,6 +7,7 @@ DOCS_PORT=${DOCS_PORT:-8000}
 
 case "$ACTION" in
   build)
+    rm -rf site
     exec uvx --from zensical==0.0.44 zensical build -f mkdocs.yml
     ;;
   serve)

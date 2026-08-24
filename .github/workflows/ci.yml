@@ -6,6 +6,17 @@ on:
   pull_request:
 
 jobs:
+  audit:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      checks: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: rustsec/audit-check@v2.0.0
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
   console:
     runs-on: ubuntu-latest
     defaults:
@@ -90,8 +101,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - run: pip install pytest
-      - run: python -m pytest python/tests -q
+      - uses: astral-sh/setup-uv@v7
+      - run: uv run --frozen --group test pytest python/tests -q
 
   docs-and-hygiene:
     runs-on: ubuntu-latest
@@ -133,8 +144,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - run: python -m pip install pytest
-      - run: python -m pytest python/tests -q
+      - uses: astral-sh/setup-uv@v7
+      - run: uv run --frozen --group test pytest python/tests -q
       - name: macOS collector and statusline tests
         if: runner.os == 'macOS'
         run: |

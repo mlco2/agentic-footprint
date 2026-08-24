@@ -1,5 +1,7 @@
 # Agentic Footprint
 
+/!\ This project is in alpha /!\
+
 Measure and attribute the environmental impact of coding agents. Agentic
 Footprint combines measured local energy, process-level action attribution, and
 modeled remote inference impacts while keeping uncertainty and coverage gaps

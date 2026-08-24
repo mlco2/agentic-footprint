@@ -16,9 +16,10 @@ export AF_STATE_DIR="$(mktemp -d)"
 "$AF_BIN" setup --dry-run
 ```
 
-Prerequisites used by the full repository include Rust/Cargo, `jq`, `uv`, and
-Node tooling for the console. Individual deterministic Rust tests do not need
-agent credentials or network access.
+Prerequisites used by the full repository include Rust/Cargo, `cargo-audit`,
+`jq`, `uv`, and Node tooling for the console. Install the RustSec scanner with
+`cargo install cargo-audit --locked`, then run it with `make audit`. Individual
+deterministic Rust tests do not need agent credentials or network access.
 
 ## Repository map
 

@@ -8,6 +8,12 @@ version = "0.1.0"
 license = "MIT"
 readme = "README.md"
 rust-version = "1.97"
+repository = "https://github.com/mlco2/agentic-footprint"
+homepage = "https://github.com/mlco2/agentic-footprint"
+
+[workspace.metadata.dependency-policy]
+# Dependency automation must wait at least seven days after a package release.
+minimum-release-age-days = 7
 
 [workspace.dependencies]
 clap = { version = "4.5", default-features = false, features = ["std", "derive", "help", "usage", "error-context"] }

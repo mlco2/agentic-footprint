@@ -38,8 +38,16 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          $version = (Select-String '^version = "(.+)"' crates/af-cli/Cargo.toml).Matches[0].Groups[1].Value
+          $versionMatch = Select-String -Path Cargo.toml -Pattern '^version = "([^"\r\n]+)"' | Select-Object -First 1
+          if (-not $versionMatch) { throw 'workspace version is missing from Cargo.toml' }
+          $version = $versionMatch.Matches[0].Groups[1].Value
           if ("v$version" -ne $env:GITHUB_REF_NAME) { throw "tag $env:GITHUB_REF_NAME does not match af-cli $version" }
+
+          $lock = Get-Content Cargo.lock -Raw
+          $lockMatch = [regex]::Match($lock, '(?ms)^\[\[package\]\]\r?\nname = "af-cli"\r?\nversion = "([^"\r\n]+)"')
+          if (-not $lockMatch.Success) { throw 'af-cli version is missing from Cargo.lock' }
+          $lockVersion = $lockMatch.Groups[1].Value
+          if ($version -ne $lockVersion) { throw "workspace version $version does not match Cargo.lock af-cli version $lockVersion" }
       - name: Install pinned Rust toolchain
         run: |
           rustup toolchain install 1.97.1 --profile minimal

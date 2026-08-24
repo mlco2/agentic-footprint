@@ -76,7 +76,4 @@ nav:
       - API boundaries: contributing/api-boundaries.md
       - Error handling: contributing/error-handling.md
       - Live tests: contributing/testing-live.md
-  - Decisions:
-      - Architecture RFC: decisions/0001-architecture.md
-      - Integration strategy: decisions/0002-integration-surface-strategy.md
   - Archive: archive/README.md

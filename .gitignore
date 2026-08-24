@@ -10,6 +10,7 @@ target/
 site/
 __pycache__/
 .pytest_cache/
+.venv/
 console/node_modules/
 console/dist/
 console/test-results/
@@ -20,3 +21,4 @@ powermetrics_log.txt
 *.sqlite3
 *.db
 /.playwright-mcp/
+/docs/archive/
