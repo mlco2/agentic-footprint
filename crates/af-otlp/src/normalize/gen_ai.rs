@@ -26,9 +26,8 @@ impl LogNormalizer for GenAiNormalizer {
             .is_some_and(|name| name.starts_with("opentelemetry.instrumentation.genai"));
         let applicable = record.body.as_deref() == Some(DETAILS_EVENT)
             || standard_scope
-                && record.attributes.contains_key("gen_ai.provider.name")
-                && (record.attributes.contains_key("gen_ai.request.model")
-                    || record.attributes.contains_key("gen_ai.response.model"));
+                && record.has("gen_ai.provider.name")
+                && (record.has("gen_ai.request.model") || record.has("gen_ai.response.model"));
         if !applicable {
             return RecordOutcome::NotApplicable;
         }

@@ -110,6 +110,9 @@ enum Commands {
         /// estimator detects it.
         #[arg(long)]
         remote_region: Option<String>,
+        /// Minimum milliseconds between derived-view rebuilds (tests pass 0).
+        #[arg(long, default_value_t = 10_000, hide = true)]
+        batch_interval_ms: u64,
     },
     /// Python runtime setup and diagnostics. Hidden: the installer and
     /// `af self update` drive it, and `af doctor` reports its health.
@@ -218,6 +221,7 @@ fn main() {
             interval,
             local_grid_zone,
             remote_region,
+            batch_interval_ms,
         } => {
             let state_dir = paths::state_dir();
             let args = cmd::watch::WatchArgs {
@@ -230,6 +234,7 @@ fn main() {
                 interval,
                 local_grid_zone,
                 remote_region,
+                batch_interval: std::time::Duration::from_millis(batch_interval_ms),
             };
             if let Err(err) = cmd::watch::run(&state_dir, args) {
                 eprintln!("af watch: {err:#}");

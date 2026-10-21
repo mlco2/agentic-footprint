@@ -1,6 +1,6 @@
 mod common;
 
-use common::live::{spooled_session_id, state_dir, wait_until, LiveWatch};
+use common::live::{state_dir, stored_session_id, wait_until, LiveWatch};
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
@@ -54,8 +54,8 @@ fn native_otel_reaches_debug_console() {
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let sid = wait_until(SETTLE, "otlp-codex spool file", || {
-        spooled_session_id(dir.path(), "otlp-codex")
+    let sid = wait_until(SETTLE, "otlp-codex stored event", || {
+        stored_session_id(dir.path(), "otlp-codex")
     });
     watch.poll_json("/debug/snapshot?window=600s", SETTLE, |snapshot| {
         let Some(events) = snapshot["events"].as_array() else {

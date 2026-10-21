@@ -87,7 +87,7 @@ pub fn run(
     // empty report instead of an error.
     let mut store = match mode {
         Mode::Report => {
-            std::fs::create_dir_all(state_dir)?;
+            crate::paths::ensure_private_dir(state_dir)?;
             let mut store = Store::open(&db_path)?;
             let summary = ingest(&mut store, state_dir)?;
             eprintln!(
@@ -96,7 +96,13 @@ pub fn run(
             );
             store
         }
-        Mode::Replay { .. } => Store::open(&db_path)?,
+        Mode::Replay { .. } => {
+            // Never created here (see above), only tightened if it exists.
+            if state_dir.is_dir() {
+                crate::paths::ensure_private_dir(state_dir)?;
+            }
+            Store::open(&db_path)?
+        }
     };
 
     let (zone_id, zone_source) = super::resolve_zone(&store, local_grid_zone)?;

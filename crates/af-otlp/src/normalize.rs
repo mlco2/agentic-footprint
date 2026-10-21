@@ -20,10 +20,20 @@ use codex::CodexNormalizer;
 use gen_ai::GenAiNormalizer;
 use record::LogRecord;
 
+pub use record::{MAX_ATTRIBUTE_BYTES, MAX_ATTRIBUTE_KEY_BYTES, MAX_LOG_RECORDS};
+
+/// At most this many attribute names are kept in one reject.
+pub const MAX_REJECT_KEYS: usize = 64;
+
 pub struct NormalizeOutcome {
     pub events: Vec<Envelope>,
     pub dropped: usize,
     pub unclaimed: usize,
+    /// Attribute names seen on dropped records (names only — never values),
+    /// so a reject can say what an unmappable record looked like.
+    pub dropped_keys: Vec<String>,
+    /// The body exceeded [`MAX_LOG_RECORDS`] and was not decoded at all.
+    pub over_capacity: bool,
 }
 
 pub(crate) enum RecordOutcome {
@@ -80,12 +90,13 @@ pub fn installed_normalizers() -> Vec<NormalizerDescriptor> {
 
 pub fn normalize_logs(body: &Value) -> NormalizeOutcome {
     let normalizers = registry();
-    let records = record::decode_logs(body);
+    let decoded = record::decode_logs(body);
     let mut events = Vec::new();
     let mut dropped = 0usize;
     let mut unclaimed = 0usize;
+    let mut dropped_keys = std::collections::BTreeSet::new();
 
-    for (index, record) in records.iter().enumerate() {
+    for (index, record) in decoded.records.iter().enumerate() {
         let mut claimed = false;
         for normalizer in normalizers {
             match normalizer.normalize(record, index) {
@@ -96,6 +107,12 @@ pub fn normalize_logs(body: &Value) -> NormalizeOutcome {
                 }
                 RecordOutcome::Dropped => {
                     dropped += 1;
+                    for key in record.keys() {
+                        if dropped_keys.len() >= MAX_REJECT_KEYS {
+                            break;
+                        }
+                        dropped_keys.insert(key.to_string());
+                    }
                     claimed = true;
                     break;
                 }
@@ -111,5 +128,7 @@ pub fn normalize_logs(body: &Value) -> NormalizeOutcome {
         events,
         dropped,
         unclaimed,
+        dropped_keys: dropped_keys.into_iter().collect(),
+        over_capacity: decoded.over_capacity,
     }
 }

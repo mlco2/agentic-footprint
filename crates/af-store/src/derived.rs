@@ -101,23 +101,50 @@ impl Store {
 
     /// Inserts or replaces the `impact_join` record stored under `unit_key`.
     pub fn upsert_join(&mut self, unit_key: &str, json: &Value) -> Result<()> {
-        self.0.execute(
-            "INSERT INTO impact_joins (unit_key, json)
-             VALUES (?1, ?2)
-             ON CONFLICT(unit_key) DO UPDATE SET json = excluded.json",
-            params![unit_key, json.to_string()],
-        )?;
-        Ok(())
+        self.upsert_joins(&[(unit_key.to_string(), json.clone())])
+            .map(|_| ())
     }
 
-    /// Returns every stored join whose record names `session` in
-    /// `unit.session_id`, as `(unit_key, record)` pairs ordered by
-    /// `unit_key` — the emission order the read model depends on, fixed in
-    /// SQL rather than left to a caller's sort.
+    /// Writes `joins` in **one** transaction and returns how many rows were
+    /// inserted or actually changed.
+    ///
+    /// A record identical to the stored one is not rewritten (`WHERE ... IS
+    /// NOT excluded.json`), so rebuilding a session whose inputs did not
+    /// change costs reads, not page writes — unless its `session_id` column
+    /// is missing (a row an older binary wrote), which is then filled. Records are serialized through
+    /// `serde_json`'s sorted map, so equal values give equal text.
+    pub fn upsert_joins(&mut self, joins: &[(String, Value)]) -> Result<usize> {
+        if joins.is_empty() {
+            return Ok(0);
+        }
+        let tx = self.0.savepoint()?;
+        let mut changed = 0usize;
+        {
+            let mut stmt = tx.prepare(
+                "INSERT INTO impact_joins (unit_key, json, session_id)
+                 VALUES (?1, ?2, ?3)
+                 ON CONFLICT(unit_key) DO UPDATE SET
+                     json = excluded.json,
+                     session_id = excluded.session_id
+                 WHERE impact_joins.json IS NOT excluded.json
+                    OR impact_joins.session_id IS NOT excluded.session_id",
+            )?;
+            for (unit_key, json) in joins {
+                let session = json.pointer("/unit/session_id").and_then(Value::as_str);
+                changed += stmt.execute(params![unit_key, json.to_string(), session])?;
+            }
+        }
+        tx.commit()?;
+        Ok(changed)
+    }
+
+    /// Returns every stored join for `session`, as `(unit_key, record)`
+    /// pairs ordered by `unit_key` — the emission order the read model
+    /// depends on, fixed in SQL rather than left to a caller's sort.
     pub fn joins_for_session(&self, session: &str) -> Result<Vec<(String, Value)>> {
         let mut stmt = self.0.prepare(
             "SELECT unit_key, json FROM impact_joins
-             WHERE json_extract(json, '$.unit.session_id') = ?1
+             WHERE session_id = ?1
              ORDER BY unit_key ASC",
         )?;
         let rows = stmt.query_map(params![session], |row| {
@@ -135,7 +162,7 @@ impl Store {
     /// Deletes all rows from `impact_estimates` and `impact_joins`, leaving
     /// `raw_events` and `ingest_offsets` untouched.
     pub fn wipe_derived(&mut self) -> Result<()> {
-        let tx = self.0.transaction()?;
+        let tx = self.0.savepoint()?;
         tx.execute("DELETE FROM impact_estimates", [])?;
         tx.execute("DELETE FROM impact_joins", [])?;
         tx.commit()?;

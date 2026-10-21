@@ -14,12 +14,15 @@
 //! inference-detail records. Unclaimed valid records are counted separately
 //! from claimed records that failed to map.
 
+mod inbound;
 mod normalize;
 mod sanitize;
 mod server;
 
+pub use inbound::{Inbound, Reject};
 pub use normalize::{
     installed_normalizers, normalize_logs, NormalizeOutcome, NormalizerDescriptor,
+    MAX_ATTRIBUTE_BYTES, MAX_ATTRIBUTE_KEY_BYTES, MAX_LOG_RECORDS, MAX_REJECT_KEYS,
 };
 pub use sanitize::sanitize_id;
 pub use server::{serve, Counters, ServerHandle};

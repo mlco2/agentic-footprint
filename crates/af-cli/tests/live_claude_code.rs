@@ -18,7 +18,9 @@ mod common;
 
 use std::time::Duration;
 
-use common::live::{spooled_session_id, state_dir, wait_until, ClaudeCode, LiveWatch};
+use common::live::{
+    spooled_session_id, state_dir, stored_session_id, wait_until, ClaudeCode, LiveWatch,
+};
 use serde_json::Value;
 
 /// What the agent is asked to do — two tool calls, one `Bash` and one
@@ -65,8 +67,8 @@ fn smoke_fresh_session_reaches_debug_console() {
     let sid = wait_until(SETTLE, "cc-hooks spool file", || {
         spooled_session_id(dir.path(), "cc-hooks")
     });
-    wait_until(SETTLE, "otlp-cc spool file", || {
-        spooled_session_id(dir.path(), "otlp-cc")
+    wait_until(SETTLE, "otlp-cc stored event", || {
+        stored_session_id(dir.path(), "otlp-cc")
     });
 
     // Both collectors ingested, nothing rejected.

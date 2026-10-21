@@ -522,3 +522,21 @@ fn test_doctor_passes_on_a_healthy_empty_install() {
         .success()
         .stdout(predicate::str::contains("No problems found"));
 }
+
+#[cfg(unix)]
+#[test]
+fn af_report_makes_the_state_dir_private() {
+    use std::os::unix::fs::PermissionsExt;
+    let root = tempfile::tempdir().unwrap();
+    let state = root.path().join("state");
+    std::fs::create_dir(&state).unwrap();
+    std::fs::set_permissions(&state, std::fs::Permissions::from_mode(0o755)).unwrap();
+    Command::cargo_bin("af")
+        .unwrap()
+        .env("AF_STATE_DIR", &state)
+        .args(["report", "--format", "json"])
+        .assert()
+        .success();
+    let mode = std::fs::metadata(&state).unwrap().permissions().mode() & 0o777;
+    assert_eq!(mode, 0o700);
+}

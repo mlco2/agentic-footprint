@@ -377,6 +377,8 @@ mod tests {
                 .iter()
                 .map(|(key, value)| (key.to_string(), serde_json::json!({ "stringValue": value })))
                 .collect(),
+            scope: Default::default(),
+            resource: Default::default(),
             scope_name: None,
         }
     }

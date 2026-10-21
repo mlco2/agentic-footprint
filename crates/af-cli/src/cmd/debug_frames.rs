@@ -451,6 +451,21 @@ pub fn reject_frame(record: &super::ingest::RejectRecord) -> Value {
     })
 }
 
+/// A receiver reject in the DATA-CONTRACT §2.3 `reject` shape. The frame's
+/// `raw` carries the rejected record's attribute *names* (the receiver never
+/// keeps values) and `byte_offset` the request size.
+pub fn otlp_reject_frame(row: &af_store::RejectRow) -> Value {
+    json!({
+        "ts": row.ts,
+        "reason": row.reason,
+        "origin": format!("otlp:{}", row.source),
+        "line": 0,
+        "byte_offset": row.bytes,
+        "raw": row.attribute_keys.join(","),
+        "raw_truncated": false,
+    })
+}
+
 /// Clips `raw` to [`RAW_LINE_LIMIT`] **bytes**, at a character boundary.
 ///
 /// The limit is a byte budget — that is what bounds the frame — but slicing
@@ -835,6 +850,20 @@ mod tests {
             json!("2026-07-25T14:00:02.000Z")
         );
         assert_eq!(entries[1]["outlived_span_by_ms"], json!(0));
+    }
+
+    #[test]
+    fn an_otlp_reject_frame_names_attributes_and_size_only() {
+        let frame = otlp_reject_frame(&af_store::RejectRow {
+            ts: "2026-10-17T12:00:00Z".to_string(),
+            source: "otlp".to_string(),
+            reason: "1 claimed record(s) failed to normalize".to_string(),
+            attribute_keys: vec!["event.name".to_string(), "model".to_string()],
+            bytes: 1234,
+        });
+        assert_eq!(frame["origin"], "otlp:otlp");
+        assert_eq!(frame["raw"], "event.name,model");
+        assert_eq!(frame["byte_offset"], 1234);
     }
 
     fn reject_record(raw: &str) -> super::super::ingest::RejectRecord {

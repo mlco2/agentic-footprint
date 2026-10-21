@@ -199,7 +199,7 @@ fn a_v1_database_migrates_in_place_and_keeps_its_rows() {
         let mut stmt = conn
             .prepare(
                 "SELECT name FROM sqlite_master WHERE type = 'index'
-                 AND name IN ('raw_events_session', 'raw_events_type', 'impact_joins_session')
+                 AND name IN ('raw_events_session', 'raw_events_type', 'impact_joins_session_id')
                  ORDER BY name",
             )
             .expect("prepare index query");
@@ -211,11 +211,11 @@ fn a_v1_database_migrates_in_place_and_keeps_its_rows() {
     assert_eq!(
         indexes(),
         vec![
-            "impact_joins_session".to_string(),
+            "impact_joins_session_id".to_string(),
             "raw_events_session".to_string(),
             "raw_events_type".to_string(),
         ],
-        "v2 must create all three read-path indexes on an upgraded database"
+        "v2 and v4 must leave all three read-path indexes on an upgraded database"
     );
 
     drop(store);
@@ -230,18 +230,16 @@ fn a_v1_database_migrates_in_place_and_keeps_its_rows() {
         })
         .expect("count migrations");
     assert_eq!(
-        versions, 3,
-        "expected exactly schema versions 1 through 3 recorded"
+        versions, 5,
+        "expected exactly schema versions 1 through 5 recorded"
     );
     assert_eq!(indexes().len(), 3);
 }
 
-/// The expression index is on `json_extract(...)`, which SQLite only
-/// accepts if it is deterministic — a wrong expression here fails at
-/// `CREATE INDEX` time, so this asserts the query it exists for still
-/// returns the right rows through it.
+/// Joins are looked up through their `session_id` column (schema v4),
+/// which `upsert_join` fills from the record's `unit.session_id`.
 #[test]
-fn joins_are_still_found_by_session_through_the_expression_index() {
+fn joins_are_found_by_session_through_the_session_column() {
     let dir = tempfile::tempdir().expect("tempdir");
     let db_path = dir.path().join("state.db");
     let mut store = Store::open(&db_path).expect("open on-disk store");
@@ -748,4 +746,128 @@ fn sessions_with_tool_activity_but_no_llm_calls_are_telemetry_gaps() {
     assert_eq!(gaps[0].session_id, "sess-gap");
     assert_eq!(gaps[0].tool_spans, 2);
     assert_eq!(gaps[0].last_ts, "2026-10-10T10:02:00Z");
+}
+
+#[test]
+fn rewriting_identical_joins_changes_no_rows() {
+    let mut store = Store::open(Path::new(":memory:")).expect("open in-memory store");
+    let joins = vec![
+        (
+            "session:s1".to_string(),
+            serde_json::json!({"unit": {"level": "session", "session_id": "s1"}, "energy_j": 1.0}),
+        ),
+        (
+            "tool_call:s1:a".to_string(),
+            serde_json::json!({"unit": {"level": "tool_call", "session_id": "s1"}, "energy_j": 2.0}),
+        ),
+    ];
+    assert_eq!(store.upsert_joins(&joins).expect("first write"), 2);
+    assert_eq!(
+        store.upsert_joins(&joins).expect("identical rewrite"),
+        0,
+        "an unchanged join must not be rewritten"
+    );
+
+    let mut revised = joins.clone();
+    revised[1].1["energy_j"] = serde_json::json!(3.0);
+    assert_eq!(store.upsert_joins(&revised).expect("one change"), 1);
+
+    let stored = store.joins_for_session("s1").expect("read back");
+    assert_eq!(stored.len(), 2);
+    assert_eq!(stored[1].1["energy_j"], serde_json::json!(3.0));
+}
+
+fn reject(n: u64) -> af_store::RejectRow {
+    af_store::RejectRow {
+        ts: format!("2026-10-17T12:00:{:02}Z", n % 60),
+        source: "otlp".to_string(),
+        reason: format!("reason {n}"),
+        attribute_keys: vec!["event.name".to_string()],
+        bytes: n,
+    }
+}
+
+#[test]
+fn rejects_are_kept_as_a_bounded_ring_newest_first() {
+    let mut store = Store::open(Path::new(":memory:")).expect("open");
+    let rows: Vec<_> = (0..(af_store::REJECT_RING as u64 + 5))
+        .map(reject)
+        .collect();
+    store.insert_rejects(&rows).expect("insert");
+
+    let recent = store.recent_rejects(usize::MAX).expect("read");
+    assert_eq!(
+        recent.len(),
+        af_store::REJECT_RING,
+        "the ring never grows past its cap"
+    );
+    assert_eq!(
+        recent[0],
+        reject(af_store::REJECT_RING as u64 + 4),
+        "newest first"
+    );
+    assert_eq!(recent.last().unwrap().bytes, 5, "the oldest five fell off");
+    assert_eq!(store.recent_rejects(2).expect("limited").len(), 2);
+}
+
+#[test]
+fn sessions_are_listed_per_collector() {
+    let mut store = Store::open(Path::new(":memory:")).expect("open");
+    let mut a = llm_call_envelope("evt-a-0000000001", "s-a");
+    a.collector.name = "otlp-cc".to_string();
+    let mut b = llm_call_envelope("evt-b-0000000001", "s-b");
+    b.collector.name = "otlp-codex".to_string();
+    store.insert_events(&[a, b]).expect("insert");
+    assert_eq!(
+        store.session_ids_for_collector("otlp-cc").unwrap(),
+        vec!["s-a"]
+    );
+    assert!(store
+        .session_ids_for_collector("cc-hooks")
+        .unwrap()
+        .is_empty());
+}
+
+#[cfg(unix)]
+#[test]
+fn the_database_file_is_readable_by_its_owner_only() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("state.db");
+    std::fs::write(&path, b"").expect("pre-create with the default umask");
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+    let mut store = Store::open(&path).expect("open");
+    store
+        .insert_events(&[llm_call_envelope("evt-perm-00000001", "s")])
+        .expect("write so the WAL exists");
+    for file in ["state.db", "state.db-wal", "state.db-shm"] {
+        let mode = std::fs::metadata(dir.path().join(file))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(mode, 0o600, "{file}");
+    }
+}
+
+#[test]
+fn writes_inside_one_transaction_land_together_or_not_at_all() {
+    let mut store = Store::open(Path::new(":memory:")).expect("open");
+    let failed: Result<(), af_store::Error> = store.in_transaction(|store| {
+        store.insert_events(&[llm_call_envelope("evt-tx-0000000001", "s")])?;
+        store.set_offset("cc-hooks", "s", 42)?;
+        Err(af_store::Error::Sqlite(rusqlite::Error::InvalidQuery))
+    });
+    assert!(failed.is_err());
+    assert!(store.events_for_session("s").expect("read").is_empty());
+    assert_eq!(store.get_offset("cc-hooks", "s").expect("offset"), 0);
+
+    store
+        .in_transaction(|store| {
+            store.insert_events(&[llm_call_envelope("evt-tx-0000000001", "s")])?;
+            store.set_offset("cc-hooks", "s", 42)
+        })
+        .expect("commit");
+    assert_eq!(store.events_for_session("s").expect("read").len(), 1);
+    assert_eq!(store.get_offset("cc-hooks", "s").expect("offset"), 42);
 }

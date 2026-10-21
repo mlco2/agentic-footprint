@@ -1,17 +1,19 @@
 //! Tests against the captured (real, sanitized) OTLP fixture:
 //! - `normalize_logs` in isolation, asserting exact token/model/session
 //!   mapping and that the output round-trips through `af_events::parse_line`.
-//! - the full HTTP path via `af_otlp::serve`, including the malformed-body
-//!   and `/v1/metrics` cases.
+//! - the full HTTP path via `af_otlp::serve` into a channel, including the
+//!   malformed-body, reject and `/v1/metrics` cases.
 
 use std::fs;
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpStream};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::thread;
 use std::time::{Duration, Instant};
 
 use af_events::{ExecutionLocus, Payload, Status, ToolKind, UsageSource};
+use af_otlp::Inbound;
+use std::sync::mpsc::{self, Receiver};
 
 fn fixture(name: &str) -> serde_json::Value {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -187,7 +189,7 @@ fn codex_accepts_numeric_strings_and_event_timestamp_fallback() {
 }
 
 #[test]
-fn post_codex_logs_routes_to_codex_collector_spool() {
+fn post_codex_logs_routes_to_the_codex_collector() {
     let server = TestServer::start();
     let body = fixture("logs-codex.json");
     let (status, _) = post(
@@ -196,14 +198,12 @@ fn post_codex_logs_routes_to_codex_collector_spool() {
         &serde_json::to_vec(&body).unwrap(),
     );
     assert_eq!(status, 200);
-    let lines = spool_lines(
-        server.spool_dir(),
-        "otlp-codex.019f9eb8-515f-7be1-9bab-834da2e2e4ab.jsonl",
-    );
-    assert_eq!(lines.len(), 3);
-    assert!(lines
+    let (facts, _) = server.drain(Duration::from_millis(300));
+    assert_eq!(facts.len(), 3);
+    assert!(facts
         .iter()
-        .all(|line| line.contains("\"name\":\"otlp-codex\"")));
+        .all(|event| event.collector.name == "otlp-codex"
+            && event.session_id == "019f9eb8-515f-7be1-9bab-834da2e2e4ab"));
 }
 
 /// `af setup` and `af service status` decide "our receiver is up" from
@@ -462,77 +462,51 @@ fn api_request_record_missing_time_unix_nano_is_counted_as_dropped_not_silently_
 // full HTTP path
 // ---------------------------------------------------------------------
 
-/// A running receiver plus the tempdir its spool lives in, torn down
-/// together when the guard drops.
-///
-/// The three lines every HTTP test opened with (make a tempdir, join
-/// `spool`, `serve` on port 0) and the `handle.shutdown()` every one of
-/// them had to remember to end with are the same three lines and the same
-/// obligation each time — and an early `panic!` from a failed assertion
-/// skipped the shutdown entirely, leaking a bound port and a server thread
-/// for the rest of the run. Binding the teardown to a scope instead means
-/// [`af_otlp::ServerHandle`]'s own `Drop` runs whether the test passes or
-/// fails, which is the case that actually needed covering.
-///
-/// **Field order is load-bearing**: Rust drops fields in declaration order,
-/// so `handle` gets its shutdown grace period before `_tmp` removes the
-/// directory. Tests with a deliberately stalled reader keep the client alive
-/// only until shutdown returns, then release it before the tempdir is dropped.
+/// A running receiver plus the channel it forwards to. The handle's own
+/// `Drop` shuts the server down whether the test passes or fails.
 struct TestServer {
     handle: af_otlp::ServerHandle,
-    /// Held so the temp directory outlives the server that writes into it.
-    _tmp: tempfile::TempDir,
-    spool_dir: PathBuf,
+    inbox: Receiver<Inbound>,
 }
 
 impl TestServer {
     fn start() -> TestServer {
-        Self::start_at(|root| root.join("spool"))
+        Self::with_capacity(64)
     }
 
-    /// As [`TestServer::start`], but with the spool directory chosen by
-    /// `layout` — the traversal test needs a *nested* spool so "escaped one
-    /// level up" is distinguishable from "stayed put".
-    fn start_at(layout: impl FnOnce(&Path) -> PathBuf) -> TestServer {
-        let tmp = tempfile::tempdir().unwrap();
-        let spool_dir = layout(tmp.path());
-        let handle = af_otlp::serve("127.0.0.1:0".parse().unwrap(), spool_dir.clone())
-            .expect("server starts");
-        TestServer {
-            handle,
-            _tmp: tmp,
-            spool_dir,
-        }
+    /// A rendezvous channel nobody reads: every `try_send` finds it full.
+    fn with_full_inbox() -> TestServer {
+        Self::with_capacity(0)
     }
 
-    fn with_spool_path_blocked() -> TestServer {
-        let tmp = tempfile::tempdir().unwrap();
-        let spool_dir = tmp.path().join("spool");
-        fs::write(&spool_dir, b"not a directory").unwrap();
-        let handle = af_otlp::serve("127.0.0.1:0".parse().unwrap(), spool_dir.clone())
-            .expect("server starts");
-        TestServer {
-            handle,
-            _tmp: tmp,
-            spool_dir,
-        }
+    fn with_capacity(capacity: usize) -> TestServer {
+        let (sink, inbox) = mpsc::sync_channel(capacity);
+        let handle = af_otlp::serve("127.0.0.1:0".parse().unwrap(), sink).expect("server starts");
+        TestServer { handle, inbox }
     }
 
     fn addr(&self) -> SocketAddr {
         self.handle.addr()
     }
 
-    fn spool_dir(&self) -> &Path {
-        &self.spool_dir
+    /// Everything forwarded within `wait`, split into facts and rejects.
+    fn drain(&self, wait: Duration) -> (Vec<af_events::Envelope>, Vec<af_otlp::Reject>) {
+        let deadline = Instant::now() + wait;
+        let (mut facts, mut rejects) = (Vec::new(), Vec::new());
+        while let Ok(item) = self
+            .inbox
+            .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+        {
+            match item {
+                Inbound::Facts(events) => facts.extend(events),
+                Inbound::Reject(reject) => rejects.push(reject),
+            }
+        }
+        (facts, rejects)
     }
 
-    /// The `rejected/` directory the receiver quarantines into: the spool
-    /// directory's *sibling*, not a child of it.
-    fn rejected_dir(&self) -> PathBuf {
-        self.spool_dir
-            .parent()
-            .expect("spool dir has a parent")
-            .join("rejected")
+    fn no_facts_within(&self, wait: Duration) -> bool {
+        self.drain(wait).0.is_empty()
     }
 }
 
@@ -546,31 +520,47 @@ fn post(addr: SocketAddr, path: &str, body: &[u8]) -> (u16, String) {
 /// As [`post`], but with the `Host` header under the caller's control —
 /// the receiver's rebinding guard is decided from it.
 fn post_with_host(addr: SocketAddr, path: &str, body: &[u8], host: &str) -> (u16, String) {
+    post_with_headers(
+        addr,
+        path,
+        body,
+        &[("Host", host), ("Content-Type", "application/json")],
+    )
+}
+
+/// POSTs with exactly `headers` (plus Content-Length/Connection).
+fn post_with_headers(
+    addr: SocketAddr,
+    path: &str,
+    body: &[u8],
+    headers: &[(&str, &str)],
+) -> (u16, String) {
     let mut stream = TcpStream::connect(addr).expect("connect to test server");
-    let request = format!(
-        "POST {path} HTTP/1.1\r\nHost: {host}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+    let mut head = format!("POST {path} HTTP/1.1\r\n");
+    for (name, value) in headers {
+        head.push_str(&format!("{name}: {value}\r\n"));
+    }
+    head.push_str(&format!(
+        "Content-Length: {}\r\nConnection: close\r\n\r\n",
         body.len()
-    );
+    ));
     stream
-        .write_all(request.as_bytes())
+        .write_all(head.as_bytes())
         .expect("write request head");
     stream.write_all(body).expect("write request body");
 
     let mut response = String::new();
     stream.read_to_string(&mut response).expect("read response");
-
     let status_line = response.lines().next().unwrap_or_default();
     let status_code: u16 = status_line
         .split_whitespace()
         .nth(1)
         .and_then(|s| s.parse().ok())
         .unwrap_or_else(|| panic!("couldn't parse status from: {status_line}"));
-
     let response_body = response
         .split_once("\r\n\r\n")
         .map(|(_, b)| b.to_string())
         .unwrap_or_default();
-
     (status_code, response_body)
 }
 
@@ -578,50 +568,39 @@ fn start_stalled_post(addr: SocketAddr) -> TcpStream {
     let mut stream = TcpStream::connect(addr).expect("connect stalled client");
     stream
         .write_all(
-            b"POST /v1/logs HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: 1024\r\nConnection: close\r\n\r\n{",
+            b"POST /v1/logs HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nContent-Length: 1024\r\nConnection: close\r\n\r\n{",
         )
         .expect("write incomplete request");
     stream
 }
 
-fn spool_lines(spool_dir: &Path, file_name: &str) -> Vec<String> {
-    let path = spool_dir.join(file_name);
-    fs::read_to_string(&path)
-        .unwrap_or_else(|e| panic!("failed to read spool file {path:?}: {e}"))
-        .lines()
-        .map(str::to_string)
-        .collect()
-}
-
 #[test]
-fn post_logs_writes_a_valid_spool_line() {
+fn post_logs_forwards_the_normalized_event() {
     let server = TestServer::start();
-
-    let body = fixture("logs-api-request.json");
-    let body_bytes = serde_json::to_vec(&body).unwrap();
-    let (status, response_body) = post(server.addr(), "/v1/logs", &body_bytes);
+    let (status, response_body) = post(server.addr(), "/v1/logs", &api_request_body());
     assert_eq!(status, 200);
     assert!(response_body.contains("partialSuccess"));
-
-    let lines = spool_lines(
-        server.spool_dir(),
-        "otlp-cc.a238442e-16d9-4c00-8a66-635495f32251.jsonl",
-    );
-    assert_eq!(lines.len(), 1, "expected exactly one spooled line");
-    af_events::parse_line(&lines[0]).expect("spooled line parses");
+    let (facts, rejects) = server.drain(Duration::from_millis(300));
+    assert_eq!(facts.len(), 1);
+    assert_eq!(facts[0].session_id, "a238442e-16d9-4c00-8a66-635495f32251");
+    af_events::parse_line(&serde_json::to_string(&facts[0]).unwrap())
+        .expect("a forwarded event is a valid Contract #1 line");
+    assert!(rejects.is_empty());
 }
 
 #[test]
-fn persistence_failure_is_retryable_and_does_not_increment_accepted() {
-    let server = TestServer::with_spool_path_blocked();
+fn a_full_inbox_is_retryable_and_does_not_increment_accepted() {
+    let server = TestServer::with_full_inbox();
     let counters = server.handle.counters();
-    let body = serde_json::to_vec(&fixture("logs-api-request.json")).unwrap();
-
-    let (status, response_body) = post(server.addr(), "/v1/logs", &body);
-
+    let started = Instant::now();
+    let (status, response_body) = post(server.addr(), "/v1/logs", &api_request_body());
+    assert!(
+        started.elapsed() < Duration::from_secs(1),
+        "a full inbox must not block"
+    );
     assert_eq!(status, 503);
     let diagnostic: serde_json::Value = serde_json::from_str(&response_body).unwrap();
-    assert_eq!(diagnostic["error"]["code"], "persistence_failed");
+    assert_eq!(diagnostic["error"]["code"], "receiver_overloaded");
     assert_eq!(diagnostic["error"]["retryable"], true);
     assert_eq!(counters.logs_requests(), 1);
     assert_eq!(counters.logs_accepted(), 0);
@@ -649,9 +628,8 @@ fn one_stalled_body_does_not_block_other_ingestion() {
 
 #[test]
 fn shutdown_is_bounded_when_a_client_stalls_mid_body() {
-    let tmp = tempfile::tempdir().unwrap();
-    let handle = af_otlp::serve("127.0.0.1:0".parse().unwrap(), tmp.path().join("spool"))
-        .expect("server starts");
+    let (sink, _inbox) = mpsc::sync_channel(1);
+    let handle = af_otlp::serve("127.0.0.1:0".parse().unwrap(), sink).expect("server starts");
     let stalled = start_stalled_post(handle.addr());
     thread::sleep(Duration::from_millis(50));
 
@@ -666,73 +644,60 @@ fn shutdown_is_bounded_when_a_client_stalls_mid_body() {
 }
 
 #[test]
-fn post_malformed_logs_body_returns_200_and_quarantines_without_corrupting_the_spool() {
+fn a_malformed_body_is_rejected_by_size_and_never_stored() {
     let server = TestServer::start();
-
-    // First establish one legitimate spool file so we can assert it's
-    // untouched by the subsequent bad request.
-    let good_body = fixture("logs-api-request.json");
-    let good_bytes = serde_json::to_vec(&good_body).unwrap();
-    let (status, _) = post(server.addr(), "/v1/logs", &good_bytes);
-    assert_eq!(status, 200);
-    let file_name = "otlp-cc.a238442e-16d9-4c00-8a66-635495f32251.jsonl";
-    let lines_before = spool_lines(server.spool_dir(), file_name);
-    assert_eq!(lines_before.len(), 1);
-
     let (status, _) = post(server.addr(), "/v1/logs", b"this is not json {{{");
     assert_eq!(status, 200, "the agent's exporter must never see a non-2xx");
-
-    // The good spool file must be unchanged (no corruption, no spurious
-    // append).
-    let lines_after = spool_lines(server.spool_dir(), file_name);
-    assert_eq!(lines_after, lines_before);
-
-    // The malformed body must have been quarantined under the spool
-    // dir's sibling `rejected/`.
-    let rejected_files: Vec<_> = fs::read_dir(server.rejected_dir())
-        .unwrap_or_else(|e| panic!("expected rejected dir to exist: {e}"))
-        .map(|e| e.unwrap().path())
-        .collect();
-    assert_eq!(rejected_files.len(), 1, "expected one quarantined file");
-    let quarantined = fs::read_to_string(&rejected_files[0]).unwrap();
-    assert_eq!(quarantined, "this is not json {{{");
+    let (facts, rejects) = server.drain(Duration::from_millis(300));
+    assert!(facts.is_empty());
+    assert_eq!(rejects.len(), 1);
+    assert_eq!(rejects[0].bytes, 20);
+    assert!(rejects[0].attribute_keys.is_empty());
+    assert!(
+        !format!("{:?}", rejects[0]).contains("not json"),
+        "no payload in a reject"
+    );
 }
 
 #[test]
-fn post_logs_with_unmappable_api_request_record_drops_it_quarantines_and_still_200s() {
+fn an_unmappable_record_is_rejected_with_its_attribute_names_only() {
     let server = TestServer::start();
-
-    // Well-formed JSON, and the record is identified as claude_code.api_request
-    // by its body, but it's missing timeUnixNano — normalize_record can't map
-    // it. This must be counted/quarantined as a drop, not vanish silently.
     let mut record = api_request_record(Some("req_EEEEEEEEEEEEEEEEEEEEEEEE"));
     record.as_object_mut().unwrap().remove("timeUnixNano");
     let body = logs_body(vec![record]);
-    let body_bytes = serde_json::to_vec(&body).unwrap();
-
-    let (status, response_body) = post(server.addr(), "/v1/logs", &body_bytes);
+    let (status, response_body) = post(
+        server.addr(),
+        "/v1/logs",
+        &serde_json::to_vec(&body).unwrap(),
+    );
     assert_eq!(status, 200, "the agent's exporter must never see a non-2xx");
     assert!(response_body.contains("partialSuccess"));
-
+    let (facts, rejects) = server.drain(Duration::from_millis(300));
+    assert!(facts.is_empty());
+    assert_eq!(rejects.len(), 1);
+    assert!(rejects[0].attribute_keys.iter().any(|k| k == "request_id"));
     assert!(
-        !server.spool_dir().exists() || fs::read_dir(server.spool_dir()).unwrap().next().is_none(),
-        "the unmappable record must not produce a spool line"
+        !format!("{:?}", rejects[0]).contains("req_E"),
+        "names only, never values"
     );
+}
 
-    let dropped_files: Vec<_> = fs::read_dir(server.rejected_dir())
-        .unwrap_or_else(|e| panic!("expected rejected dir to exist: {e}"))
-        .map(|e| e.unwrap().path())
-        .filter(|p| {
-            p.file_name()
-                .and_then(|n| n.to_str())
-                .is_some_and(|n| n.starts_with("otlp-cc.dropped."))
-        })
+#[test]
+fn a_body_over_the_record_cap_is_refused_and_rejected() {
+    let server = TestServer::start();
+    let records: Vec<_> = (0..=af_otlp::MAX_LOG_RECORDS)
+        .map(|_| serde_json::json!({}))
         .collect();
-    assert_eq!(
-        dropped_files.len(),
-        1,
-        "expected one otlp-cc.dropped.* quarantine file"
+    let body = serde_json::json!({"resourceLogs": [{"scopeLogs": [{"logRecords": records}]}]});
+    let (status, _) = post(
+        server.addr(),
+        "/v1/logs",
+        &serde_json::to_vec(&body).unwrap(),
     );
+    assert_eq!(status, 413);
+    let (facts, rejects) = server.drain(Duration::from_millis(300));
+    assert!(facts.is_empty());
+    assert_eq!(rejects.len(), 1);
 }
 
 #[test]
@@ -744,13 +709,10 @@ fn post_metrics_returns_200_and_writes_nothing() {
     let (status, _) = post(server.addr(), "/v1/metrics", &metrics_bytes);
     assert_eq!(status, 200);
 
+    let (facts, rejects) = server.drain(Duration::from_millis(200));
     assert!(
-        !server.spool_dir().exists() || fs::read_dir(server.spool_dir()).unwrap().next().is_none(),
-        "expected /v1/metrics to write nothing to the spool"
-    );
-    assert!(
-        !server.rejected_dir().exists(),
-        "expected /v1/metrics to never quarantine anything"
+        facts.is_empty() && rejects.is_empty(),
+        "/v1/metrics forwards nothing"
     );
 }
 
@@ -776,14 +738,11 @@ fn a_post_with_a_foreign_host_is_refused() {
     let (status, _) = post_with_host(server.addr(), "/v1/logs", &body, "evil.example");
     assert_eq!(status, 403);
     assert!(
-        !server.spool_dir().exists(),
-        "a refused request must not reach the spool"
+        server.no_facts_within(Duration::from_millis(200)),
+        "a refused request must not reach the store"
     );
 }
 
-/// The forms a real agent exporter sends must keep working — Claude Code's
-/// is `Host: 127.0.0.1:4318`. Breaking this silently stops all `llm_call`
-/// telemetry, which is worse than the attack it guards against.
 #[test]
 fn the_host_forms_a_real_exporter_sends_are_accepted() {
     let server = TestServer::start();
@@ -818,18 +777,12 @@ fn an_oversized_body_is_refused_rather_than_buffered() {
     assert_eq!(status, 200);
 }
 
-/// `session.id` comes off the wire and lands in a filename. Unsanitized,
-/// this body appends JSON outside the spool directory entirely.
+/// `session.id` comes off the wire and is used by the store and, for the
+/// collectors that still spool, in a filename: it must be reduced to one
+/// safe path component before it leaves the receiver.
 #[test]
-fn a_traversal_attempt_in_session_id_cannot_escape_the_spool_directory() {
-    // Nested, so an escape of one or two levels lands somewhere the
-    // assertions below can see.
-    let mut root = PathBuf::new();
-    let server = TestServer::start_at(|tmp| {
-        root = tmp.to_path_buf();
-        tmp.join("nested").join("spool")
-    });
-
+fn a_traversal_attempt_in_session_id_is_sanitized_before_forwarding() {
+    let server = TestServer::start();
     let attack = "../../../../pwned";
     let body = logs_body(vec![api_request_record_for_session(attack)]);
     let (status, _) = post(
@@ -838,37 +791,10 @@ fn a_traversal_attempt_in_session_id_cannot_escape_the_spool_directory() {
         &serde_json::to_vec(&body).unwrap(),
     );
     assert_eq!(status, 200);
-
-    // Nothing escaped: not into the tempdir root, not anywhere but the
-    // spool directory itself.
-    assert!(
-        !root.join("pwned").exists() && !root.join("pwned.jsonl").exists(),
-        "the traversal escaped the spool directory"
-    );
-
-    let written: Vec<String> = fs::read_dir(server.spool_dir())
-        .expect("spool dir exists")
-        .map(|entry| {
-            entry
-                .expect("dir entry")
-                .file_name()
-                .to_string_lossy()
-                .into_owned()
-        })
-        .collect();
-    let expected = format!("otlp-cc.{}.jsonl", af_otlp::sanitize_id(attack));
-    assert_eq!(
-        written,
-        vec![expected.clone()],
-        "the id must be reduced to one safe path component"
-    );
-
-    // The envelope's own session_id must match the file it landed in, or
-    // the join would see two sessions where there is one.
-    let lines = spool_lines(server.spool_dir(), &expected);
-    let envelope = af_events::parse_line(&lines[0]).expect("spooled line parses");
-    assert_eq!(envelope.session_id, af_otlp::sanitize_id(attack));
-    assert!(!envelope.session_id.contains('/'));
+    let (facts, _) = server.drain(Duration::from_millis(300));
+    assert_eq!(facts.len(), 1);
+    assert_eq!(facts[0].session_id, af_otlp::sanitize_id(attack));
+    assert!(!facts[0].session_id.contains('/'));
 }
 
 /// `request_id` is whatever the exporter sent. Anthropic's are ~30 chars,
@@ -897,4 +823,109 @@ fn two_short_request_ids_do_not_collide() {
 
     assert_eq!(outcome.events.len(), 2);
     assert_ne!(outcome.events[0].event_id, outcome.events[1].event_id);
+}
+
+#[test]
+fn dropped_records_report_their_attribute_names_only() {
+    // Same mutation the unmappable-record HTTP test uses: an api_request
+    // record without timeUnixNano is claimed but cannot be mapped.
+    let mut record = api_request_record(Some("req_EEEEEEEEEEEEEEEEEEEEEEEE"));
+    record.as_object_mut().unwrap().remove("timeUnixNano");
+    let outcome = af_otlp::normalize_logs(&logs_body(vec![record]));
+    assert_eq!(outcome.dropped, 1);
+    assert_eq!(
+        outcome.dropped_keys,
+        vec![
+            "input_tokens",
+            "model",
+            "output_tokens",
+            "request_id",
+            "session.id"
+        ],
+        "the dropped record's attribute names, sorted"
+    );
+    assert!(
+        outcome.dropped_keys.iter().all(|k| !k.contains("req_")),
+        "names only, no values"
+    );
+}
+
+fn api_request_body() -> Vec<u8> {
+    serde_json::to_vec(&fixture("logs-api-request.json")).unwrap()
+}
+
+#[test]
+fn a_request_from_a_web_page_is_refused() {
+    let server = TestServer::start();
+    let json = ("Content-Type", "application/json");
+    let host = ("Host", "127.0.0.1");
+    for headers in [
+        vec![host, json, ("Origin", "https://evil.example")],
+        vec![host, json, ("Origin", "null")],
+        vec![host, json, ("Sec-Fetch-Site", "cross-site")],
+        vec![host, json, ("Sec-Fetch-Site", "same-site")],
+    ] {
+        let (status, _) =
+            post_with_headers(server.addr(), "/v1/logs", &api_request_body(), &headers);
+        assert_eq!(status, 403, "{headers:?}");
+    }
+    assert!(server.no_facts_within(Duration::from_millis(200)));
+}
+
+#[test]
+fn a_non_json_content_type_is_refused() {
+    let server = TestServer::start();
+    for content_type in [None, Some("text/plain"), Some("application/x-protobuf")] {
+        let mut headers = vec![("Host", "127.0.0.1")];
+        if let Some(value) = content_type {
+            headers.push(("Content-Type", value));
+        }
+        let (status, _) =
+            post_with_headers(server.addr(), "/v1/logs", &api_request_body(), &headers);
+        assert_eq!(status, 415, "{content_type:?}");
+    }
+    assert!(server.no_facts_within(Duration::from_millis(200)));
+}
+
+#[test]
+fn json_content_types_real_exporters_send_are_accepted() {
+    let server = TestServer::start();
+    for content_type in [
+        "application/json",
+        "application/json; charset=utf-8",
+        "Application/JSON",
+    ] {
+        let headers = [
+            ("Host", "127.0.0.1"),
+            ("Content-Type", content_type),
+            ("Sec-Fetch-Site", "none"),
+        ];
+        let (status, _) =
+            post_with_headers(server.addr(), "/v1/logs", &api_request_body(), &headers);
+        assert_eq!(status, 200, "{content_type}");
+    }
+}
+
+#[test]
+fn reject_metadata_stays_small_whatever_the_attribute_names() {
+    let mut record = api_request_record(Some("req_FFFFFFFFFFFFFFFFFFFFFFFF"));
+    record.as_object_mut().unwrap().remove("timeUnixNano");
+    let attributes = record["attributes"].as_array_mut().unwrap();
+    for i in 0..500 {
+        attributes.push(serde_json::json!({
+            "key": format!("{i:04}{}", "k".repeat(10_000)),
+            "value": {"stringValue": "x"}
+        }));
+    }
+    for i in 0..500 {
+        attributes
+            .push(serde_json::json!({"key": format!("short.{i}"), "value": {"stringValue": "x"}}));
+    }
+    let outcome = af_otlp::normalize_logs(&logs_body(vec![record]));
+    assert_eq!(outcome.dropped, 1);
+    assert!(outcome.dropped_keys.len() <= af_otlp::MAX_REJECT_KEYS);
+    assert!(outcome
+        .dropped_keys
+        .iter()
+        .all(|key| key.len() <= af_otlp::MAX_ATTRIBUTE_KEY_BYTES));
 }

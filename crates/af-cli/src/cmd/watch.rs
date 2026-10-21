@@ -52,8 +52,8 @@ use af_sidecar::{doctor, venv_python, Severity, Sidecar};
 use af_store::Store;
 
 use super::debug_frames::{
-    alloc_trace, attr_decision, ingest_decision, orphan_decision, policy_schema_name, reject_frame,
-    span_open_decision, watchdog_entries, Decision,
+    alloc_trace, attr_decision, ingest_decision, orphan_decision, otlp_reject_frame,
+    policy_schema_name, reject_frame, span_open_decision, watchdog_entries, Decision,
 };
 use super::debug_server::{self, DebugState};
 use super::estimator;
@@ -83,6 +83,12 @@ pub const DEFAULT_DEBUG_ADDR: &str = "127.0.0.1:9414";
 /// republished, ring-buffered and fanned out every pass, and a spool of
 /// malformed lines would otherwise grow it without bound.
 const REJECT_HISTORY: usize = 100;
+
+/// Receiver batches queued for the loop before the receiver answers 503.
+const INBOX_CAPACITY: usize = 1024;
+
+/// Received events kept for a retry while the store refuses writes.
+const MAX_PENDING_FACTS: usize = 50_000;
 
 /// The sampler script's path relative to the Python source root
 /// (see [`super::sidecar_script`]).
@@ -131,6 +137,11 @@ pub struct WatchArgs {
     pub interval: f64,
     pub local_grid_zone: Option<String>,
     pub remote_region: Option<String>,
+    /// How often received telemetry and spool changes are written, and the
+    /// minimum time between derived-view rebuilds of a session with new
+    /// facts (sample-only staleness waits [`SAMPLE_REBUILD_FACTOR`] times
+    /// longer). New sessions skip the wait. Tests pass zero.
+    pub batch_interval: Duration,
 }
 
 /// Termination-request plumbing: one flag, set by the platform's stop
@@ -203,6 +214,8 @@ mod shutdown {
 /// Runs the resident loop until the platform stop signal
 /// (`SIGINT`/`SIGTERM` on unix, Ctrl+C / console close on Windows).
 pub fn run(state_dir: &Path, args: WatchArgs) -> Result<()> {
+    crate::paths::ensure_private_dir(state_dir)
+        .with_context(|| format!("securing {}", state_dir.display()))?;
     let spool_dir = state_dir.join("spool");
     std::fs::create_dir_all(&spool_dir)
         .with_context(|| format!("creating spool dir {}", spool_dir.display()))?;
@@ -214,7 +227,12 @@ pub fn run(state_dir: &Path, args: WatchArgs) -> Result<()> {
     // `af watch`, or Claude Code pointed at someone else's collector) must
     // not cost the user their spool ingestion, which needs no network at
     // all. The failure is reported, loudly, and the loop continues.
-    let otlp = if args.no_otlp {
+    // The receiver's output: normalized events and metadata-only rejects,
+    // stored by this loop (the one owner of the database). Bounded, so a
+    // loop busy rebuilding makes the receiver answer 503 instead of
+    // buffering without limit.
+    let (inbox_tx, inbox_rx) = mpsc::sync_channel::<af_otlp::Inbound>(INBOX_CAPACITY);
+    let mut otlp = if args.no_otlp {
         eprintln!(
             "af watch: OTLP receiver disabled (--no-otlp); llm_call telemetry will not be received"
         );
@@ -224,7 +242,7 @@ pub fn run(state_dir: &Path, args: WatchArgs) -> Result<()> {
             .otlp_addr
             .parse()
             .with_context(|| format!("invalid --otlp-addr {}", args.otlp_addr))?;
-        match af_otlp::serve(addr, spool_dir.clone()) {
+        match af_otlp::serve(addr, inbox_tx.clone()) {
             Ok(handle) => {
                 eprintln!(
                     "af watch: OTLP http/json receiver on http://{} (POST /v1/logs, /v1/metrics)",
@@ -246,6 +264,10 @@ pub fn run(state_dir: &Path, args: WatchArgs) -> Result<()> {
             }
         }
     };
+
+    // Only the receiver's workers hold senders now, so the inbox reports
+    // `Disconnected` when there is no receiver at all.
+    drop(inbox_tx);
 
     let debug_server = if args.debug {
         let addr: SocketAddr = args
@@ -292,6 +314,7 @@ pub fn run(state_dir: &Path, args: WatchArgs) -> Result<()> {
         interval: args.interval,
         local_grid_zone: args.local_grid_zone.clone(),
         remote_region: args.remote_region.clone(),
+        batch_interval: args.batch_interval,
     };
     let mut watch = Watch::new(
         state_dir,
@@ -314,21 +337,51 @@ pub fn run(state_dir: &Path, args: WatchArgs) -> Result<()> {
     if let Err(err) = watch.pass(&mut store, PassKind::FullReconcile) {
         eprintln!("af watch: startup pass failed: {err:#}");
     }
+    if let Err(err) = watch.rebuild_due(&mut store) {
+        eprintln!("af watch: startup rebuild failed: {err:#}");
+    }
 
     let mut last_pass = Instant::now();
     let mut last_reconcile = Instant::now();
     let mut pending_since: Option<Instant> = None;
     let mut dirty_paths = BTreeSet::new();
     let mut force_reconcile = false;
+    // Received telemetry not yet written: waiting for the next flush, or
+    // refused by the store and retried.
+    let mut pending_inbox = Inbox::default();
+    let mut flush = FlushClock::default();
     while !term.load(Ordering::Relaxed) {
         let estimated_sessions = watch.take_estimator_completion(&store);
-        if let Ok(notice) = fs_rx.recv_timeout(POLL) {
-            absorb_notice(notice, &mut dirty_paths, &mut force_reconcile);
-            pending_since = Some(Instant::now());
+        let mut inbox = std::mem::take(&mut pending_inbox);
+        match inbox_rx.recv_timeout(POLL) {
+            Ok(item) => inbox.push(item),
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
+            // No receiver (`--no-otlp`, or the bind failed): keep the
+            // loop's cadence instead of spinning.
+            Err(mpsc::RecvTimeoutError::Disconnected) => std::thread::sleep(POLL),
+        }
+        while let Ok(item) = inbox_rx.try_recv() {
+            inbox.push(item);
         }
         while let Ok(notice) = fs_rx.try_recv() {
             absorb_notice(notice, &mut dirty_paths, &mut force_reconcile);
             pending_since = Some(Instant::now());
+        }
+        let now = Instant::now();
+        let something_new = watch.has_new_session(&inbox.facts)
+            || watch.has_unknown_spool_file(&dirty_paths)
+            || inbox.facts.len() >= MAX_BATCHED_FACTS;
+        let flush_due = flush.due(now, watch.batch_interval, something_new);
+        if !inbox.is_empty() {
+            if flush_due {
+                flush.flushed(now);
+                if let Err((err, back)) = watch.absorb_inbox(&mut store, inbox) {
+                    eprintln!("af watch: storing received telemetry failed: {err:#}; will retry");
+                    pending_inbox = back.capped(MAX_PENDING_FACTS);
+                }
+            } else {
+                pending_inbox = inbox;
+            }
         }
         if term.load(Ordering::Relaxed) {
             break;
@@ -346,7 +399,8 @@ pub fn run(state_dir: &Path, args: WatchArgs) -> Result<()> {
             pending_since = None;
             last_reconcile = Instant::now();
             Some(PassKind::FullReconcile)
-        } else if debounced {
+        } else if debounced && flush_due {
+            flush.flushed(now);
             pending_since = None;
             Some(PassKind::Dirty(std::mem::take(&mut dirty_paths)))
         } else if last_pass.elapsed() >= TICK {
@@ -364,18 +418,38 @@ pub fn run(state_dir: &Path, args: WatchArgs) -> Result<()> {
                 force_reconcile = true;
             }
         }
+        if let Err(err) = watch.rebuild_due(&mut store) {
+            eprintln!("af watch: rebuild failed: {err:#}");
+        }
     }
 
     eprintln!("af watch: shutting down");
     watch.shutdown();
+    // Stop the receiver first, so no worker is still sending, then store
+    // whatever it had already queued.
+    if let Some(handle) = otlp.take() {
+        handle.shutdown();
+    }
+    let mut inbox = pending_inbox;
+    while let Ok(item) = inbox_rx.try_recv() {
+        inbox.push(item);
+    }
+    if !inbox.is_empty() {
+        if let Err((err, back)) = watch.absorb_inbox(&mut store, inbox) {
+            eprintln!(
+                "af watch: storing the last received telemetry failed: {err:#}; {} event(s) lost",
+                back.facts.len()
+            );
+        }
+    }
     if let Err(err) = watch.pass(&mut store, PassKind::FullReconcile) {
         eprintln!("af watch: final ingest pass failed: {err:#}");
     }
+    if let Err(err) = watch.rebuild_all_dirty(&mut store) {
+        eprintln!("af watch: final rebuild failed: {err:#}");
+    }
     // Dropping the server is what stops it — see [`debug_server::DebugServer`].
     drop(debug_server);
-    if let Some(handle) = otlp {
-        handle.shutdown();
-    }
     Ok(())
 }
 
@@ -572,6 +646,132 @@ fn respawn_delay(failures: u32) -> Duration {
 }
 
 /// The resident pipeline's mutable state between passes.
+/// When received telemetry and spool changes are written.
+///
+/// A commit writes whole pages twice (WAL, then checkpoint), so a resident
+/// writer's disk wear follows its number of commits. Sampler windows land
+/// every few seconds and Claude Code exports every two; writing each one
+/// on arrival is what this batches into one flush per interval. Something
+/// new — a session or spool file this watch has not seen — is written at
+/// once, so its sampler watch and first rebuild are not delayed.
+#[derive(Debug, Default)]
+struct FlushClock {
+    last: Option<Instant>,
+}
+
+impl FlushClock {
+    fn due(&self, now: Instant, interval: Duration, something_new: bool) -> bool {
+        something_new
+            || self
+                .last
+                .is_none_or(|at| now.saturating_duration_since(at) >= interval)
+    }
+
+    fn flushed(&mut self, now: Instant) {
+        self.last = Some(now);
+    }
+}
+
+/// Received events held for one flush before it is forced early, so a burst
+/// cannot grow the batch without bound.
+const MAX_BATCHED_FACTS: usize = 5_000;
+
+/// What the receiver sent since the last loop iteration.
+#[derive(Debug, Default)]
+struct Inbox {
+    facts: Vec<Envelope>,
+    rejects: Vec<af_otlp::Reject>,
+}
+
+impl Inbox {
+    fn push(&mut self, item: af_otlp::Inbound) {
+        match item {
+            af_otlp::Inbound::Facts(events) => self.facts.extend(events),
+            af_otlp::Inbound::Reject(reject) => self.rejects.push(reject),
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.facts.is_empty() && self.rejects.is_empty()
+    }
+
+    /// Keeps at most the newest `max` facts for a retry, saying what fell
+    /// off: a store that stays broken must not grow the retry without bound.
+    fn capped(mut self, max: usize) -> Self {
+        if self.facts.len() > max {
+            let dropped = self.facts.len() - max;
+            self.facts.drain(..dropped);
+            eprintln!("af watch: store still failing; dropped {dropped} received event(s)");
+        }
+        self
+    }
+}
+
+/// Sample-only staleness is rebuilt this many fact intervals apart: a
+/// sampler window lands every few seconds, and rebuilding a session's
+/// joins for each one is what kept the database rewriting itself.
+const SAMPLE_REBUILD_FACTOR: u32 = 6;
+
+/// Sessions whose derived views are stale, split by what made them stale.
+///
+/// A session with a new fact (llm call, span, metadata) is rebuilt at most
+/// once per interval; a session that only gained energy samples waits
+/// [`SAMPLE_REBUILD_FACTOR`] intervals. Neither is ever dropped: the next
+/// due rebuild takes both sets, and shutdown takes everything. A session
+/// that has never been rebuilt is due at once: its first rebuild is what
+/// sends its sampler the pids to watch.
+#[derive(Debug, Default)]
+struct DirtySessions {
+    facts: BTreeSet<String>,
+    samples: BTreeSet<String>,
+    last_rebuild: Option<Instant>,
+    /// Sessions rebuilt at least once by this process. Grows by one entry
+    /// per session, the same order as [`Watch::sessions`].
+    rebuilt: BTreeSet<String>,
+}
+
+impl DirtySessions {
+    /// `touched`: every session that gained events; `facts`: the subset
+    /// that gained something other than sampler output.
+    fn mark(&mut self, touched: &BTreeSet<String>, facts: &BTreeSet<String>) {
+        for session in touched {
+            if facts.contains(session) {
+                self.samples.remove(session);
+                self.facts.insert(session.clone());
+            } else if !self.facts.contains(session) {
+                self.samples.insert(session.clone());
+            }
+        }
+    }
+
+    fn take_due(&mut self, now: Instant, interval: Duration) -> Option<BTreeSet<String>> {
+        let waited = |needed: Duration| {
+            self.last_rebuild
+                .is_none_or(|at| now.saturating_duration_since(at) >= needed)
+        };
+        let first_time = self
+            .facts
+            .iter()
+            .chain(&self.samples)
+            .any(|session| !self.rebuilt.contains(session));
+        let due = first_time
+            || (!self.facts.is_empty() && waited(interval))
+            || (!self.samples.is_empty() && waited(interval * SAMPLE_REBUILD_FACTOR));
+        if !due {
+            return None;
+        }
+        self.last_rebuild = Some(now);
+        Some(self.take_all())
+    }
+
+    fn take_all(&mut self) -> BTreeSet<String> {
+        let mut all = std::mem::take(&mut self.facts);
+        all.append(&mut self.samples);
+        self.rebuilt.extend(all.iter().cloned());
+        all
+    }
+}
+
 struct Watch {
     state_dir: PathBuf,
     debug: bool,
@@ -640,6 +840,9 @@ struct Watch {
     health_rows: BTreeMap<String, Value>,
     /// Address + live counters of the OTLP receiver, when one is running.
     otlp: Option<(SocketAddr, Arc<af_otlp::Counters>)>,
+    /// Sessions waiting for a derived-view rebuild — see [`DirtySessions`].
+    dirty: DirtySessions,
+    batch_interval: Duration,
 }
 
 struct LoadedSession {
@@ -732,6 +935,8 @@ impl Watch {
             spool_state: BTreeMap::new(),
             health_rows: BTreeMap::new(),
             otlp,
+            dirty: DirtySessions::default(),
+            batch_interval: args.batch_interval,
         }
     }
 
@@ -749,6 +954,70 @@ impl Watch {
             PassKind::Dirty(paths) => ingest_paths(store, &self.state_dir, &paths)?,
             PassKind::EstimatesReady(_) | PassKind::Supervise => unreachable!(),
         };
+        self.after_ingest(store, summary)
+    }
+
+    /// Stores what the receiver sent and runs the same post-ingest steps a
+    /// spool pass runs.
+    ///
+    /// Facts first, in one transaction. The receiver already told the
+    /// exporter they were accepted, so when the store refuses them (locked
+    /// past its busy timeout, disk full) the inbox is handed back for the
+    /// loop to retry rather than dropped. Rejects are best effort: a broken
+    /// reject log never costs the facts.
+    fn absorb_inbox(
+        &mut self,
+        store: &mut Store,
+        inbox: Inbox,
+    ) -> std::result::Result<(), (anyhow::Error, Inbox)> {
+        let ingested = match store.insert_events(&inbox.facts) {
+            Ok(ingested) => ingested,
+            Err(err) => return Err((anyhow::Error::from(err), inbox)),
+        };
+        let Inbox { facts, rejects } = inbox;
+        let rows: Vec<af_store::RejectRow> = rejects
+            .iter()
+            .map(|reject| af_store::RejectRow {
+                ts: af_core::rfc3339_ms(reject.ts_ms).unwrap_or_default(),
+                source: reject.source.clone(),
+                reason: reject.reason.clone(),
+                attribute_keys: reject.attribute_keys.clone(),
+                bytes: reject.bytes,
+            })
+            .collect();
+        if let Err(err) = store.insert_rejects(&rows) {
+            eprintln!("af watch: recording {} reject(s) failed: {err}", rows.len());
+        }
+        for row in &rows {
+            let frame = otlp_reject_frame(row);
+            self.rejects.push_back(frame.clone());
+            while self.rejects.len() > REJECT_HISTORY {
+                self.rejects.pop_front();
+                self.rejects_dropped = self.rejects_dropped.saturating_add(1);
+            }
+            self.publish("reject", frame);
+        }
+        if facts.is_empty() {
+            return Ok(());
+        }
+        // The facts are stored; a failure past this point is the pass's
+        // own and must not resend them.
+        if let Err(err) = self.after_ingest(
+            store,
+            IngestSummary {
+                ingested,
+                events: facts,
+                ..IngestSummary::default()
+            },
+        ) {
+            eprintln!("af watch: processing received telemetry failed: {err:#}");
+        }
+        Ok(())
+    }
+
+    /// Everything a pass does once events are in the store: publish them,
+    /// supervise samplers, mark sessions for rebuild.
+    fn after_ingest(&mut self, store: &mut Store, summary: IngestSummary) -> Result<()> {
         self.update_spool_state(&summary);
         self.opaque_events = self.opaque_events.saturating_add(summary.opaque as u64);
         self.publish_ingest_metrics(&summary);
@@ -864,7 +1133,44 @@ impl Watch {
                 })
                 .unwrap_or_default()
         });
-        self.rebuild_sessions(store, &rebuild_sessions, false)
+        // Not rebuilt here: marked, and rebuilt by `rebuild_due` at most once
+        // per interval. A full-store scope (the zone moved) counts as facts.
+        let facts = if scope.is_some() {
+            active.clone()
+        } else {
+            rebuild_sessions.clone()
+        };
+        self.dirty.mark(&rebuild_sessions, &facts);
+        Ok(())
+    }
+
+    /// Whether `facts` name a session this watch has not seen yet.
+    fn has_new_session(&self, facts: &[Envelope]) -> bool {
+        facts
+            .iter()
+            .any(|event| !self.sessions.contains_key(&event.session_id))
+    }
+
+    /// Whether `paths` include a spool file no pass has read yet.
+    fn has_unknown_spool_file(&self, paths: &BTreeSet<PathBuf>) -> bool {
+        paths.iter().any(|path| {
+            path.extension().is_some_and(|ext| ext == "jsonl")
+                && !self.spool_state.values().any(|(known, _)| known == path)
+        })
+    }
+
+    /// Rebuilds whatever [`DirtySessions`] says is due. Called once per loop.
+    fn rebuild_due(&mut self, store: &mut Store) -> Result<()> {
+        match self.dirty.take_due(Instant::now(), self.batch_interval) {
+            Some(sessions) => self.rebuild_sessions(store, &sessions, false),
+            None => Ok(()),
+        }
+    }
+
+    /// Rebuilds every still-dirty session, for shutdown.
+    fn rebuild_all_dirty(&mut self, store: &mut Store) -> Result<()> {
+        let sessions = self.dirty.take_all();
+        self.rebuild_sessions(store, &sessions, false)
     }
 
     fn rebuild_sessions(
@@ -1265,11 +1571,13 @@ impl Watch {
 
         let interval = format!("{}", self.interval);
         let state_dir = self.state_dir.display().to_string();
+        // One argument, so an id starting with `-` (session ids reach us
+        // from the network) cannot be read as a flag.
+        let session_arg = format!("--session={first_session}");
         let args = [
             "--state-dir",
             state_dir.as_str(),
-            "--session",
-            first_session.as_str(),
+            session_arg.as_str(),
             "--interval",
             interval.as_str(),
         ];
@@ -1552,7 +1860,7 @@ impl Watch {
                         "name": name,
                         "session_id": session_id,
                         "version": stats.version,
-                        "transport": if name == "otlp-cc" { "POST /v1/logs" } else { "jsonl spool" },
+                        "transport": if name.starts_with("otlp-") { "POST /v1/logs" } else { "jsonl spool" },
                         "spool_file": file.and_then(|(path, _)| path.file_name()).map(|n| n.to_string_lossy().into_owned()),
                         "byte_offset": byte_offset,
                         "events": stats.events,
@@ -1820,6 +2128,217 @@ fn sum_impacts(estimates: &[Value]) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn set(ids: &[&str]) -> BTreeSet<String> {
+        ids.iter().map(|id| id.to_string()).collect()
+    }
+
+    #[test]
+    fn facts_are_rebuilt_once_the_interval_has_passed() {
+        let start = Instant::now();
+        let interval = Duration::from_secs(10);
+        let mut dirty = DirtySessions::default();
+        dirty.mark(&set(&["a"]), &set(&["a"]));
+        assert_eq!(
+            dirty.take_due(start, interval),
+            Some(set(&["a"])),
+            "the first rebuild is immediate"
+        );
+
+        dirty.mark(&set(&["a"]), &set(&["a"]));
+        assert_eq!(
+            dirty.take_due(start + Duration::from_secs(5), interval),
+            None
+        );
+        assert_eq!(
+            dirty.take_due(start + Duration::from_secs(10), interval),
+            Some(set(&["a"]))
+        );
+    }
+
+    #[test]
+    fn sample_only_staleness_waits_longer_but_is_never_dropped() {
+        let start = Instant::now();
+        let interval = Duration::from_secs(10);
+        let mut dirty = DirtySessions::default();
+        dirty.mark(&set(&["a"]), &set(&["a"]));
+        dirty.take_due(start, interval);
+
+        dirty.mark(&set(&["a"]), &BTreeSet::new());
+        assert_eq!(
+            dirty.take_due(start + Duration::from_secs(10), interval),
+            None
+        );
+        assert_eq!(
+            dirty.take_due(start + interval * SAMPLE_REBUILD_FACTOR, interval),
+            Some(set(&["a"]))
+        );
+    }
+
+    #[test]
+    fn a_fact_rebuild_also_takes_the_sessions_only_samples_made_stale() {
+        let start = Instant::now();
+        let interval = Duration::from_secs(10);
+        let mut dirty = DirtySessions::default();
+        dirty.mark(&set(&["b"]), &BTreeSet::new());
+        dirty.mark(&set(&["a"]), &set(&["a"]));
+        assert_eq!(dirty.take_due(start, interval), Some(set(&["a", "b"])));
+        assert_eq!(
+            dirty.take_due(start + interval * 10, interval),
+            None,
+            "nothing left"
+        );
+    }
+
+    #[test]
+    fn a_session_never_rebuilt_is_rebuilt_at_once_even_mid_interval() {
+        // Its first rebuild is what sends its sampler watch: waiting out
+        // another session's interval would lose that much measured energy.
+        let start = Instant::now();
+        let interval = Duration::from_secs(10);
+        let mut dirty = DirtySessions::default();
+        dirty.mark(&set(&["a"]), &set(&["a"]));
+        dirty.take_due(start, interval);
+
+        dirty.mark(&set(&["b"]), &set(&["b"]));
+        assert_eq!(
+            dirty.take_due(start + Duration::from_secs(1), interval),
+            Some(set(&["b"]))
+        );
+        dirty.mark(&set(&["b"]), &set(&["b"]));
+        assert_eq!(
+            dirty.take_due(start + Duration::from_secs(2), interval),
+            None,
+            "afterwards it waits like everyone else"
+        );
+    }
+
+    fn quiet_args() -> WatchArgs {
+        WatchArgs {
+            debug: false,
+            no_sidecars: true,
+            no_otlp: true,
+            require_receiver: false,
+            otlp_addr: DEFAULT_OTLP_ADDR.to_string(),
+            debug_addr: DEFAULT_DEBUG_ADDR.to_string(),
+            interval: 5.0,
+            local_grid_zone: None,
+            remote_region: None,
+            batch_interval: Duration::ZERO,
+        }
+    }
+
+    fn one_fact() -> Envelope {
+        let line = include_str!(
+            "../../../../tests/fixtures/spool/basic-session/cc-hooks.sess-basic.jsonl"
+        )
+        .lines()
+        .next()
+        .expect("fixture line");
+        af_events::parse_line(line).expect("fixture parses")
+    }
+
+    fn reject() -> af_otlp::Reject {
+        af_otlp::Reject {
+            ts_ms: 0,
+            source: "otlp".to_string(),
+            reason: "test".to_string(),
+            attribute_keys: Vec::new(),
+            bytes: 1,
+        }
+    }
+
+    fn rename_table(db: &Path, from: &str, to: &str) {
+        rusqlite::Connection::open(db)
+            .expect("open db")
+            .execute_batch(&format!("ALTER TABLE {from} RENAME TO {to}"))
+            .expect("rename");
+    }
+
+    #[test]
+    fn facts_that_could_not_be_stored_are_handed_back_for_a_retry() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let db = dir.path().join("state.db");
+        drop(Store::open(&db).expect("create"));
+        rename_table(&db, "raw_events", "raw_events_away");
+        let mut store = Store::open(&db).expect("open");
+        let mut watch = Watch::new(dir.path(), &quiet_args(), None, None);
+
+        let inbox = Inbox {
+            facts: vec![one_fact()],
+            rejects: Vec::new(),
+        };
+        let (_, back) = watch
+            .absorb_inbox(&mut store, inbox)
+            .expect_err("the store refuses the facts");
+        assert_eq!(back.facts.len(), 1, "nothing is lost");
+
+        rename_table(&db, "raw_events_away", "raw_events");
+        watch
+            .absorb_inbox(&mut store, back)
+            .expect("the retry stores them");
+        assert_eq!(
+            store.session_ids_for_collector("cc-hooks").expect("read"),
+            vec!["sess-basic"]
+        );
+    }
+
+    #[test]
+    fn a_reject_log_failure_does_not_cost_the_facts() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let db = dir.path().join("state.db");
+        drop(Store::open(&db).expect("create"));
+        rename_table(&db, "rejects", "rejects_away");
+        let mut store = Store::open(&db).expect("open");
+        let mut watch = Watch::new(dir.path(), &quiet_args(), None, None);
+
+        let inbox = Inbox {
+            facts: vec![one_fact()],
+            rejects: vec![reject()],
+        };
+        watch
+            .absorb_inbox(&mut store, inbox)
+            .expect("facts are stored even though the reject log is broken");
+        assert_eq!(
+            store.session_ids_for_collector("cc-hooks").expect("read"),
+            vec!["sess-basic"]
+        );
+    }
+
+    #[test]
+    fn writes_are_batched_to_one_flush_per_interval() {
+        let start = Instant::now();
+        let interval = Duration::from_secs(10);
+        let mut clock = FlushClock::default();
+        assert!(
+            clock.due(start, interval, false),
+            "the first flush is immediate"
+        );
+        clock.flushed(start);
+        assert!(!clock.due(start + Duration::from_secs(3), interval, false));
+        assert!(clock.due(start + Duration::from_secs(10), interval, false));
+    }
+
+    #[test]
+    fn something_new_is_flushed_without_waiting() {
+        let start = Instant::now();
+        let interval = Duration::from_secs(10);
+        let mut clock = FlushClock::default();
+        clock.flushed(start);
+        assert!(
+            clock.due(start + Duration::from_secs(1), interval, true),
+            "a new session or spool file is written at once"
+        );
+    }
+
+    #[test]
+    fn shutdown_takes_everything_still_dirty() {
+        let mut dirty = DirtySessions::default();
+        dirty.mark(&set(&["a"]), &set(&["a"]));
+        dirty.mark(&set(&["b"]), &BTreeSet::new());
+        assert_eq!(dirty.take_all(), set(&["a", "b"]));
+        assert!(dirty.take_all().is_empty());
+    }
 
     #[test]
     fn watcher_errors_force_reconciliation_without_losing_dirty_paths() {

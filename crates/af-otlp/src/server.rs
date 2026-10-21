@@ -16,29 +16,30 @@
 //!   bound;
 //! - a `Host` that is present and not loopback is refused with `403`,
 //!   which is the DNS-rebinding guard;
-//! - `session.id` is reduced to one safe path component
-//!   ([`crate::sanitize_id`]) before it reaches a filename.
+//! - requests labelled by a browser (`Origin`, a cross-site
+//!   `Sec-Fetch-Site`) get `403`, and anything but `application/json` gets
+//!   `415`, so a web page cannot write here;
+//! - nothing is written to disk: normalized events and metadata-only
+//!   rejects go to the owner's bounded channel, and a full channel is a
+//!   retryable `503`.
 //!
 //! tiny_http 0.12 does not expose the body socket for a read timeout. To keep
 //! one slow client from serializing ingestion, requests run on a bounded
 //! worker pool. Excess work receives a retryable `503`, and shutdown waits
 //! only a bounded time for a worker stuck in a body read.
 
-use std::collections::BTreeMap;
-use std::fs::{self, OpenOptions};
-use std::io::{self, Read, Write};
+use std::io::{self, Read};
 use std::net::SocketAddr;
-use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::mpsc::{self, Receiver, TrySendError};
+use std::sync::mpsc::{self, Receiver, SyncSender, TrySendError};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use tiny_http::{Method, Response, Server};
 
-use crate::normalize::normalize_logs;
-use crate::sanitize::sanitize_id;
+use crate::inbound::{Inbound, Reject};
+use crate::normalize::{normalize_logs, NormalizeOutcome, MAX_LOG_RECORDS};
 
 /// Largest request body the receiver will read, in bytes.
 ///
@@ -192,11 +193,9 @@ impl Drop for ServerHandle {
 
 /// Starts the OTLP http/json receiver on `addr` (port 0 picks an ephemeral
 /// free port — read it back via [`ServerHandle::addr`]) in a background
-/// thread, spooling normalized events under `spool_dir` (created if
-/// missing) and quarantining unparseable `/v1/logs` bodies, plus batches
-/// containing `claude_code.api_request` records that were identified but
-/// couldn't be mapped, under `spool_dir`'s sibling `rejected/` directory.
-pub fn serve(addr: SocketAddr, spool_dir: PathBuf) -> anyhow::Result<ServerHandle> {
+/// thread. Normalized events and metadata-only rejects are sent to `sink`;
+/// the receiver writes nothing to disk.
+pub fn serve(addr: SocketAddr, sink: SyncSender<Inbound>) -> anyhow::Result<ServerHandle> {
     let server = Server::http(addr)
         .map_err(|err| anyhow::anyhow!("af-otlp: failed to bind {addr}: {err}"))?;
     let bound_addr = server
@@ -212,7 +211,7 @@ pub fn serve(addr: SocketAddr, spool_dir: PathBuf) -> anyhow::Result<ServerHandl
     for _ in 0..WORKER_COUNT {
         workers.push(spawn_worker(
             Arc::clone(&request_rx),
-            spool_dir.clone(),
+            sink.clone(),
             Arc::clone(&counters),
         ));
     }
@@ -258,7 +257,7 @@ pub fn serve(addr: SocketAddr, spool_dir: PathBuf) -> anyhow::Result<ServerHandl
 
 fn spawn_worker(
     request_rx: Arc<Mutex<Receiver<tiny_http::Request>>>,
-    spool_dir: PathBuf,
+    sink: SyncSender<Inbound>,
     counters: Arc<Counters>,
 ) -> WorkerHandle {
     let (finished_tx, finished) = mpsc::channel();
@@ -271,7 +270,7 @@ fn spawn_worker(
             let Ok(request) = request else {
                 break;
             };
-            handle_request(request, &spool_dir, &counters);
+            handle_request(request, &sink, &counters);
         }
         let _ = finished_tx.send(());
     });
@@ -281,7 +280,7 @@ fn spawn_worker(
     }
 }
 
-fn handle_request(request: tiny_http::Request, spool_dir: &Path, counters: &Counters) {
+fn handle_request(request: tiny_http::Request, sink: &SyncSender<Inbound>, counters: &Counters) {
     // DNS-rebinding guard: a page on the open web can resolve its own
     // hostname to 127.0.0.1 and POST here, but the `Host` it sends is
     // still its own. An absent `Host` is allowed — a legitimate exporter
@@ -294,14 +293,40 @@ fn handle_request(request: tiny_http::Request, spool_dir: &Path, counters: &Coun
         }
     }
 
+    // A web page can POST to loopback with a CORS "simple request" (no
+    // preflight) and the Host check passes, since the page addresses
+    // 127.0.0.1 itself. Browsers always label such requests: they send
+    // `Origin` on cross-origin POSTs and `Sec-Fetch-Site` on every fetch.
+    // Agent exporters send neither (or `Sec-Fetch-Site: none`).
+    let from_a_page = header_value(&request, "Origin").is_some()
+        || header_value(&request, "Sec-Fetch-Site")
+            .is_some_and(|site| !site.trim().eq_ignore_ascii_case("none"));
+    if from_a_page {
+        respond(request, 403, "forbidden origin");
+        return;
+    }
+
     if *request.method() != Method::Post {
         respond(request, 404, "not found");
         return;
     }
 
     let url = request.url().to_string();
+    if matches!(url.as_str(), "/v1/logs" | "/v1/metrics")
+        && !is_json_content_type(header_value(&request, "Content-Type").as_deref())
+    {
+        // http/json only. Requiring the JSON media type also means a page
+        // cannot reach this endpoint without a CORS preflight, which this
+        // server never grants.
+        respond(
+            request,
+            415,
+            "unsupported media type: send application/json",
+        );
+        return;
+    }
     match url.as_str() {
-        "/v1/logs" => handle_logs(request, spool_dir, counters),
+        "/v1/logs" => handle_logs(request, sink, counters),
         "/v1/metrics" => handle_metrics(request, counters),
         _ => respond(request, 404, "not found"),
     }
@@ -339,7 +364,7 @@ fn handle_metrics(mut request: tiny_http::Request, counters: &Counters) {
     respond(request, 200, "{}");
 }
 
-fn handle_logs(mut request: tiny_http::Request, spool_dir: &Path, counters: &Counters) {
+fn handle_logs(mut request: tiny_http::Request, sink: &SyncSender<Inbound>, counters: &Counters) {
     counters.logs_requests.fetch_add(1, Ordering::Relaxed);
     let raw = match read_capped_body(&mut request) {
         Ok(Some(raw)) => raw,
@@ -361,69 +386,117 @@ fn handle_logs(mut request: tiny_http::Request, spool_dir: &Path, counters: &Cou
             return;
         }
     };
-    let body = String::from_utf8_lossy(&raw).into_owned();
 
-    let value: serde_json::Value = match serde_json::from_str(&body) {
+    let value: serde_json::Value = match serde_json::from_slice(&raw) {
         Ok(value) => value,
         Err(_) => {
             // Never break the agent's exporter over a body we couldn't
-            // parse — quarantine it for later inspection and still 200.
+            // parse — record why (not what) and still 200.
             counters.bodies_quarantined.fetch_add(1, Ordering::Relaxed);
-            quarantine_raw(spool_dir, body.as_bytes(), UNPARSED_PREFIX);
+            send_reject(
+                sink,
+                "body is not valid JSON".to_string(),
+                Vec::new(),
+                raw.len(),
+            );
             respond(request, 200, r#"{"partialSuccess":{}}"#);
             return;
         }
     };
 
-    let outcome = normalize_logs(&value);
-    counters
-        .logs_unclaimed
-        .fetch_add(outcome.unclaimed as u64, Ordering::Relaxed);
-    if let Err(err) = append_envelopes(spool_dir, &outcome.events) {
-        counters
-            .logs_persistence_failures
-            .fetch_add(1, Ordering::Relaxed);
-        counters
-            .logs_persistence_failed_events
-            .fetch_add(outcome.events.len() as u64, Ordering::Relaxed);
-        eprintln!(
-            "af[otlp] error: persistence_failed events={} spool={} error={err}",
-            outcome.events.len(),
-            spool_dir.display(),
+    let NormalizeOutcome {
+        events,
+        dropped,
+        unclaimed,
+        dropped_keys,
+        over_capacity,
+    } = normalize_logs(&value);
+    if over_capacity {
+        counters.bodies_quarantined.fetch_add(1, Ordering::Relaxed);
+        send_reject(
+            sink,
+            format!("more than {MAX_LOG_RECORDS} log records in one request"),
+            Vec::new(),
+            raw.len(),
         );
-        respond_retryable(
-            request,
-            503,
-            "persistence_failed",
-            &format!(
-                "failed to append {} normalized event(s); retry the export",
-                outcome.events.len()
-            ),
-        );
+        respond(request, 413, "too many log records");
         return;
     }
     counters
+        .logs_unclaimed
+        .fetch_add(unclaimed as u64, Ordering::Relaxed);
+
+    let accepted = events.len();
+    if accepted > 0 {
+        let refused = match sink.try_send(Inbound::Facts(events)) {
+            Ok(()) => None,
+            Err(TrySendError::Full(_)) => {
+                Some(("receiver_overloaded", "the store is busy; retry the export"))
+            }
+            Err(TrySendError::Disconnected(_)) => {
+                Some(("receiver_shutting_down", "the receiver is stopping"))
+            }
+        };
+        if let Some((code, message)) = refused {
+            counters
+                .logs_persistence_failures
+                .fetch_add(1, Ordering::Relaxed);
+            counters
+                .logs_persistence_failed_events
+                .fetch_add(accepted as u64, Ordering::Relaxed);
+            respond_retryable(request, 503, code, message);
+            return;
+        }
+    }
+    counters
         .logs_accepted
-        .fetch_add(outcome.events.len() as u64, Ordering::Relaxed);
+        .fetch_add(accepted as u64, Ordering::Relaxed);
 
     // A logRecord claimed by an installed normalizer that we then couldn't
-    // map (missing/malformed required fields)
-    // must not vanish silently — quarantine the whole batch it came in and
-    // log the count, so an upstream Claude Code change that breaks this
-    // normalizer's assumptions is observable rather than a quiet event loss.
-    if outcome.dropped > 0 {
+    // map (missing/malformed required fields) must not vanish silently:
+    // reject it with its attribute names, so an upstream schema change that
+    // breaks a normalizer's assumptions is observable rather than a quiet
+    // event loss.
+    if dropped > 0 {
         counters
             .logs_dropped
-            .fetch_add(outcome.dropped as u64, Ordering::Relaxed);
+            .fetch_add(dropped as u64, Ordering::Relaxed);
         counters.bodies_quarantined.fetch_add(1, Ordering::Relaxed);
         eprintln!(
-            "af[otlp] warn: dropped {} claimed OTLP record(s) that failed to normalize",
-            outcome.dropped
+            "af[otlp] warn: dropped {dropped} claimed OTLP record(s) that failed to normalize"
         );
-        quarantine_raw(spool_dir, body.as_bytes(), DROPPED_PREFIX);
+        send_reject(
+            sink,
+            format!("{dropped} claimed record(s) failed to normalize"),
+            dropped_keys,
+            raw.len(),
+        );
     }
 
     respond(request, 200, r#"{"partialSuccess":{}}"#);
+}
+
+fn now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_millis() as i64)
+        .unwrap_or(0)
+}
+
+/// Best effort: a reject that cannot be queued is counted, not retried.
+fn send_reject(
+    sink: &SyncSender<Inbound>,
+    reason: String,
+    attribute_keys: Vec<String>,
+    bytes: usize,
+) {
+    let _ = sink.try_send(Inbound::Reject(Reject {
+        ts_ms: now_ms(),
+        source: "otlp".to_string(),
+        reason,
+        attribute_keys,
+        bytes: bytes as u64,
+    }));
 }
 
 fn respond(request: tiny_http::Request, status: u16, body: &str) {
@@ -454,6 +527,13 @@ fn header_value(request: &tiny_http::Request, field: &'static str) -> Option<Str
         .iter()
         .find(|h| h.field.equiv(field))
         .map(|h| h.value.as_str().to_string())
+}
+
+/// `application/json`, ignoring case and any `; charset=...` parameters.
+fn is_json_content_type(value: Option<&str>) -> bool {
+    value
+        .and_then(|value| value.split(';').next())
+        .is_some_and(|media| media.trim().eq_ignore_ascii_case("application/json"))
 }
 
 /// `localhost`, `127.0.0.0/8` or `::1`, with an optional numeric port.
@@ -499,80 +579,5 @@ fn split_authority(authority: &str) -> (&str, Option<&str>) {
     match authority.rsplit_once(':') {
         Some((host, port)) => (host, Some(port)),
         None => (authority, None),
-    }
-}
-
-/// Appends normalized envelopes to
-/// `spool_dir/<collector>.<session_id>.jsonl`, one file per collector and
-/// session, one `write_all` call per line (a single line is
-/// small enough that this is effectively the atomic single `write()`
-/// collectors are required to use.
-fn append_envelopes(spool_dir: &Path, envelopes: &[af_events::Envelope]) -> io::Result<()> {
-    if envelopes.is_empty() {
-        return Ok(());
-    }
-
-    fs::create_dir_all(spool_dir)?;
-
-    let mut by_collector_session: BTreeMap<(&str, &str), Vec<String>> = BTreeMap::new();
-    for envelope in envelopes {
-        let mut line = serde_json::to_string(envelope).expect("Envelope always serializes to JSON");
-        line.push('\n');
-        by_collector_session
-            .entry((
-                envelope.collector.name.as_str(),
-                envelope.session_id.as_str(),
-            ))
-            .or_default()
-            .push(line);
-    }
-
-    for ((collector, session_id), lines) in by_collector_session {
-        // Sanitized here, at the call site, even though `normalize` already
-        // did it: this is the line that turns a string into a path, and the
-        // guarantee belongs next to the risk. `af_spool::spool_file_name`
-        // deliberately does *not* sanitize — it owns the filename grammar,
-        // not the trust boundary, and a caller whose ids are already safe
-        // must not pay for a reduction it doesn't need. `sanitize_id` is
-        // idempotent, so an already-clean id is unchanged.
-        let path = spool_dir.join(af_spool::spool_file_name(
-            collector,
-            &sanitize_id(session_id),
-        ));
-        let mut file = OpenOptions::new().create(true).append(true).open(path)?;
-        for line in lines {
-            file.write_all(line.as_bytes())?;
-        }
-    }
-
-    Ok(())
-}
-
-/// Filename prefix for quarantined bodies that couldn't be parsed as JSON
-/// at all.
-const UNPARSED_PREFIX: &str = "otlp-cc.unparsed";
-/// Filename prefix for quarantined batches that parsed fine but contained
-/// at least one `claude_code.api_request` record `normalize_logs` couldn't
-/// map.
-const DROPPED_PREFIX: &str = "otlp-cc.dropped";
-
-/// Writes a `/v1/logs` body to
-/// `<spool_dir sibling>/rejected/<prefix>.<unix_millis>[-N].txt` via
-/// [`af_spool::quarantine_bytes`], so the collision-suffix convention has
-/// one implementation shared with the spool's own line quarantine and two
-/// rejects in the same millisecond can't clobber each other. Best-effort:
-/// failures are logged to stderr, never propagated (a full disk can't be
-/// allowed to break the receiver's 200-always contract).
-fn quarantine_raw(spool_dir: &Path, body: &[u8], prefix: &str) {
-    let rejected_dir = spool_dir
-        .parent()
-        .map(|parent| parent.join("rejected"))
-        .unwrap_or_else(|| spool_dir.join("rejected"));
-
-    if let Err(err) = af_spool::quarantine_bytes(&rejected_dir, prefix, body) {
-        eprintln!(
-            "af[otlp] error: failed to quarantine OTLP body ({prefix}) under {}: {err}",
-            rejected_dir.display()
-        );
     }
 }

@@ -18,15 +18,19 @@
 //! Migrations run on every [`Store::open`]: a `schema_migrations` table
 //! tracks the applied version, and each version's `CREATE ... IF NOT
 //! EXISTS` statements are safe to re-run. Versions so far: 1 (the tables),
-//! 2 (the read-path indexes — see [`SCHEMA_V2`]). Each is applied only when
+//! 2 (the read-path indexes — see [`SCHEMA_V2`]), 3 (opaque events), 4
+//! (the joins' `session_id` column — see [`SCHEMA_V4`]), 5 (the reject log —
+//! see [`SCHEMA_V5`]). Each is applied only when
 //! the recorded version is below it, so an existing v1 database is upgraded
 //! in place on the next open without touching a row.
 
 mod derived;
 mod raw;
+mod rejects;
 
 pub use derived::ImpactEstimate;
 pub use raw::{SessionSummary, TelemetryGap};
+pub use rejects::{RejectRow, REJECT_RING};
 
 use rusqlite::{Connection, OpenFlags};
 use std::path::Path;
@@ -136,7 +140,8 @@ CREATE TABLE IF NOT EXISTS impact_joins (
 /// * `raw_events_type` serves the `type = 'llm_call'` /
 ///   `type = 'session_meta'` filters, which are highly selective — an
 ///   `llm_call` is a small fraction of a session's events.
-/// * `impact_joins_session` is an **expression** index on the same
+/// * `impact_joins_session` was an **expression** index (replaced by a
+///   plain column in [`SCHEMA_V4`]) on the same
 ///   `json_extract` [`Store::joins_for_session`] filters by. The unit key
 ///   is deliberately not parsed in SQL (see [`derived`]), so the record's
 ///   own `unit.session_id` is the only thing to index; `json_extract` is
@@ -162,33 +167,106 @@ CREATE INDEX IF NOT EXISTS opaque_events_session
     ON opaque_events(session_id, ts, event_id);
 ";
 
+/// Schema version 4: joins carry their session as a real column.
+///
+/// The v2 expression index made every join upsert re-evaluate
+/// `json_extract` over the record and maintain an index entry from it;
+/// `upsert_joins` now writes the session id next to the record, so the
+/// lookup is a plain column index and the JSON is never parsed by SQLite.
+///
+/// The column itself is added by [`migrate`] only when missing: `ALTER
+/// TABLE ... ADD COLUMN` has no `IF NOT EXISTS`, and a step must be safe
+/// to re-run.
+const SCHEMA_V4: &str = "
+UPDATE impact_joins SET session_id = json_extract(json, '$.unit.session_id');
+DROP INDEX IF EXISTS impact_joins_session;
+CREATE INDEX IF NOT EXISTS impact_joins_session_id ON impact_joins(session_id, unit_key);
+";
+
+/// Schema version 5: the receiver's reject log. Metadata only — a reason,
+/// the attribute *names* and a size, never a payload — capped as a ring by
+/// [`Store::insert_rejects`].
+const SCHEMA_V5: &str = "
+CREATE TABLE IF NOT EXISTS rejects (
+    id             INTEGER PRIMARY KEY,
+    ts             TEXT NOT NULL,
+    source         TEXT NOT NULL,
+    reason         TEXT NOT NULL,
+    attribute_keys TEXT NOT NULL,
+    bytes          INTEGER NOT NULL
+);
+";
+
+/// Best effort `0600`: SQLite creates `-wal`/`-shm` with the database
+/// file's mode, so restricting the database first covers files created
+/// later too.
+fn restrict_to_owner(path: &Path) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if path.exists() {
+            let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = path;
+}
+
 fn migrate(conn: &Connection) -> Result<()> {
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY);",
     )?;
 
-    let current_version: i64 = conn.query_row(
-        "SELECT COALESCE(MAX(version), 0) FROM schema_migrations",
-        [],
+    let steps: [(i64, &str); 5] = [
+        (1, SCHEMA_V1),
+        (2, SCHEMA_V2),
+        (3, SCHEMA_V3),
+        (4, SCHEMA_V4),
+        (5, SCHEMA_V5),
+    ];
+    for (version, sql) in steps {
+        // One write transaction per step, with the version re-read inside
+        // it: a step killed half-way rolls back instead of leaving a
+        // schema its recorded version does not describe, and two processes
+        // opening the same database at once cannot both apply it.
+        conn.execute_batch("BEGIN IMMEDIATE")?;
+        let applied = (|| -> Result<()> {
+            let current: i64 = conn.query_row(
+                "SELECT COALESCE(MAX(version), 0) FROM schema_migrations",
+                [],
+                |row| row.get(0),
+            )?;
+            if current >= version {
+                return Ok(());
+            }
+            if version == 4 && !has_column(conn, "impact_joins", "session_id")? {
+                conn.execute_batch("ALTER TABLE impact_joins ADD COLUMN session_id TEXT;")?;
+            }
+            conn.execute_batch(sql)?;
+            conn.execute(
+                "INSERT INTO schema_migrations (version) VALUES (?1)",
+                [version],
+            )?;
+            Ok(())
+        })();
+        match applied {
+            Ok(()) => conn.execute_batch("COMMIT")?,
+            Err(err) => {
+                let _ = conn.execute_batch("ROLLBACK");
+                return Err(err);
+            }
+        }
+    }
+    Ok(())
+}
+
+fn has_column(conn: &Connection, table: &str, column: &str) -> Result<bool> {
+    let count: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM pragma_table_info(?1) WHERE name = ?2",
+        [table, column],
         |row| row.get(0),
     )?;
-
-    if current_version < 1 {
-        conn.execute_batch(SCHEMA_V1)?;
-        conn.execute("INSERT INTO schema_migrations (version) VALUES (1)", [])?;
-    }
-
-    if current_version < 2 {
-        conn.execute_batch(SCHEMA_V2)?;
-        conn.execute("INSERT INTO schema_migrations (version) VALUES (2)", [])?;
-    }
-
-    if current_version < 3 {
-        conn.execute_batch(SCHEMA_V3)?;
-        conn.execute("INSERT INTO schema_migrations (version) VALUES (3)", [])?;
-    }
-
-    Ok(())
+    Ok(count > 0)
 }
 
 impl Store {
@@ -212,6 +290,7 @@ impl Store {
             Connection::open_in_memory()?
         } else {
             let conn = Connection::open(path)?;
+            restrict_to_owner(path);
             // `PRAGMA journal_mode` *returns* the resulting mode, so it is a
             // query, not an `execute` — `pragma_update` would fail with
             // "execute returned results". A refusal to switch (a database on
@@ -219,11 +298,52 @@ impl Store {
             // store still works, just with the old locking behaviour.
             let _: std::result::Result<String, _> =
                 conn.query_row("PRAGMA journal_mode=WAL", [], |row| row.get(0));
+            // WAL with `synchronous=NORMAL` is durable across application
+            // crashes and loses at most the last commits on power loss. With
+            // the default FULL every commit is an fsync, which is what turned
+            // a few hundred join upserts per pass into gigabytes a day.
+            conn.pragma_update(None, "synchronous", "NORMAL")?;
+            for suffix in ["-wal", "-shm"] {
+                let mut sidecar = path.as_os_str().to_owned();
+                sidecar.push(suffix);
+                restrict_to_owner(Path::new(&sidecar));
+            }
             conn
         };
         conn.busy_timeout(BUSY_TIMEOUT)?;
         migrate(&conn)?;
         Ok(Store(conn))
+    }
+
+    /// Runs `body` as **one** write transaction: everything it writes
+    /// commits together, or — when it returns an error — not at all.
+    ///
+    /// Each commit writes whole pages to the WAL (and again at checkpoint),
+    /// so the number of commits, not the bytes of new data, is what a
+    /// resident writer's disk wear follows. The store's own multi-row
+    /// writes use savepoints, so they nest inside this.
+    pub fn in_transaction<T, E>(
+        &mut self,
+        body: impl FnOnce(&mut Store) -> std::result::Result<T, E>,
+    ) -> std::result::Result<T, E>
+    where
+        E: From<Error>,
+    {
+        self.0
+            .execute_batch("BEGIN IMMEDIATE")
+            .map_err(|err| E::from(Error::from(err)))?;
+        match body(self) {
+            Ok(value) => {
+                self.0
+                    .execute_batch("COMMIT")
+                    .map_err(|err| E::from(Error::from(err)))?;
+                Ok(value)
+            }
+            Err(err) => {
+                let _ = self.0.execute_batch("ROLLBACK");
+                Err(err)
+            }
+        }
     }
 
     /// Opens an **existing** database without creating it and without
@@ -325,5 +445,101 @@ mod tests {
             .query_row("PRAGMA busy_timeout", [], |row| row.get(0))
             .expect("query busy_timeout");
         assert_eq!(write_timeout, BUSY_TIMEOUT.as_millis() as i64);
+    }
+
+    #[test]
+    fn a_v3_database_gains_the_join_session_column_in_place() {
+        let conn = Connection::open_in_memory().expect("open");
+        conn.execute_batch(
+            "CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY);
+             INSERT INTO schema_migrations (version) VALUES (1), (2), (3);",
+        )
+        .expect("seed versions");
+        conn.execute_batch(SCHEMA_V1).expect("v1");
+        conn.execute_batch(SCHEMA_V2).expect("v2");
+        conn.execute_batch(SCHEMA_V3).expect("v3");
+        conn.execute(
+            "INSERT INTO impact_joins (unit_key, json) VALUES (?1, ?2)",
+            rusqlite::params![
+                "session:s1",
+                r#"{"unit":{"level":"session","session_id":"s1"}}"#
+            ],
+        )
+        .expect("seed join");
+
+        migrate(&conn).expect("migrate to current");
+
+        let has_column: bool = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('impact_joins') WHERE name = 'session_id'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .expect("table info")
+            == 1;
+        assert!(has_column, "v4 adds impact_joins.session_id");
+        let store = Store(conn);
+        let joins = store.joins_for_session("s1").expect("read after migration");
+        assert_eq!(joins.len(), 1, "an existing join must still be found");
+        assert_eq!(joins[0].0, "session:s1");
+    }
+
+    #[test]
+    fn an_identical_rewrite_still_fills_a_missing_session_column() {
+        // A join an older binary wrote after the v4 migration has a NULL
+        // session_id; the identical record from a new rebuild must fill it,
+        // or `joins_for_session` never finds that join again.
+        let mut store = Store::open(Path::new(":memory:")).expect("open");
+        let record = r#"{"unit":{"level":"session","session_id":"s1"}}"#;
+        store
+            .0
+            .execute(
+                "INSERT INTO impact_joins (unit_key, json) VALUES ('session:s1', ?1)",
+                [record],
+            )
+            .expect("seed a join without session_id");
+
+        let json: serde_json::Value = serde_json::from_str(record).unwrap();
+        store
+            .upsert_joins(&[("session:s1".to_string(), json)])
+            .expect("rewrite");
+        assert_eq!(store.joins_for_session("s1").expect("read").len(), 1);
+    }
+
+    #[test]
+    fn a_half_applied_v4_migration_recovers_on_the_next_open() {
+        // Killed after the ALTER but before version 4 was recorded: the
+        // column exists, the version says 3. The next open must not fail
+        // with "duplicate column name".
+        let conn = Connection::open_in_memory().expect("open");
+        conn.execute_batch(
+            "CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY);
+             INSERT INTO schema_migrations (version) VALUES (1), (2), (3);",
+        )
+        .expect("seed versions");
+        conn.execute_batch(SCHEMA_V1).expect("v1");
+        conn.execute_batch(SCHEMA_V2).expect("v2");
+        conn.execute_batch(SCHEMA_V3).expect("v3");
+        conn.execute_batch("ALTER TABLE impact_joins ADD COLUMN session_id TEXT;")
+            .expect("the half-applied step");
+
+        migrate(&conn).expect("a half-applied migration must recover");
+        let version: i64 = conn
+            .query_row("SELECT MAX(version) FROM schema_migrations", [], |row| {
+                row.get(0)
+            })
+            .expect("version");
+        assert_eq!(version, 5);
+    }
+
+    #[test]
+    fn a_file_store_commits_without_a_full_fsync_per_transaction() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let store = Store::open(&dir.path().join("state.db")).expect("open");
+        let synchronous: i64 = store
+            .0
+            .query_row("PRAGMA synchronous", [], |row| row.get(0))
+            .expect("read synchronous");
+        assert_eq!(synchronous, 1, "WAL + NORMAL (1), not FULL (2)");
     }
 }

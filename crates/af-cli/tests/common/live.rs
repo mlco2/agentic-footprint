@@ -83,6 +83,18 @@ pub fn wait_until<T>(deadline: Duration, what: &str, mut f: impl FnMut() -> Opti
 
 /// The session id encoded in the first `<collector>.<sid>.jsonl` spool
 /// filename, once the collector has written one.
+/// The first session `collector` has events for in the state dir's store —
+/// how the OTLP collectors are found now that they no longer write spool
+/// files.
+pub fn stored_session_id(state_dir: &Path, collector: &str) -> Option<String> {
+    let store = af_store::Store::open_read_only(&state_dir.join("state.db")).ok()?;
+    store
+        .session_ids_for_collector(collector)
+        .ok()?
+        .into_iter()
+        .next()
+}
+
 pub fn spooled_session_id(state_dir: &Path, collector: &str) -> Option<String> {
     let prefix = format!("{collector}.");
     let entries = std::fs::read_dir(state_dir.join("spool")).ok()?;
@@ -156,6 +168,7 @@ impl LiveWatch {
             .envs(envs.iter().copied())
             .env("AF_STATE_DIR", state_dir)
             .args(["watch", "--debug"])
+            .args(["--batch-interval-ms", "0"])
             .args(["--debug-addr", &debug_addr.to_string()])
             .args(["--otlp-addr", &otlp_addr.to_string()])
             .args(extra)

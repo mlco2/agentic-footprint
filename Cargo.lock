@@ -25,6 +25,7 @@ dependencies = [
  "jsonschema",
  "notify",
  "predicates",
+ "rusqlite",
  "serde",
  "serde_json",
  "sha2",
@@ -75,7 +76,6 @@ name = "af-otlp"
 version = "0.1.0"
 dependencies = [
  "af-events",
- "af-spool",
  "anyhow",
  "serde_json",
  "tempfile",

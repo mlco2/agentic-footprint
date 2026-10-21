@@ -1005,3 +1005,8 @@ def test_real_codecarbon_run_emits_valid_energy_samples(tmp_path):
             )
             assert comp["energy_j"] >= 0.0
     assert proc.returncode == 0, f"exit {proc.returncode}: {stderr}"
+
+
+def test_a_session_id_starting_with_a_dash_parses_as_one_argument():
+    args = parse_args(["--session=--a"])
+    assert args.session == "--a"

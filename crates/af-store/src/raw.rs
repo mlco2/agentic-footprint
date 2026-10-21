@@ -62,11 +62,22 @@ impl Store {
         Ok(rows.collect::<std::result::Result<_, _>>()?)
     }
 
+    /// Distinct sessions that have events from `collector`, sorted.
+    pub fn session_ids_for_collector(&self, collector: &str) -> Result<Vec<String>> {
+        let mut stmt = self.0.prepare(
+            "SELECT DISTINCT session_id FROM raw_events
+             WHERE json_extract(json, '$.collector.name') = ?1
+             ORDER BY session_id",
+        )?;
+        let rows = stmt.query_map([collector], |row| row.get::<_, String>(0))?;
+        Ok(rows.collect::<std::result::Result<_, _>>()?)
+    }
+
     pub fn insert_opaque_events(&mut self, events: &[OpaqueEvent]) -> Result<usize> {
         if events.is_empty() {
             return Ok(0);
         }
-        let tx = self.0.transaction()?;
+        let tx = self.0.savepoint()?;
         let mut inserted = 0usize;
         {
             let mut stmt = tx.prepare(
@@ -105,7 +116,7 @@ impl Store {
         if evts.is_empty() {
             return Ok(0);
         }
-        let tx = self.0.transaction()?;
+        let tx = self.0.savepoint()?;
         let mut inserted = 0usize;
         {
             let mut stmt = tx.prepare(

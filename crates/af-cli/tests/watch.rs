@@ -140,6 +140,7 @@ impl Watch {
         command
             .env("AF_STATE_DIR", state_dir)
             .args(["watch", "--debug"])
+            .args(["--batch-interval-ms", "0"])
             .args(["--debug-addr", &addr.to_string()])
             .args(extra)
             .stdout(Stdio::piped())
@@ -1005,6 +1006,7 @@ fn watch_without_debug_binds_no_debug_port_and_still_ingests() {
     let mut child = Command::new(bin)
         .env("AF_STATE_DIR", dir.path())
         .args(["watch", "--no-sidecars", "--no-otlp"])
+        .args(["--batch-interval-ms", "0"])
         .args(["--debug-addr", &addr.to_string()])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())

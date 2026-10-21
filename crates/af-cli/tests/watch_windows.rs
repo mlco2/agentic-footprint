@@ -31,6 +31,8 @@ fn watch_exits_gracefully_on_ctrl_break() {
     let mut child = Command::new(env!("CARGO_BIN_EXE_af"))
         .args([
             "watch",
+            "--batch-interval-ms",
+            "0",
             "--no-sidecars",
             "--no-otlp",
             "--debug",

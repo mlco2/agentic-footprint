@@ -49,8 +49,11 @@ pub struct RebuildOutcome {
     pub wiped: bool,
     /// Sessions visited.
     pub sessions: usize,
-    /// `impact_join` records written.
+    /// `impact_join` records built.
     pub joins: usize,
+    /// Of those, the records actually inserted or changed on disk. Equal to
+    /// `joins` on a first pass, zero when nothing upstream moved.
+    pub joins_written: usize,
     /// Human-readable degradation notes, in the order they occurred.
     pub notes: Vec<String>,
 }
@@ -192,6 +195,7 @@ pub fn rebuild_prepared_stored(
 ) -> Result<RebuildOutcome> {
     let pending_llm_calls = store.count_llm_calls_without_estimate()? as usize;
     let mut joins = 0usize;
+    let mut batch: Vec<(String, serde_json::Value)> = Vec::new();
     let mut notes = Vec::new();
 
     for (session_id, prepared) in sessions {
@@ -230,10 +234,13 @@ pub fn rebuild_prepared_stored(
             &zone,
             remote_region.id.as_deref(),
         ) {
-            store.upsert_join(&join.unit_key, &join.record)?;
+            batch.push((join.unit_key, join.record));
             joins += 1;
         }
     }
+    // One transaction for the whole pass, and unchanged records are not
+    // rewritten: see `Store::upsert_joins`.
+    let joins_written = store.upsert_joins(&batch)?;
 
     Ok(RebuildOutcome {
         zone,
@@ -242,6 +249,7 @@ pub fn rebuild_prepared_stored(
         wiped: false,
         sessions: sessions.len(),
         joins,
+        joins_written,
         notes,
     })
 }
@@ -259,6 +267,7 @@ fn rebuild_joins(
 
     let mut visited = 0usize;
     let mut joins = 0usize;
+    let mut batch: Vec<(String, serde_json::Value)> = Vec::new();
     let mut summaries = store.session_summaries()?;
     summaries.sort_by(|a, b| a.session_id.cmp(&b.session_id));
     if let Some(only) = sessions {
@@ -307,10 +316,13 @@ fn rebuild_joins(
             &zone,
             remote_region.id.as_deref(),
         ) {
-            store.upsert_join(&join.unit_key, &join.record)?;
+            batch.push((join.unit_key, join.record));
             joins += 1;
         }
     }
+    // One transaction for the whole pass, and unchanged records are not
+    // rewritten: see `Store::upsert_joins`.
+    let joins_written = store.upsert_joins(&batch)?;
 
     Ok(RebuildOutcome {
         zone,
@@ -319,6 +331,7 @@ fn rebuild_joins(
         wiped,
         sessions: visited,
         joins,
+        joins_written,
         notes,
     })
 }

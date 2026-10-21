@@ -36,6 +36,7 @@ pub struct RejectRecord {
 }
 
 /// Outcome of one [`ingest`] call.
+#[derive(Default)]
 pub struct IngestSummary {
     /// Newly inserted events across all spool files (dedup-adjusted).
     pub ingested: usize,
@@ -162,7 +163,23 @@ pub fn ingest_paths(
     )
 }
 
+/// One transaction for the whole pass: every file's events, opaque events
+/// and new offset commit together. A resident watch runs a pass every few
+/// seconds, and each commit writes whole pages twice (WAL, then the
+/// checkpoint) — per-file commits were most of what it wrote. A failure
+/// anywhere rolls the pass back; offsets never run ahead of their events,
+/// so the next pass reads the same bytes again.
 fn ingest_files(
+    store: &mut Store,
+    state_dir: &Path,
+    files: Vec<SpoolFile>,
+    metrics: IngestMetrics,
+    total_started: Instant,
+) -> Result<IngestSummary> {
+    store.in_transaction(|store| ingest_files_in(store, state_dir, files, metrics, total_started))
+}
+
+fn ingest_files_in(
     store: &mut Store,
     state_dir: &Path,
     files: Vec<SpoolFile>,
@@ -290,6 +307,44 @@ mod tests {
             }
         }
         dir
+    }
+
+    /// Commits recorded in a WAL file: each commit's last frame carries the
+    /// database size after the commit (non-zero), every other frame zero.
+    fn wal_commits(db: &Path) -> usize {
+        let mut wal = db.as_os_str().to_owned();
+        wal.push("-wal");
+        let Ok(bytes) = fs::read(&wal) else {
+            return 0;
+        };
+        if bytes.len() < 32 {
+            return 0;
+        }
+        let page_size = u32::from_be_bytes(bytes[8..12].try_into().unwrap()) as usize;
+        let mut commits = 0;
+        let mut at = 32;
+        while at + 24 + page_size <= bytes.len() {
+            if u32::from_be_bytes(bytes[at + 4..at + 8].try_into().unwrap()) != 0 {
+                commits += 1;
+            }
+            at += 24 + page_size;
+        }
+        commits
+    }
+
+    #[test]
+    fn one_ingest_pass_is_one_commit_whatever_the_number_of_files() {
+        let dir = fixture(3, 5);
+        let db = dir.path().join("state.db");
+        let mut store = Store::open(&db).expect("open");
+        let before = wal_commits(&db);
+        let summary = ingest(&mut store, dir.path()).expect("ingest");
+        assert_eq!(summary.ingested, 15);
+        assert_eq!(
+            wal_commits(&db) - before,
+            1,
+            "events and offsets commit together"
+        );
     }
 
     #[derive(Clone, Copy)]

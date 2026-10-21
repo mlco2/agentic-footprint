@@ -61,3 +61,16 @@ pub fn home_dir() -> Option<PathBuf> {
     }
     None
 }
+
+/// Creates `dir` (with parents) and restricts it to its owner. The state
+/// dir holds telemetry about the user's work; it must not be readable by
+/// other accounts whatever the umask.
+pub fn ensure_private_dir(dir: &std::path::Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(dir)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))?;
+    }
+    Ok(())
+}
