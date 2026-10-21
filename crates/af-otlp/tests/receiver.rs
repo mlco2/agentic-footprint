@@ -206,6 +206,34 @@ fn post_codex_logs_routes_to_codex_collector_spool() {
         .all(|line| line.contains("\"name\":\"otlp-codex\"")));
 }
 
+/// `af setup` and `af service status` decide "our receiver is up" from
+/// this header: a bare `200` is what any OTLP collector on the port says.
+#[test]
+fn every_response_identifies_the_af_receiver_and_its_version() {
+    let server = TestServer::start();
+    for path in ["/v1/logs", "/not-a-route"] {
+        let mut stream = TcpStream::connect(server.addr()).expect("connect");
+        write!(
+            stream,
+            "POST {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{{}}"
+        )
+        .expect("write request");
+        let mut response = String::new();
+        stream.read_to_string(&mut response).expect("read response");
+        let expected = format!(
+            "{}: {}",
+            af_otlp::RECEIVER_HEADER.to_ascii_lowercase(),
+            env!("CARGO_PKG_VERSION")
+        );
+        assert!(
+            response
+                .lines()
+                .any(|line| line.trim().to_ascii_lowercase() == expected),
+            "{path}: no `{expected}` header in:\n{response}"
+        );
+    }
+}
+
 #[test]
 fn standard_gen_ai_record_normalizes_without_claude_specific_attributes() {
     let body = serde_json::json!({

@@ -1,0 +1,45 @@
+{
+  "description": "Model ids as the agents emit them on llm_call payloads (provider after normalization, model_id_requested verbatim). Every entry must be known to the ecologits version pinned in python/manifest.toml; add an agent's new default model here when it ships.",
+  "models": [
+    {
+      "agent": "claude-code",
+      "provider": "anthropic",
+      "model": "claude-opus-5-5"
+    },
+    {
+      "agent": "claude-code",
+      "provider": "anthropic",
+      "model": "claude-sonnet-5-5"
+    },
+    {
+      "agent": "claude-code",
+      "provider": "anthropic",
+      "model": "claude-fable-5-1"
+    },
+    {
+      "agent": "claude-code",
+      "provider": "anthropic",
+      "model": "claude-haiku-4-5-20251001"
+    },
+    {
+      "agent": "codex",
+      "provider": "openai",
+      "model": "gpt-6-astra"
+    },
+    {
+      "agent": "codex",
+      "provider": "openai",
+      "model": "gpt-5.5"
+    },
+    {
+      "agent": "codex",
+      "provider": "openai",
+      "model": "gpt-5.6-sol"
+    },
+    {
+      "agent": "codex",
+      "provider": "openai",
+      "model": "gpt-5.3-codex"
+    }
+  ]
+}

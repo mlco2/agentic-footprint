@@ -1,37 +1,18 @@
 //! `af python setup|doctor`: provisions and diagnoses the managed Python
 //! venv used by sidecar processes.
 
-use std::fs;
 use std::path::Path;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 
 use af_sidecar::{doctor, setup, Severity};
-
-const SAMPLER_SOURCE: &str = include_str!("../../../../python/af_sampler/__main__.py");
-const ESTIMATOR_SOURCE: &str = include_str!("../../../../python/af_estimator/__main__.py");
 
 /// `af python setup`: provisions `state_dir/venv` via `uv` (pins from
 /// `python/manifest.toml`). Prints one confirmation line on success.
 pub fn run_setup(state_dir: &Path) -> Result<()> {
     setup(state_dir)?;
-    install_sources(state_dir)?;
+    super::install_sidecar_scripts(state_dir)?;
     println!("af python setup: runtime ready at {}", state_dir.display());
-    Ok(())
-}
-
-fn install_sources(state_dir: &Path) -> Result<()> {
-    for (relative, contents) in [
-        ("af_sampler/__main__.py", SAMPLER_SOURCE),
-        ("af_estimator/__main__.py", ESTIMATOR_SOURCE),
-    ] {
-        let path = state_dir.join("python").join(relative);
-        let parent = path.parent().context("sidecar source path has no parent")?;
-        fs::create_dir_all(parent)
-            .with_context(|| format!("create sidecar directory {}", parent.display()))?;
-        fs::write(&path, contents)
-            .with_context(|| format!("install sidecar source {}", path.display()))?;
-    }
     Ok(())
 }
 

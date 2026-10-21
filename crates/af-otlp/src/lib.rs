@@ -23,3 +23,9 @@ pub use normalize::{
 };
 pub use sanitize::sanitize_id;
 pub use server::{serve, Counters, ServerHandle};
+
+/// Response header every receiver response carries, valued with this
+/// crate's version: how `af setup`/`af service` tell an af receiver from
+/// any other OTLP endpoint answering on the port, and an old one from the
+/// installed binary.
+pub const RECEIVER_HEADER: &str = "X-Agentic-Footprint";

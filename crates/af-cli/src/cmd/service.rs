@@ -18,9 +18,10 @@ const DEFAULT_ENDPOINT: &str = "http://127.0.0.1:4318/v1/logs";
 pub struct Args {
     #[command(subcommand)]
     pub action: Action,
-    /// OTLP HTTP/JSON logs endpoint the resident receiver must serve.
-    #[arg(long, default_value = DEFAULT_ENDPOINT, global = true)]
-    pub endpoint: String,
+    /// OTLP HTTP/JSON logs endpoint the resident receiver must serve
+    /// [default: the installed service's, else http://127.0.0.1:4318/v1/logs]
+    #[arg(long, global = true)]
+    pub endpoint: Option<String>,
 }
 
 #[derive(Debug, Clone, Subcommand)]
@@ -49,10 +50,16 @@ enum LaunchdUpdate {
 
 pub fn run(state_dir: &Path, args: Args) -> Result<()> {
     let binary = env::current_exe().context("resolve the af executable")?;
+    // The address the installed service was given, so a restart or status
+    // check verifies the receiver where it really is.
+    let endpoint = args
+        .endpoint
+        .or_else(installed_endpoint)
+        .unwrap_or_else(|| DEFAULT_ENDPOINT.to_string());
     match args.action {
-        Action::Install => ensure_installed(state_dir, &binary, &args.endpoint),
-        Action::Start => start(manager(), state_dir, &args.endpoint),
-        Action::Status => status(manager(), state_dir, &args.endpoint),
+        Action::Install => ensure_installed(state_dir, &binary, &endpoint),
+        Action::Start => start(manager(), state_dir, &endpoint),
+        Action::Status => status(manager(), state_dir, &endpoint),
     }
 }
 
@@ -67,6 +74,43 @@ pub fn check_for_setup(state_dir: &Path, endpoint: &str) -> Result<()> {
 
 pub fn receiver_reachable(endpoint: &str) -> Result<()> {
     verify_reachable(endpoint)
+}
+
+/// Whether a per-user service definition is installed for this platform's
+/// manager — `af self update` restarts the receiver only then.
+pub fn installed() -> bool {
+    definition_path().is_some_and(|path| path.is_file())
+}
+
+/// Where this platform's manager keeps the service definition.
+fn definition_path() -> Option<PathBuf> {
+    match manager() {
+        Manager::Launchd => launchd_plist_path().ok(),
+        Manager::Systemd => systemd_config_dir().ok().map(|dir| dir.join(SYSTEMD_UNIT)),
+        Manager::Unsupported => None,
+    }
+}
+
+/// The logs endpoint the installed service's receiver serves, read back
+/// from its definition (`--otlp-addr`), so a restart or status check
+/// verifies the address it was installed with rather than the default.
+fn installed_endpoint() -> Option<String> {
+    let definition = fs::read_to_string(definition_path()?).ok()?;
+    otlp_addr_in(&definition).map(|addr| format!("http://{addr}/v1/logs"))
+}
+
+/// The address after `--otlp-addr` in a launchd plist
+/// (`<string>--otlp-addr</string><string>ADDR</string>`) or a systemd
+/// `ExecStart=` line (`--otlp-addr ADDR`).
+fn otlp_addr_in(definition: &str) -> Option<String> {
+    let rest = definition.split("--otlp-addr").nth(1)?;
+    let rest = rest.trim_start_matches("</string>").trim_start();
+    let rest = rest.strip_prefix("<string>").unwrap_or(rest);
+    let addr: String = rest
+        .chars()
+        .take_while(|c| !c.is_whitespace() && *c != '<')
+        .collect();
+    (!addr.is_empty()).then_some(addr)
 }
 
 pub fn automatic_manager_available() -> bool {
@@ -265,6 +309,22 @@ fn verify_reachable(endpoint: &str) -> Result<()> {
     if !response.starts_with("HTTP/1.1 200") && !response.starts_with("HTTP/1.0 200") {
         bail!("{endpoint} answered, but not as an af OTLP receiver");
     }
+    let head = response.split("\r\n\r\n").next().unwrap_or_default();
+    let header = af_otlp::RECEIVER_HEADER.to_ascii_lowercase();
+    let version = head.lines().skip(1).find_map(|line| {
+        let (name, value) = line.split_once(':')?;
+        (name.trim().to_ascii_lowercase() == header).then(|| value.trim().to_string())
+    });
+    let Some(version) = version else {
+        bail!(
+            "{endpoint} answered, but not as an af OTLP receiver (another OTLP collector, \
+             or an af older than this one, owns the port)"
+        );
+    };
+    let ours = env!("CARGO_PKG_VERSION");
+    if version != ours {
+        bail!("{endpoint} is af {version}, but this is af {ours}; restart the receiver");
+    }
     Ok(())
 }
 
@@ -457,7 +517,7 @@ fn launchd_plist(binary: &Path, addr: SocketAddr, state_dir: &Path, logs: &Path)
 <plist version="1.0"><dict>
   <key>Label</key><string>{LABEL}</string>
   <key>ProgramArguments</key><array>
-    <string>{}</string><string>watch</string><string>--otlp-addr</string><string>{addr}</string>
+    <string>{}</string><string>watch</string><string>--require-receiver</string><string>--otlp-addr</string><string>{addr}</string>
   </array>
   <key>EnvironmentVariables</key><dict><key>AF_STATE_DIR</key><string>{}</string></dict>
   <key>RunAtLoad</key><true/><key>KeepAlive</key><true/>
@@ -474,7 +534,7 @@ fn launchd_plist(binary: &Path, addr: SocketAddr, state_dir: &Path, logs: &Path)
 
 fn systemd_unit(binary: &Path, addr: SocketAddr, state_dir: &Path) -> String {
     format!(
-        "[Unit]\nDescription=Agentic Footprint resident receiver\n\n[Service]\nType=simple\nExecStart={} watch --otlp-addr {addr}\nEnvironment={}\nRestart=on-failure\nRestartSec=2\n\n[Install]\nWantedBy=default.target\n",
+        "[Unit]\nDescription=Agentic Footprint resident receiver\n\n[Service]\nType=simple\nExecStart={} watch --require-receiver --otlp-addr {addr}\nEnvironment={}\nRestart=on-failure\nRestartSec=2\n\n[Install]\nWantedBy=default.target\n",
         systemd_escape(binary),
         systemd_environment("AF_STATE_DIR", state_dir),
     )
@@ -522,11 +582,70 @@ mod tests {
         let launchd = launchd_plist(binary, addr, state, Path::new("/tmp/logs"));
         let systemd = systemd_unit(binary, addr, state);
         assert!(launchd.contains("<string>watch</string>"));
-        assert!(systemd.contains(" watch --otlp-addr 127.0.0.1:4318"));
+        assert!(systemd.contains(" --otlp-addr 127.0.0.1:4318"));
         assert!(!launchd.contains("--debug"));
         assert!(!systemd.contains("--debug"));
         assert!(launchd.contains("watch.stderr.log"));
         assert!(systemd.contains("Restart=on-failure"));
+        // A service that cannot bind its port must exit so the manager
+        // retries, rather than run on without a receiver.
+        assert!(launchd.contains("<string>--require-receiver</string>"));
+        assert!(systemd.contains(" --require-receiver"));
+    }
+
+    /// One-shot HTTP server answering with `head` (status line + headers).
+    fn answer_once(head: &'static str) -> String {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let endpoint = format!("http://{}/v1/logs", listener.local_addr().unwrap());
+        std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = [0_u8; 1024];
+            let _ = stream.read(&mut request);
+            let _ = stream.write_all(head.as_bytes());
+        });
+        endpoint
+    }
+
+    #[test]
+    fn a_plain_200_is_not_an_af_receiver() {
+        let endpoint =
+            answer_once("HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+        let error = verify_reachable(&endpoint).unwrap_err();
+        assert!(
+            format!("{error:#}").contains("not as an af OTLP receiver"),
+            "{error:#}"
+        );
+    }
+
+    #[test]
+    fn an_identified_af_receiver_is_reachable() {
+        let endpoint = answer_once(concat!(
+            "HTTP/1.1 200 OK\r\nX-Agentic-Footprint: ",
+            env!("CARGO_PKG_VERSION"),
+            "\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+        ));
+        verify_reachable(&endpoint).unwrap();
+    }
+
+    #[test]
+    fn an_af_receiver_of_another_version_needs_a_restart() {
+        let endpoint = answer_once(
+            "HTTP/1.1 200 OK\r\nX-Agentic-Footprint: 0.0.0-old\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+        );
+        let error = verify_reachable(&endpoint).unwrap_err();
+        assert!(format!("{error:#}").contains("0.0.0-old"), "{error:#}");
+    }
+
+    #[test]
+    fn the_installed_receiver_address_is_read_back_from_either_definition() {
+        let binary = Path::new("/tmp/af");
+        let state = Path::new("/tmp/state");
+        let addr = "127.0.0.1:5000".parse().unwrap();
+        let plist = launchd_plist(binary, addr, state, Path::new("/tmp/logs"));
+        let unit = systemd_unit(binary, addr, state);
+        assert_eq!(otlp_addr_in(&plist).as_deref(), Some("127.0.0.1:5000"));
+        assert_eq!(otlp_addr_in(&unit).as_deref(), Some("127.0.0.1:5000"));
+        assert_eq!(otlp_addr_in("ExecStart=/tmp/af watch"), None);
     }
 
     #[test]

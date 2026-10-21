@@ -22,7 +22,8 @@ pub use correlate::{
     correlate, parse_ts, rfc3339_ms, SessionTree, Span, SpanId, BOOTSTRAP_TOOL_NAME,
 };
 pub use estimate::{
-    estimate_events, estimate_pending, estimate_pending_limit, EstimationOutcome, EstimationRegion,
+    estimate_events, estimate_pending, estimate_pending_limit, estimator_methodology,
+    EstimationOutcome, EstimationRegion,
 };
 pub use join::{
     build_joins, fetch_zone_factors, stale_zone_estimates, sum_criteria, CriterionSum, ImpactJoin,

@@ -52,7 +52,7 @@ test-console-e2e: console-install ## Run console Playwright tests
 	$(NPM) --prefix console run e2e
 
 test-python: ## Run Python sidecar tests
-	$(UV) run --frozen --group test pytest python/tests -q
+	AF_REQUIRE_ECOLOGITS=1 $(UV) run --frozen --group test --group runtime pytest python/tests -q
 
 test-collectors: ## Run collector and statusline shell tests
 	collectors/claude-code/test_hooks.sh

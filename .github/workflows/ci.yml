@@ -102,7 +102,11 @@ jobs:
         with:
           python-version: '3.12'
       - uses: astral-sh/setup-uv@v7
-      - run: uv run --frozen --group test pytest python/tests -q
+      # The runtime group installs the pinned ecologits/codecarbon, so the
+      # estimator and model-coverage tests run instead of skipping.
+      - run: uv run --frozen --group test --group runtime pytest python/tests -q
+        env:
+          AF_REQUIRE_ECOLOGITS: '1'
 
   docs-and-hygiene:
     runs-on: ubuntu-latest
@@ -145,7 +149,11 @@ jobs:
         with:
           python-version: '3.12'
       - uses: astral-sh/setup-uv@v7
-      - run: uv run --frozen --group test pytest python/tests -q
+      # The runtime group installs the pinned ecologits/codecarbon, so the
+      # estimator and model-coverage tests run instead of skipping.
+      - run: uv run --frozen --group test --group runtime pytest python/tests -q
+        env:
+          AF_REQUIRE_ECOLOGITS: '1'
       - name: macOS collector and statusline tests
         if: runner.os == 'macOS'
         run: |

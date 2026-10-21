@@ -115,11 +115,16 @@ The current wizard:
   through the supported per-user service manager;
 - on Windows, prints the foreground `af watch` command instead of installing
   a background task;
-- verifies `POST /v1/logs` responds before detecting or proposing agent
-  changes;
+- verifies `POST /v1/logs` is answered by this version of the af receiver
+  (the `X-Agentic-Footprint` response header) before detecting or proposing
+  agent changes;
 - detects Codex and Claude Code on `PATH`;
-- safely appends Codex native OTLP configuration when no `[otel]` setup exists;
-- refuses to overwrite an existing conflicting Codex exporter;
+- safely appends Codex native OTLP configuration when no `[otel]` table
+  exists, in the primary Codex home and in `<project>/.codex/` when present;
+- refuses to overwrite an existing conflicting Codex exporter or invalid TOML;
+- reports Claude Code settings in a higher-precedence scope (project,
+  `settings.local.json`) that would disable telemetry or hooks, or redirect
+  the logs exporter;
 - on macOS/Linux, installs the embedded Claude Code shell hook under
   `$AF_STATE_DIR/integrations/`; on Windows, registers the built-in `af hook`
   collector;
@@ -135,6 +140,38 @@ agent configuration is not inspected until receiver health passes.
 If you decline the recommended background receiver, setup exits without
 inspecting or changing agent configuration. Start the foreground receiver with
 the command printed by the wizard, keep it running, then rerun `af setup`.
+
+## Updating
+
+```sh
+af self update            # the latest release
+af self update 0.3.0      # an exact release
+af self update --dry-run  # show what would change
+```
+
+`af self update` updates an af that the installer placed from a GitHub release
+binary. It checks the download against the release's `SHA256SUMS` (and its
+sigstore signature when `cosign` is installed), replaces the binary, refreshes
+the managed CodeCarbon/EcoLogits runtime, and restarts the background
+receiver. The runtime moves to the newest releases published at least 7 days
+ago, and only after they pass a smoke test; otherwise the current runtime is
+kept. An af built from a source checkout is updated by pulling and rerunning
+`./install.sh`.
+
+## When data does not arrive
+
+```sh
+af doctor
+```
+
+`af doctor` is read-only. It checks that the receiver answering on the
+endpoint is this af, lists running `claude`/`codex` processes that started
+before the telemetry configuration they read at startup last changed, and lists
+recent sessions that recorded tool activity but no token telemetry. Claude Code
+reloads hooks while it runs but not its OTLP exporter settings, so a process
+started before setup records tool calls and never token usage: restart it. A
+process started before an unrelated edit to the same settings file is reported
+too; restarting it is harmless. It exits 1 when anything needs attention.
 
 On macOS and Linux, service commands are idempotent:
 

@@ -10,9 +10,15 @@ Default mode reads newline-delimited JSON objects from stdin and reacts to
   {"op": "sleep", "id": N, "secs": S} -> sleeps S seconds, then {"id": N, "op": "sleep", "slept": S}
   {"op": "silent", "id": N}           -> never responds (simulates a hung sidecar; timeout test)
 
+`estimate` answers `unknown_model` for a model outside
+`AF_FAKE_KNOWN_MODELS` when that variable is set (see `_is_known_model`).
+
 Anything else gets {"id": N, "error": "unknown op"}. Malformed lines are
 skipped. Stdlib only, per the project's "Python sidecars: stdlib +
 pinned deps only" constraint (this fixture ships no pinned deps at all).
+
+`{"op": "version"}` answers methodology "test" (in `--replay` mode: the
+transcript's own version, without consuming a scripted response).
 
 `--replay <transcript.jsonl>` mode instead plays back a golden transcript:
 alternating request/response lines (odd lines 1,3,5,... are the requests,
@@ -35,6 +41,16 @@ def replay(transcript_path: Path) -> None:
     lines = [line for line in transcript_path.read_text().splitlines() if line.strip()]
     responses = lines[1::2]
     next_response = 0
+    # `version` is answered outside the script (it never consumes a
+    # response), with the methodology the transcript's own estimates carry.
+    version = next(
+        (
+            json.loads(line)["methodology"]["ecologits_version"]
+            for line in responses
+            if "methodology" in json.loads(line)
+        ),
+        "replay",
+    )
 
     for raw_line in sys.stdin:
         raw_line = raw_line.strip()
@@ -46,12 +62,34 @@ def replay(transcript_path: Path) -> None:
             continue
 
         req_id = req.get("id") if isinstance(req, dict) else None
+        if isinstance(req, dict) and req.get("op") == "version":
+            print(json.dumps(_version_response(req_id, version)), flush=True)
+            continue
         if next_response >= len(responses):
             break
         resp = json.loads(responses[next_response])
         next_response += 1
         resp["id"] = req_id
         print(json.dumps(resp), flush=True)
+
+
+def _version_response(req_id, version: str) -> dict:
+    return {"id": req_id, "status": "ok", "methodology": {"ecologits_version": version}}
+
+
+def _is_known_model(req: dict) -> bool:
+    """With `AF_FAKE_KNOWN_MODELS` pointing at
+    `tests/fixtures/models/agent-models.json`, only the `(provider, model)`
+    pairs listed there are estimable — the same list the model-coverage
+    test holds against the real pinned ecologits. Unset, every model is."""
+    path = __import__("os").environ.get("AF_FAKE_KNOWN_MODELS")
+    if not path:
+        return True
+    known = {
+        (entry["provider"], entry["model"])
+        for entry in json.loads(Path(path).read_text())["models"]
+    }
+    return (req.get("provider"), req.get("model_name")) in known
 
 
 def main() -> None:
@@ -82,6 +120,10 @@ def main() -> None:
                 "status": "ok",
                 "gwp_kg_per_kwh": {"min": 0.05, "max": 0.05},
             }
+        elif op == "version":
+            resp = _version_response(req_id, "test")
+        elif op == "estimate" and not _is_known_model(req):
+            resp = {"id": req_id, "status": "unknown_model"}
         elif op == "estimate":
             started_file = __import__("os").environ.get("AF_FAKE_ESTIMATE_STARTED_FILE")
             if started_file:

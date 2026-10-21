@@ -90,14 +90,20 @@ af setup --agents codex
 af setup --agents codex --endpoint http://127.0.0.1:5000/v1/logs
 ```
 
-The target must be the Codex home your sessions actually read. If you launch
-Codex with a non-default home — for example a shell alias like
-`alias codex='CODEX_HOME="$PWD/.codex" codex'`, which gives every project
-directory its own home — run the script once per home:
+The target must be the Codex home your sessions actually read. Setup
+configures the primary home (`$CODEX_HOME`, else `~/.codex`) and, when the
+`--project` directory (default: the current directory) contains a `.codex/`
+directory, `<project>/.codex/config.toml` as well. That covers a shell alias
+like `alias codex='CODEX_HOME="$PWD/.codex" codex'`, which gives every project
+directory its own home: run setup (or `af setup --check`) once from each such
+project:
 
 ```sh
-CODEX_HOME=/path/to/project/.codex af setup --agents codex
+af setup --agents codex --project /path/to/project
 ```
+
+Setup cannot see a shell alias, so a home outside both locations still needs
+`CODEX_HOME=/path/to/home af setup --agents codex`.
 
 `codex doctor --summary` prints which `config.toml` a session in the current
 directory loads.

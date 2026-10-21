@@ -11,8 +11,8 @@ The release binary is named `af`.
 | `af report` | Ingest pending facts, update derived results, and print a report. |
 | `af replay` | Rebuild derived estimates and joins from retained raw facts. |
 | `af watch` | Run resident ingestion, sampling, estimation, and optional debugging. |
-| `af python setup` | Provision the managed CodeCarbon and EcoLogits environment. |
-| `af python doctor` | Diagnose the managed Python environment. |
+| `af doctor` | Diagnose why an agent's data is not arriving (read-only). |
+| `af self update` | Update af to the latest release, with its managed runtime. |
 | `af statusline` | Render read-only session impact values for Claude Code. |
 
 Use `af <command> --help` for the authoritative option list from the installed

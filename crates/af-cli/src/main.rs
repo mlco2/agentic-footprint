@@ -21,6 +21,11 @@ enum Commands {
     Setup(cmd::setup::Args),
     /// Manage the resident per-user `af watch` receiver
     Service(cmd::service::Args),
+    /// Diagnose why an agent's data is not arriving (read-only)
+    Doctor(cmd::doctor::Args),
+    /// Update af itself (and its managed Python runtime)
+    #[command(name = "self")]
+    SelfCmd(cmd::self_update::Args),
     #[cfg(feature = "experimental-opencode")]
     /// Run an experimental native coding-agent collector
     Collect {
@@ -86,6 +91,10 @@ enum Commands {
         /// a contradiction worth an error rather than a silent winner.
         #[arg(long)]
         no_otlp: bool,
+        /// Exit instead of continuing when the OTLP receiver cannot bind
+        /// (the resident service passes this, so its manager retries).
+        #[arg(long, conflicts_with = "no_otlp")]
+        require_receiver: bool,
         /// Address for the `/debug` HTTP+SSE console API. Only bound with
         /// `--debug`.
         #[arg(long, default_value = cmd::watch::DEFAULT_DEBUG_ADDR)]
@@ -102,7 +111,9 @@ enum Commands {
         #[arg(long)]
         remote_region: Option<String>,
     },
-    /// Python runtime setup and diagnostics
+    /// Python runtime setup and diagnostics. Hidden: the installer and
+    /// `af self update` drive it, and `af doctor` reports its health.
+    #[command(hide = true)]
     Python {
         #[command(subcommand)]
         action: PythonAction,
@@ -130,6 +141,13 @@ enum PythonAction {
     Setup,
     /// Diagnose the managed venv and print actionable findings
     Doctor,
+    /// Upgrade ecologits/codecarbon to the newest releases outside the
+    /// 7-day cooldown (smoke-tested; the current runtime is kept on failure)
+    Upgrade {
+        /// Print the resolved versions without installing
+        #[arg(long)]
+        dry_run: bool,
+    },
 }
 
 #[cfg(feature = "experimental-opencode")]
@@ -149,6 +167,12 @@ fn main() {
                 eprintln!("af setup: {err:#}");
                 std::process::exit(1);
             }
+        }
+        Commands::Doctor(args) => {
+            exit_with("af doctor", cmd::doctor::run(&paths::state_dir(), args))
+        }
+        Commands::SelfCmd(args) => {
+            exit_with("af self", cmd::self_update::run(&paths::state_dir(), args))
         }
         Commands::Service(args) => {
             let state_dir = paths::state_dir();
@@ -189,6 +213,7 @@ fn main() {
             no_sidecars,
             otlp_addr,
             no_otlp,
+            require_receiver,
             debug_addr,
             interval,
             local_grid_zone,
@@ -199,6 +224,7 @@ fn main() {
                 debug,
                 no_sidecars,
                 no_otlp,
+                require_receiver,
                 otlp_addr,
                 debug_addr,
                 interval,
@@ -219,6 +245,10 @@ fn main() {
                         std::process::exit(1);
                     }
                 }
+                PythonAction::Upgrade { dry_run } => exit_with(
+                    "af python upgrade",
+                    cmd::python_upgrade::run(&state_dir, dry_run),
+                ),
                 PythonAction::Doctor => {
                     let code = cmd::python::run_doctor(&state_dir);
                     std::process::exit(code);
@@ -233,6 +263,17 @@ fn main() {
         }
         Commands::ValidateLine => {
             std::process::exit(cmd::validate_line::run());
+        }
+    }
+}
+
+/// Exits with `result`'s code, or prints `<command>: <error>` and exits 1.
+fn exit_with(command: &str, result: anyhow::Result<i32>) -> ! {
+    match result {
+        Ok(code) => std::process::exit(code),
+        Err(err) => {
+            eprintln!("{command}: {err:#}");
+            std::process::exit(1);
         }
     }
 }

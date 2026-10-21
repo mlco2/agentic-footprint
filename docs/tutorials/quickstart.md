@@ -34,12 +34,13 @@ and opens the local debug console.
 
 ```sh
 af setup --check
-af python doctor
+af doctor
 ```
 
-On macOS and Linux, `af service status` also checks the installed per-user
-service. `af python doctor` explains how to repair a missing or incomplete
-managed Python environment.
+`af doctor` checks the receiver, the managed CodeCarbon/EcoLogits runtime, and
+whether running agents predate their telemetry configuration, and says how to
+fix each. On macOS and Linux, `af service status` also checks the installed
+per-user service.
 
 ## 3. Run an agent session
 

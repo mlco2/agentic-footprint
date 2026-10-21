@@ -74,10 +74,11 @@ pub struct EstimationOutcome {
 ///
 /// `methodology_version` on the upserted row is
 /// `format!("ecologits-{version}")` where `version` is
-/// `response.methodology.ecologits_version` when present, or `"unknown"`
-/// for responses that don't carry a `methodology` object (the
-/// `unknown_model`/`missing_zone` statuses never do); a `missing_usage` row
-/// gets `"none"` instead, since it never reached the sidecar.
+/// `response.methodology.ecologits_version` when present, else the
+/// estimator's own (see [`estimator_methodology`]) for the failure statuses
+/// that carry none; a `missing_usage` row gets `"none"` instead, since it
+/// never reached the sidecar. `unknown_model`/`missing_zone` rows from a
+/// *different* methodology are pending again and re-sent.
 ///
 /// Every upserted row is stamped with remote-region provenance so an
 /// explicit later override can detect estimates computed under another one.
@@ -98,8 +99,24 @@ pub fn estimate_pending_limit(
     region: &EstimationRegion,
     limit: Option<usize>,
 ) -> Result<EstimationOutcome> {
-    let events = store.llm_calls_without_estimate_limit(limit)?;
-    estimate_events(store, sidecar, region, &events)
+    let current = estimator_methodology(sidecar);
+    let events = store.llm_calls_to_estimate_limit(limit, current.as_deref())?;
+    estimate_events(store, sidecar, region, &events, current.as_deref())
+}
+
+/// Asks the estimator which methodology it runs (`"ecologits-<version>"`),
+/// or `None` when it cannot say (an older sidecar, an error). With `None`
+/// nothing already judged is re-asked — the pre-existing behavior.
+pub fn estimator_methodology(sidecar: &mut Sidecar) -> Option<String> {
+    let response = sidecar.request(&json!({"op": "version"})).ok()?;
+    if response.get("status").and_then(Value::as_str) != Some("ok") {
+        return None;
+    }
+    response
+        .get("methodology")?
+        .get("ecologits_version")?
+        .as_str()
+        .map(|version| format!("ecologits-{version}"))
 }
 
 /// Estimates the supplied pending events in order. The caller may query and
@@ -111,6 +128,7 @@ pub fn estimate_events(
     sidecar: &mut Sidecar,
     region: &EstimationRegion,
     events: &[Envelope],
+    current_methodology: Option<&str>,
 ) -> Result<EstimationOutcome> {
     let mut outcome = EstimationOutcome::default();
 
@@ -160,7 +178,7 @@ pub fn estimate_events(
 
         store.upsert_estimate(&ImpactEstimate {
             event_id: envelope.event_id.clone(),
-            methodology_version: methodology_version(&response),
+            methodology_version: methodology_version(&response, current_methodology),
             json: stamp_region(response, region),
         })?;
     }
@@ -203,14 +221,17 @@ fn stamp_region(mut response: Value, region: &EstimationRegion) -> Value {
 }
 
 /// Extracts `ecologits-<version>` from a sidecar response's
-/// `methodology.ecologits_version`, falling back to `"ecologits-unknown"`
-/// for responses (failure statuses) that carry no `methodology` object.
-fn methodology_version(response: &Value) -> String {
+/// `methodology.ecologits_version`. Failure statuses carry no `methodology`
+/// object; they get the estimator's current one (the version that gave
+/// the verdict, which is what lets a different version re-ask it), and
+/// `"ecologits-unknown"` only when even that is unknown.
+fn methodology_version(response: &Value, current: Option<&str>) -> String {
     response
         .get("methodology")
         .and_then(|m| m.get("ecologits_version"))
         .and_then(Value::as_str)
         .map(|v| format!("ecologits-{v}"))
+        .or_else(|| current.map(str::to_string))
         .unwrap_or_else(|| "ecologits-unknown".to_string())
 }
 
@@ -224,13 +245,17 @@ mod tests {
             "status": "ok",
             "methodology": {"ecologits_version": "0.11.1", "source": "bundled"}
         });
-        assert_eq!(methodology_version(&resp), "ecologits-0.11.1");
+        assert_eq!(methodology_version(&resp, None), "ecologits-0.11.1");
     }
 
     #[test]
     fn methodology_version_falls_back_when_methodology_absent() {
         let resp = json!({"status": "unknown_model"});
-        assert_eq!(methodology_version(&resp), "ecologits-unknown");
+        assert_eq!(methodology_version(&resp, None), "ecologits-unknown");
+        assert_eq!(
+            methodology_version(&resp, Some("ecologits-0.11.2")),
+            "ecologits-0.11.2"
+        );
     }
 
     #[test]

@@ -1,8 +1,6 @@
 use std::collections::BTreeSet;
 use std::env;
-#[cfg(unix)]
-use std::fs::File;
-use std::fs::{self, OpenOptions};
+use std::fs;
 use std::io::{self, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -355,6 +353,7 @@ fn inspect(
     endpoint: &str,
     selected: &BTreeSet<Agent>,
 ) -> Result<Vec<Plan>> {
+    let home = crate::paths::home_dir().context("HOME (or USERPROFILE) is not set")?;
     let mut plans = Vec::new();
     for agent in selected {
         let installed = command_exists(agent.command());
@@ -363,9 +362,13 @@ fn inspect(
             continue;
         }
         match agent {
-            Agent::Codex => plans.push(inspect_codex(endpoint)?),
+            Agent::Codex => {
+                for path in codex_config_paths(&home, project) {
+                    plans.push(inspect_codex(&path, endpoint)?);
+                }
+            }
             Agent::ClaudeCode => {
-                plans.extend(inspect_claude(state_dir, project, global, endpoint)?)
+                plans.extend(inspect_claude(state_dir, &home, project, global, endpoint)?)
             }
             #[cfg(feature = "experimental-opencode")]
             Agent::OpenCode => plans.push(Plan::Guidance {
@@ -378,34 +381,44 @@ fn inspect(
     Ok(plans)
 }
 
-fn inspect_codex(endpoint: &str) -> Result<Plan> {
-    let path = codex_config_path()?;
+fn inspect_codex(path: &Path, endpoint: &str) -> Result<Plan> {
+    let path = path.to_path_buf();
     let existing = match fs::read_to_string(&path) {
         Ok(contents) => contents,
         Err(error) if error.kind() == io::ErrorKind::NotFound => String::new(),
         Err(error) => return Err(error).with_context(|| format!("read {}", path.display())),
     };
-    if has_codex_otel(&existing) {
-        if codex_otel_matches(&existing, endpoint) {
-            return Ok(Plan::Ready {
-                agent: Agent::Codex,
-                detail: format!("native OTLP logs configured in {}", path.display()),
-            });
-        }
-        return Ok(Plan::Conflict {
+    match codex_otel_state(&existing, endpoint) {
+        CodexOtel::Matches => Ok(Plan::Ready {
+            agent: Agent::Codex,
+            detail: format!("native OTLP logs configured in {}", path.display()),
+        }),
+        CodexOtel::Other => Ok(Plan::Conflict {
             agent: Agent::Codex,
             detail: format!(
                 "{} already configures OTEL; merge the af endpoint manually",
                 path.display()
             ),
-        });
+        }),
+        // Appending to a file Codex cannot parse would only hide the real
+        // problem behind a second one.
+        CodexOtel::Invalid(message) => Ok(Plan::Conflict {
+            agent: Agent::Codex,
+            detail: format!(
+                "{} is not valid TOML ({message}); fix it before running setup",
+                path.display()
+            ),
+        }),
+        CodexOtel::Absent => {
+            let contents = append_codex_otel(&existing, endpoint);
+            Ok(Plan::Change(Change::Codex { path, contents }))
+        }
     }
-    let contents = append_codex_otel(&existing, endpoint);
-    Ok(Plan::Change(Change::Codex { path, contents }))
 }
 
 fn inspect_claude(
     state_dir: &Path,
+    home: &Path,
     project: &Path,
     global: bool,
     endpoint: &str,
@@ -420,7 +433,6 @@ fn inspect_claude(
         }]);
     }
     let settings = if global {
-        let home = crate::paths::home_dir().context("HOME (or USERPROFILE) is not set")?;
         home.join(".claude").join("settings.json")
     } else {
         project.join(".claude").join("settings.json")
@@ -447,6 +459,12 @@ fn inspect_claude(
                 ),
             }]);
         }
+    }
+    if let Some(detail) = claude_scope_override(home, project, global, endpoint)? {
+        return Ok(vec![Plan::Conflict {
+            agent: Agent::ClaudeCode,
+            detail,
+        }]);
     }
     let command = claude_hook_command(state_dir, collector)?;
     let desired = merge_claude_settings(existing.clone(), &command, endpoint)?;
@@ -482,6 +500,91 @@ fn inspect_claude(
         }));
     }
     Ok(plans)
+}
+
+/// Claude Code's settings scopes, lowest precedence first. A key set in a
+/// later scope wins over the same key in an earlier one.
+fn claude_scopes(home: &Path, project: &Path) -> [PathBuf; 3] {
+    [
+        home.join(".claude").join("settings.json"),
+        project.join(".claude").join("settings.json"),
+        project.join(".claude").join("settings.local.json"),
+    ]
+}
+
+/// Finds a setting that would stop the configuration setup writes from
+/// taking effect once Claude Code merges its scopes: telemetry disabled,
+/// hooks disabled, or the logs exporter redirected — either from a scope
+/// with higher precedence than the file setup writes, or by a
+/// signal-specific `OTEL_EXPORTER_OTLP_LOGS_*` key (which overrides the
+/// base keys setup writes) in that file itself.
+fn claude_scope_override(
+    home: &Path,
+    project: &Path,
+    global: bool,
+    endpoint: &str,
+) -> Result<Option<String>> {
+    let base = logs_base_endpoint(endpoint)?;
+    // (key, value setup needs, set by setup itself?)
+    let expected: [(&str, &str, bool); 6] = [
+        ("CLAUDE_CODE_ENABLE_TELEMETRY", "1", true),
+        ("OTEL_LOGS_EXPORTER", "otlp", true),
+        ("OTEL_EXPORTER_OTLP_PROTOCOL", "http/json", true),
+        ("OTEL_EXPORTER_OTLP_ENDPOINT", base, true),
+        ("OTEL_EXPORTER_OTLP_LOGS_PROTOCOL", "http/json", false),
+        ("OTEL_EXPORTER_OTLP_LOGS_ENDPOINT", endpoint, false),
+    ];
+    let written = usize::from(!global);
+    for (index, path) in claude_scopes(home, project)
+        .iter()
+        .enumerate()
+        .skip(written)
+    {
+        let settings: Value = match fs::read_to_string(path) {
+            Ok(contents) => match serde_json::from_str(&contents) {
+                Ok(value) => value,
+                Err(error) => {
+                    return Ok(Some(format!(
+                        "{} is not valid JSON ({error}); Claude Code ignores it",
+                        path.display()
+                    )))
+                }
+            },
+            Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(error).with_context(|| format!("read {}", path.display())),
+        };
+        if settings.get("disableAllHooks").and_then(Value::as_bool) == Some(true) {
+            return Ok(Some(format!(
+                "{} sets disableAllHooks; remove it so the af hook can run",
+                path.display()
+            )));
+        }
+        let Some(env) = settings.get("env").and_then(Value::as_object) else {
+            continue;
+        };
+        for (key, wanted, written_by_setup) in expected {
+            // In the file setup writes, its own keys are overwritten anyway.
+            if index == written && written_by_setup {
+                continue;
+            }
+            let Some(current) = env.get(key).and_then(Value::as_str) else {
+                continue;
+            };
+            let satisfied = if key == "OTEL_LOGS_EXPORTER" {
+                current.split(',').any(|exporter| exporter.trim() == wanted)
+            } else {
+                current == wanted
+            };
+            if !satisfied {
+                return Ok(Some(format!(
+                    "{} sets {key}={current}, which overrides the af configuration; \
+                     remove it or set it to {wanted}",
+                    path.display()
+                )));
+            }
+        }
+    }
+    Ok(None)
 }
 
 /// Which Claude Code collector implementation this setup registers. The
@@ -568,30 +671,78 @@ fn find_in_path_dirs(
         .any(|directory| names.iter().any(|name| directory.join(name).is_file()))
 }
 
-fn codex_config_path() -> Result<PathBuf> {
-    if let Some(home) = env::var_os("CODEX_HOME").filter(|value| !value.is_empty()) {
-        return Ok(PathBuf::from(home).join("config.toml"));
+pub(crate) fn codex_config_path(home: &Path) -> PathBuf {
+    if let Some(codex_home) = env::var_os("CODEX_HOME").filter(|value| !value.is_empty()) {
+        return PathBuf::from(codex_home).join("config.toml");
     }
-    let home = crate::paths::home_dir().context("HOME (or USERPROFILE) is not set")?;
-    Ok(home.join(".codex").join("config.toml"))
+    home.join(".codex").join("config.toml")
 }
 
-fn has_codex_otel(contents: &str) -> bool {
-    contents.lines().map(str::trim).any(|line| {
-        line == "[otel]"
-            || line.starts_with("[otel.")
-            || line.starts_with("otel.")
-            || line.starts_with("otel =")
-            || line.starts_with("otel=")
-    })
+/// Every Codex config file sessions started from `project` may load: the
+/// primary home (`$CODEX_HOME`, else `~/.codex`) and, when the project has
+/// one, `<project>/.codex`. The latter is Codex's project config layer and
+/// also what a per-project `CODEX_HOME` alias points at — a home `af setup`
+/// cannot see from its own environment, and which otherwise silently never
+/// exports anything.
+fn codex_config_paths(home: &Path, project: &Path) -> Vec<PathBuf> {
+    let primary = codex_config_path(home);
+    let mut paths = vec![primary.clone()];
+    let project_home = project.join(".codex");
+    if project_home.is_dir() && !same_directory(primary.parent(), &project_home) {
+        paths.push(project_home.join("config.toml"));
+    }
+    paths
 }
 
-fn codex_otel_matches(contents: &str, endpoint: &str) -> bool {
-    contents.contains(&format!("endpoint = \"{endpoint}\""))
-        && contents.contains("protocol = \"json\"")
-        && contents.contains("log_user_prompt = false")
-        && contents.contains("metrics_exporter = \"none\"")
-        && contents.contains("trace_exporter = \"none\"")
+fn same_directory(left: Option<&Path>, right: &Path) -> bool {
+    let Some(left) = left else {
+        return false;
+    };
+    match (left.canonicalize(), right.canonicalize()) {
+        (Ok(left), Ok(right)) => left == right,
+        _ => left == right,
+    }
+}
+
+/// What a Codex `config.toml` says about OTEL, read the way Codex reads it:
+/// parsed as TOML, so a header with a trailing comment, nested-table
+/// spelling, or an endpoint that only appears in a comment are all judged
+/// by their meaning rather than their text.
+#[derive(Debug, PartialEq, Eq)]
+enum CodexOtel {
+    Absent,
+    Matches,
+    Other,
+    Invalid(String),
+}
+
+fn codex_otel_state(contents: &str, endpoint: &str) -> CodexOtel {
+    let table = match contents.parse::<toml::Table>() {
+        Ok(table) => table,
+        Err(error) => {
+            let message = error.to_string();
+            let first = message.lines().next().unwrap_or("parse error").trim();
+            return CodexOtel::Invalid(first.to_string());
+        }
+    };
+    let Some(otel) = table.get("otel") else {
+        return CodexOtel::Absent;
+    };
+    let str_at = |path: &[&str]| -> Option<&str> {
+        path.iter()
+            .try_fold(otel, |value, key| value.get(key))
+            .and_then(toml::Value::as_str)
+    };
+    let matches = otel.get("log_user_prompt").and_then(toml::Value::as_bool) == Some(false)
+        && str_at(&["metrics_exporter"]) == Some("none")
+        && str_at(&["trace_exporter"]) == Some("none")
+        && str_at(&["exporter", "otlp-http", "endpoint"]) == Some(endpoint)
+        && str_at(&["exporter", "otlp-http", "protocol"]) == Some("json");
+    if matches {
+        CodexOtel::Matches
+    } else {
+        CodexOtel::Other
+    }
 }
 
 fn append_codex_otel(existing: &str, endpoint: &str) -> String {
@@ -733,64 +884,13 @@ fn apply_change(change: &Change) -> Result<()> {
 }
 
 fn write_config(path: &Path, bytes: &[u8]) -> Result<()> {
-    let parent = path.parent().context("configuration path has no parent")?;
-    fs::create_dir_all(parent)
-        .with_context(|| format!("create configuration directory {}", parent.display()))?;
     if path.exists() {
         let backup = backup_path(path);
         fs::copy(path, &backup)
             .with_context(|| format!("back up {} to {}", path.display(), backup.display()))?;
         println!("  backup: {}", backup.display());
     }
-    let temporary = path.with_file_name(format!(
-        ".{}.{}.tmp",
-        path.file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or("config"),
-        std::process::id()
-    ));
-    let result = (|| -> Result<()> {
-        let mut file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&temporary)
-            .with_context(|| format!("create temporary file {}", temporary.display()))?;
-        secure_permissions(&temporary, path)?;
-        file.write_all(bytes)
-            .with_context(|| format!("write temporary file {}", temporary.display()))?;
-        file.sync_all()
-            .with_context(|| format!("sync temporary file {}", temporary.display()))?;
-        fs::rename(&temporary, path)
-            .with_context(|| format!("replace configuration {}", path.display()))?;
-        // Unix durability idiom only: fsyncing the directory makes the rename
-        // itself durable. Windows can't open a directory as a `File` (the
-        // call fails with PermissionDenied) and offers no equivalent through
-        // safe std, so the rename is as far as durability goes there.
-        #[cfg(unix)]
-        File::open(parent)
-            .and_then(|directory| directory.sync_all())
-            .with_context(|| format!("sync configuration directory {}", parent.display()))?;
-        Ok(())
-    })();
-    if result.is_err() {
-        let _ = fs::remove_file(&temporary);
-    }
-    result
-}
-
-#[cfg(unix)]
-fn secure_permissions(temporary: &Path, existing: &Path) -> Result<()> {
-    use std::os::unix::fs::PermissionsExt;
-    let mode = fs::metadata(existing)
-        .map(|metadata| metadata.permissions().mode())
-        .unwrap_or(0o600);
-    fs::set_permissions(temporary, fs::Permissions::from_mode(mode & 0o777))
-        .with_context(|| format!("set configuration permissions {}", temporary.display()))
-}
-
-#[cfg(not(unix))]
-fn secure_permissions(_temporary: &Path, _existing: &Path) -> Result<()> {
-    Ok(())
+    super::write_atomic(path, bytes)
 }
 
 fn backup_path(path: &Path) -> PathBuf {
@@ -824,6 +924,197 @@ fn make_executable(_path: &Path) -> Result<()> {
 mod tests {
     use super::*;
 
+    fn plan_kind(plan: &Plan) -> &'static str {
+        match plan {
+            Plan::Ready { .. } => "ready",
+            Plan::Change(_) => "change",
+            Plan::Conflict { .. } => "conflict",
+            #[cfg(feature = "experimental-opencode")]
+            Plan::Guidance { .. } => "guidance",
+            Plan::Missing { .. } => "missing",
+        }
+    }
+
+    fn codex_plan_for(contents: &str) -> Plan {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, contents).unwrap();
+        inspect_codex(&path, DEFAULT_LOGS_ENDPOINT).unwrap()
+    }
+
+    #[test]
+    fn codex_otel_table_with_trailing_comment_is_not_appended_twice() {
+        // A second `[otel]` table makes Codex refuse to load its config.
+        let plan = codex_plan_for("[otel] # mine\nexporter = \"none\"\n");
+        assert_eq!(plan_kind(&plan), "conflict");
+    }
+
+    #[test]
+    fn codex_otel_written_as_nested_tables_is_recognized() {
+        let plan = codex_plan_for(
+            "[otel]\nenvironment=\"dev\"\nlog_user_prompt=false\nmetrics_exporter=\"none\"\n\
+             trace_exporter=\"none\"\n\n[otel.exporter.otlp-http]\n\
+             endpoint=\"http://127.0.0.1:4318/v1/logs\"\nprotocol=\"json\"\n",
+        );
+        assert_eq!(plan_kind(&plan), "ready");
+    }
+
+    #[test]
+    fn codex_endpoint_only_in_a_comment_does_not_count_as_configured() {
+        let plan = codex_plan_for(
+            "# exporter = { otlp-http = { endpoint = \"http://127.0.0.1:4318/v1/logs\", protocol = \"json\" } }\n\
+             # log_user_prompt = false\n# metrics_exporter = \"none\"\n# trace_exporter = \"none\"\n\
+             [otel]\nexporter = \"none\"\n",
+        );
+        assert_eq!(plan_kind(&plan), "conflict");
+    }
+
+    #[test]
+    fn invalid_codex_config_is_a_conflict_not_an_append() {
+        let plan = codex_plan_for("model = \"unterminated\n");
+        assert_eq!(plan_kind(&plan), "conflict");
+    }
+
+    #[test]
+    fn appended_codex_otel_parses_as_toml_and_is_ready() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let merged = append_codex_otel("model = \"gpt-test\"\n", DEFAULT_LOGS_ENDPOINT);
+        merged.parse::<toml::Table>().unwrap();
+        std::fs::write(&path, merged).unwrap();
+        let plan = inspect_codex(&path, DEFAULT_LOGS_ENDPOINT).unwrap();
+        assert_eq!(plan_kind(&plan), "ready");
+    }
+
+    #[test]
+    fn project_codex_home_is_configured_alongside_the_user_home() {
+        // `alias codex='CODEX_HOME="$PWD/.codex" codex'` (or Codex's own
+        // project layer) loads `<project>/.codex/config.toml`.
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("home");
+        let project = dir.path().join("project");
+        std::fs::create_dir_all(project.join(".codex")).unwrap();
+        let paths = codex_config_paths(&home, &project);
+        assert!(
+            paths.contains(&project.join(".codex").join("config.toml")),
+            "{paths:?}"
+        );
+    }
+
+    #[test]
+    fn project_codex_home_is_listed_once_when_it_is_also_the_primary() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("project");
+        std::fs::create_dir_all(project.join(".codex")).unwrap();
+        // `home` == project: `~/.codex` and `<project>/.codex` are one file.
+        let paths = codex_config_paths(&project, &project);
+        assert_eq!(paths.len(), 1, "{paths:?}");
+    }
+
+    struct ClaudeFixture {
+        _dir: tempfile::TempDir,
+        state: PathBuf,
+        home: PathBuf,
+        project: PathBuf,
+    }
+
+    fn claude_fixture() -> ClaudeFixture {
+        let dir = tempfile::tempdir().unwrap();
+        let state = dir.path().join("state");
+        let home = dir.path().join("home");
+        let project = dir.path().join("project");
+        std::fs::create_dir_all(project.join(".claude")).unwrap();
+        std::fs::create_dir_all(home.join(".claude")).unwrap();
+        ClaudeFixture {
+            _dir: dir,
+            state,
+            home,
+            project,
+        }
+    }
+
+    fn claude_kinds(fixture: &ClaudeFixture, global: bool) -> Vec<&'static str> {
+        inspect_claude(
+            &fixture.state,
+            &fixture.home,
+            &fixture.project,
+            global,
+            DEFAULT_LOGS_ENDPOINT,
+        )
+        .unwrap()
+        .iter()
+        .map(plan_kind)
+        .collect()
+    }
+
+    #[test]
+    fn claude_local_settings_disabling_telemetry_is_a_conflict() {
+        let fixture = claude_fixture();
+        std::fs::write(
+            fixture.project.join(".claude/settings.local.json"),
+            r#"{"env": {"CLAUDE_CODE_ENABLE_TELEMETRY": "0"}}"#,
+        )
+        .unwrap();
+        assert_eq!(claude_kinds(&fixture, true), ["conflict"]);
+    }
+
+    #[test]
+    fn claude_project_logs_endpoint_override_is_a_conflict() {
+        let fixture = claude_fixture();
+        std::fs::write(
+            fixture.project.join(".claude/settings.json"),
+            r#"{"env": {"OTEL_EXPORTER_OTLP_LOGS_ENDPOINT": "http://collector:4318/v1/logs"}}"#,
+        )
+        .unwrap();
+        assert_eq!(claude_kinds(&fixture, true), ["conflict"]);
+    }
+
+    #[test]
+    fn claude_signal_specific_override_in_the_written_file_is_a_conflict() {
+        let fixture = claude_fixture();
+        std::fs::write(
+            fixture.home.join(".claude/settings.json"),
+            r#"{"env": {"OTEL_EXPORTER_OTLP_LOGS_PROTOCOL": "http/protobuf"}}"#,
+        )
+        .unwrap();
+        assert_eq!(claude_kinds(&fixture, true), ["conflict"]);
+    }
+
+    #[test]
+    fn claude_hooks_disabled_in_a_higher_scope_is_a_conflict() {
+        let fixture = claude_fixture();
+        std::fs::write(
+            fixture.project.join(".claude/settings.local.json"),
+            r#"{"disableAllHooks": true}"#,
+        )
+        .unwrap();
+        assert_eq!(claude_kinds(&fixture, true), ["conflict"]);
+    }
+
+    #[test]
+    fn claude_higher_scope_repeating_the_same_values_is_not_a_conflict() {
+        let fixture = claude_fixture();
+        std::fs::write(
+            fixture.project.join(".claude/settings.json"),
+            r#"{"env": {"CLAUDE_CODE_ENABLE_TELEMETRY": "1", "OTEL_EXPORTER_OTLP_ENDPOINT": "http://127.0.0.1:4318"}}"#,
+        )
+        .unwrap();
+        assert!(!claude_kinds(&fixture, true).contains(&"conflict"));
+    }
+
+    #[test]
+    fn claude_user_scope_is_lower_precedence_than_project_setup() {
+        // Project-level setup wins over the user file, so a user-level
+        // override cannot hide it.
+        let fixture = claude_fixture();
+        std::fs::write(
+            fixture.home.join(".claude/settings.json"),
+            r#"{"env": {"OTEL_EXPORTER_OTLP_ENDPOINT": "http://elsewhere:4318"}}"#,
+        )
+        .unwrap();
+        assert!(!claude_kinds(&fixture, false).contains(&"conflict"));
+    }
+
     #[test]
     fn receiver_prompt_defaults_to_yes() {
         assert!(is_affirmative(""));
@@ -851,14 +1142,19 @@ mod tests {
         let merged = append_codex_otel(existing, DEFAULT_LOGS_ENDPOINT);
         assert!(merged.starts_with(existing));
         assert!(merged.contains("[otel]"));
-        assert!(codex_otel_matches(&merged, DEFAULT_LOGS_ENDPOINT));
+        assert_eq!(
+            codex_otel_state(&merged, DEFAULT_LOGS_ENDPOINT),
+            CodexOtel::Matches
+        );
     }
 
     #[test]
     fn existing_other_codex_exporter_is_a_conflict() {
         let existing = "[otel]\nexporter = \"none\"\n";
-        assert!(has_codex_otel(existing));
-        assert!(!codex_otel_matches(existing, DEFAULT_LOGS_ENDPOINT));
+        assert_eq!(
+            codex_otel_state(existing, DEFAULT_LOGS_ENDPOINT),
+            CodexOtel::Other
+        );
     }
 
     #[test]

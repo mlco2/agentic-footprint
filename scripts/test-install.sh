@@ -58,7 +58,7 @@ case "${1:-}" in
     if [ -f "$AF_TEST_WATCH_PID" ]; then
       kill "$(cat "$AF_TEST_WATCH_PID")" 2>/dev/null || true
     fi
-    "$AF_TEST_AF_BINARY" watch >"$AF_TEST_WATCH_LOG" 2>&1 &
+    "$AF_TEST_AF_BINARY" watch --otlp-addr "$AF_TEST_OTLP_ADDR" >"$AF_TEST_WATCH_LOG" 2>&1 &
     echo $! >"$AF_TEST_WATCH_PID"
     exit 0
     ;;
@@ -79,6 +79,11 @@ SH
 chmod +x "$TMP/fake-bin/systemctl"
 
 (cd "$REPO_ROOT" && cargo build -p af-cli -q)
+# A free loopback port, so a developer's own receiver on 4318 is neither
+# disturbed nor mistaken for the one under test.
+AF_TEST_OTLP_ADDR="127.0.0.1:$(python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')"
+export AF_TEST_OTLP_ADDR
+ENDPOINT="http://$AF_TEST_OTLP_ADDR/v1/logs"
 HOME="$TMP/home" \
 CODEX_HOME="$TMP/home/.codex" \
 AF_STATE_DIR="$TMP/home/.local/state/agentic-footprint" \
@@ -91,7 +96,7 @@ AF_TEST_WATCH_LOG="$TMP/watch.log" \
 XDG_CONFIG_HOME="$TMP/home/.config" \
 XDG_RUNTIME_DIR="$TMP/runtime" \
 PATH="$TMP/fake-bin:$PATH" \
-  "$REPO_ROOT/install.sh" --yes --project "$TMP/project" >/dev/null
+  "$REPO_ROOT/install.sh" --yes --project "$TMP/project" -- --endpoint "$ENDPOINT" >/dev/null
 
 test -x "$TMP/install-bin/af"
 test -f "$TMP/home/.codex/config.toml"
@@ -99,8 +104,10 @@ test -f "$TMP/home/.claude/settings.json"
 test -x "$TMP/home/.local/state/agentic-footprint/integrations/claude-code/af-hook.sh"
 test -f "$TMP/home/.local/state/agentic-footprint/python/af_sampler/__main__.py"
 test -f "$TMP/home/.local/state/agentic-footprint/python/af_estimator/__main__.py"
+# A local binary is not a release install: self update must refuse it.
+test ! -e "$TMP/home/.local/state/agentic-footprint/install-receipt.json"
 test -f "$TMP/home/.config/systemd/user/agentic-footprint-watch.service"
-grep -q 'ExecStart=.*/af watch --otlp-addr 127.0.0.1:4318' \
+grep -q "ExecStart=.*/af watch --require-receiver --otlp-addr $AF_TEST_OTLP_ADDR" \
   "$TMP/home/.config/systemd/user/agentic-footprint-watch.service"
 ! grep -q -- '--debug' "$TMP/home/.config/systemd/user/agentic-footprint-watch.service"
 kill -0 "$(cat "$TMP/watch.pid")"
@@ -115,7 +122,7 @@ AF_TEST_WATCH_LOG="$TMP/watch.log" \
 XDG_CONFIG_HOME="$TMP/home/.config" \
 XDG_RUNTIME_DIR="$TMP/runtime" \
 PATH="$TMP/fake-bin:$PATH" \
-  "$TMP/install-bin/af" setup --check --global --project "$TMP/project" >/dev/null
+  "$TMP/install-bin/af" setup --check --global --project "$TMP/project" --endpoint "$ENDPOINT" >/dev/null
 
 HOME="$TMP/home" \
 AF_STATE_DIR="$TMP/home/.local/state/agentic-footprint" \
@@ -126,7 +133,7 @@ AF_TEST_WATCH_LOG="$TMP/watch.log" \
 XDG_CONFIG_HOME="$TMP/home/.config" \
 XDG_RUNTIME_DIR="$TMP/runtime" \
 PATH="$TMP/fake-bin:$PATH" \
-  "$TMP/install-bin/af" service install >/dev/null
+  "$TMP/install-bin/af" service install --endpoint "$ENDPOINT" >/dev/null
 kill -0 "$(cat "$TMP/watch.pid")"
 
 UPGRADE_DIR="$TMP/upgrade-bin"

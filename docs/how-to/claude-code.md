@@ -45,7 +45,7 @@ Install:
 
 - Rust and Cargo;
 - `jq` on macOS/Linux, required by the shell hook and richer shell statusline;
-- `uv`, used by `af python setup` to create the managed Python environment;
+- `uv`, used by the installer to create the managed Python environment;
 - Claude Code.
 
 From the repository root, verify the external commands:

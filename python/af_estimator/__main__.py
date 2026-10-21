@@ -5,7 +5,7 @@ calls, and to expose electricity-mix factors used elsewhere in the join
 pipeline.
 
 Newline-delimited JSON over stdin/stdout, one request per line, one
-response per line (`af-sidecar::Sidecar` framing). Two ops:
+response per line (`af-sidecar::Sidecar` framing). Three ops:
 
   {"op":"estimate","provider":P,"model_name":M,"output_token_count":N,
    "electricity_mix_zone":Z,"request_latency":L}
@@ -18,6 +18,11 @@ response per line (`af-sidecar::Sidecar` framing). Two ops:
   to `math.inf` internally (its own token-driven generation-latency
   estimate, the methodology's native path) — and the response carries
   `"latency_missing": true`.
+
+  {"op":"version"}
+    -> {"status":"ok","methodology":{"ecologits_version":V,"source":"bundled"}}
+  The control plane asks once per estimator process, to re-ask
+  `unknown_model`/`missing_zone` verdicts given under another version.
 
   {"op":"zone_factors","zone":Z}
     -> {"status":"ok","zone":Z,"gwp_kg_per_kwh":{min,max},"adpe":{...},
@@ -135,8 +140,17 @@ def handle_zone_factors(req: dict) -> dict:
     }
 
 
+def handle_version(_req: dict) -> dict:
+    return {
+        "status": "ok",
+        "methodology": {"ecologits_version": ECOLOGITS_VERSION, "source": "bundled"},
+    }
+
+
 def handle_request(req: dict) -> dict:
     op = req.get("op")
+    if op == "version":
+        return handle_version(req)
     if op == "estimate":
         return handle_estimate(req)
     if op == "zone_factors":

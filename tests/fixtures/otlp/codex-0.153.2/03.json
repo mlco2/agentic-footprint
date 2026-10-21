@@ -1,0 +1,336 @@
+{
+ "resourceLogs": [
+  {
+   "resource": {
+    "attributes": [
+     {
+      "key": "env",
+      "value": {
+       "stringValue": "dev"
+      }
+     },
+     {
+      "key": "telemetry.sdk.name",
+      "value": {
+       "stringValue": "opentelemetry"
+      }
+     },
+     {
+      "key": "telemetry.sdk.version",
+      "value": {
+       "stringValue": "0.31.0"
+      }
+     },
+     {
+      "key": "host.name",
+      "value": {
+       "stringValue": "host.local"
+      }
+     },
+     {
+      "key": "service.name",
+      "value": {
+       "stringValue": "codex_exec"
+      }
+     },
+     {
+      "key": "telemetry.sdk.language",
+      "value": {
+       "stringValue": "rust"
+      }
+     },
+     {
+      "key": "service.version",
+      "value": {
+       "stringValue": "0.153.2"
+      }
+     }
+    ],
+    "droppedAttributesCount": 0,
+    "entityRefs": []
+   },
+   "scopeLogs": [
+    {
+     "scope": {
+      "name": "codex_otel.log_only",
+      "version": "",
+      "attributes": [],
+      "droppedAttributesCount": 0
+     },
+     "logRecords": [
+      {
+       "timeUnixNano": "0",
+       "observedTimeUnixNano": "1792161444461326000",
+       "severityNumber": 9,
+       "severityText": "INFO",
+       "body": null,
+       "attributes": [
+        {
+         "key": "event.name",
+         "value": {
+          "stringValue": "codex.websocket_connect"
+         }
+        },
+        {
+         "key": "duration_ms",
+         "value": {
+          "stringValue": "1237"
+         }
+        },
+        {
+         "key": "success",
+         "value": {
+          "stringValue": "true"
+         }
+        },
+        {
+         "key": "auth.header_attached",
+         "value": {
+          "boolValue": true
+         }
+        },
+        {
+         "key": "auth.header_name",
+         "value": {
+          "stringValue": "authorization"
+         }
+        },
+        {
+         "key": "auth.retry_after_unauthorized",
+         "value": {
+          "boolValue": false
+         }
+        },
+        {
+         "key": "endpoint",
+         "value": {
+          "stringValue": "/responses"
+         }
+        },
+        {
+         "key": "auth.env_openai_api_key_present",
+         "value": {
+          "boolValue": false
+         }
+        },
+        {
+         "key": "auth.env_codex_api_key_present",
+         "value": {
+          "boolValue": false
+         }
+        },
+        {
+         "key": "auth.env_codex_api_key_enabled",
+         "value": {
+          "boolValue": true
+         }
+        },
+        {
+         "key": "auth.env_refresh_token_url_override_present",
+         "value": {
+          "boolValue": false
+         }
+        },
+        {
+         "key": "auth.connection_reused",
+         "value": {
+          "boolValue": false
+         }
+        },
+        {
+         "key": "event.timestamp",
+         "value": {
+          "stringValue": "2026-10-16T14:37:24.461Z"
+         }
+        },
+        {
+         "key": "conversation.id",
+         "value": {
+          "stringValue": "01a14525-5c46-74a2-9da1-5f4349e45cdb"
+         }
+        },
+        {
+         "key": "app.version",
+         "value": {
+          "stringValue": "0.153.2"
+         }
+        },
+        {
+         "key": "auth_mode",
+         "value": {
+          "stringValue": "Chatgpt"
+         }
+        },
+        {
+         "key": "originator",
+         "value": {
+          "stringValue": "codex_exec"
+         }
+        },
+        {
+         "key": "user.account_id",
+         "value": {
+          "stringValue": "00000000-0000-4000-8000-000000000000"
+         }
+        },
+        {
+         "key": "user.email",
+         "value": {
+          "stringValue": "user@example.com"
+         }
+        },
+        {
+         "key": "terminal.type",
+         "value": {
+          "stringValue": "ghostty/1.3.1"
+         }
+        },
+        {
+         "key": "model",
+         "value": {
+          "stringValue": "gpt-6-astra"
+         }
+        },
+        {
+         "key": "slug",
+         "value": {
+          "stringValue": "gpt-6-astra"
+         }
+        }
+       ],
+       "droppedAttributesCount": 0,
+       "flags": 0,
+       "traceId": "",
+       "spanId": "",
+       "eventName": "event otel/src/events/session_telemetry.rs:721"
+      },
+      {
+       "timeUnixNano": "0",
+       "observedTimeUnixNano": "1792161444464643000",
+       "severityNumber": 9,
+       "severityText": "INFO",
+       "body": null,
+       "attributes": [
+        {
+         "key": "event.name",
+         "value": {
+          "stringValue": "codex.websocket_request"
+         }
+        },
+        {
+         "key": "duration_ms",
+         "value": {
+          "stringValue": "2"
+         }
+        },
+        {
+         "key": "success",
+         "value": {
+          "stringValue": "true"
+         }
+        },
+        {
+         "key": "auth.env_openai_api_key_present",
+         "value": {
+          "boolValue": false
+         }
+        },
+        {
+         "key": "auth.env_codex_api_key_present",
+         "value": {
+          "boolValue": false
+         }
+        },
+        {
+         "key": "auth.env_codex_api_key_enabled",
+         "value": {
+          "boolValue": true
+         }
+        },
+        {
+         "key": "auth.env_refresh_token_url_override_present",
+         "value": {
+          "boolValue": false
+         }
+        },
+        {
+         "key": "auth.connection_reused",
+         "value": {
+          "boolValue": false
+         }
+        },
+        {
+         "key": "event.timestamp",
+         "value": {
+          "stringValue": "2026-10-16T14:37:24.464Z"
+         }
+        },
+        {
+         "key": "conversation.id",
+         "value": {
+          "stringValue": "01a14525-5c46-74a2-9da1-5f4349e45cdb"
+         }
+        },
+        {
+         "key": "app.version",
+         "value": {
+          "stringValue": "0.153.2"
+         }
+        },
+        {
+         "key": "auth_mode",
+         "value": {
+          "stringValue": "Chatgpt"
+         }
+        },
+        {
+         "key": "originator",
+         "value": {
+          "stringValue": "codex_exec"
+         }
+        },
+        {
+         "key": "user.account_id",
+         "value": {
+          "stringValue": "00000000-0000-4000-8000-000000000000"
+         }
+        },
+        {
+         "key": "user.email",
+         "value": {
+          "stringValue": "user@example.com"
+         }
+        },
+        {
+         "key": "terminal.type",
+         "value": {
+          "stringValue": "ghostty/1.3.1"
+         }
+        },
+        {
+         "key": "model",
+         "value": {
+          "stringValue": "gpt-6-astra"
+         }
+        },
+        {
+         "key": "slug",
+         "value": {
+          "stringValue": "gpt-6-astra"
+         }
+        }
+       ],
+       "droppedAttributesCount": 0,
+       "flags": 0,
+       "traceId": "",
+       "spanId": "",
+       "eventName": "event otel/src/events/session_telemetry.rs:772"
+      }
+     ],
+     "schemaUrl": ""
+    }
+   ],
+   "schemaUrl": ""
+  }
+ ]
+}

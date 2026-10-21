@@ -1,0 +1,11 @@
+{
+  "releases": {
+    "0.11.1": [{"upload_time_iso_8601": "2026-07-07T17:30:17.000000Z", "yanked": false}],
+    "0.11.2": [{"upload_time_iso_8601": "2026-09-29T19:36:48.000000Z", "yanked": false}],
+    "0.11.3": [{"upload_time_iso_8601": "2026-10-14T18:38:48.000000Z", "yanked": false}],
+    "0.11.4rc1": [{"upload_time_iso_8601": "2026-09-01T00:00:00.000000Z", "yanked": false}],
+    "0.10.9": [{"upload_time_iso_8601": "2026-09-30T00:00:00.000000Z", "yanked": false}],
+    "0.11.0": [{"upload_time_iso_8601": "2026-06-17T16:02:05.000000Z", "yanked": true}],
+    "0.12.0": []
+  }
+}

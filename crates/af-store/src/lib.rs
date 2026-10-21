@@ -26,7 +26,7 @@ mod derived;
 mod raw;
 
 pub use derived::ImpactEstimate;
-pub use raw::SessionSummary;
+pub use raw::{SessionSummary, TelemetryGap};
 
 use rusqlite::{Connection, OpenFlags};
 use std::path::Path;

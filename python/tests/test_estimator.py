@@ -14,13 +14,17 @@ exercises the exact newline-delimited-JSON framing `af-sidecar::Sidecar`
 speaks to it.
 """
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
 
 import pytest
 
-ecologits = pytest.importorskip("ecologits")
+if os.environ.get("AF_REQUIRE_ECOLOGITS") == "1":
+    import ecologits
+else:
+    ecologits = pytest.importorskip("ecologits")
 
 from ecologits.model_repository import models  # noqa: E402  (after importorskip)
 
@@ -192,3 +196,14 @@ def test_zone_factors_wor_returns_ok(sidecar):
 def test_zone_factors_unknown_zone_returns_missing_zone(sidecar):
     resp = sidecar.request({"id": 8, "op": "zone_factors", "zone": "ZZZ-NOPE"})
     assert resp == {"id": 8, "status": "missing_zone"}
+
+
+def test_version_op_reports_the_ecologits_version(sidecar):
+    # The control plane re-asks failed verdicts given under another
+    # methodology; this is how it learns the current one.
+    resp = sidecar.request({"op": "version", "id": 9})
+    assert resp == {
+        "status": "ok",
+        "methodology": {"ecologits_version": ecologits.__version__, "source": "bundled"},
+        "id": 9,
+    }

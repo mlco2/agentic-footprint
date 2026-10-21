@@ -159,6 +159,13 @@ if ($installNeeded) {
 }
 Add-ToUserPath $BinDir
 
+# Only a published release binary can be self-updated later; a source build
+# or AF_INSTALL_BINARY copy must be updated the way it was installed.
+if ($BinaryUrl -like 'https://github.com/mlco2/agentic-footprint/releases/download/*') {
+    & $target self record-install --binary $target
+    if ($LASTEXITCODE -ne 0) { throw "af self record-install exited with $LASTEXITCODE" }
+}
+
 # --- wizard ---------------------------------------------------------------
 
 if (-not $NoSetup) {

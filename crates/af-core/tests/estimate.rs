@@ -122,8 +122,17 @@ fn estimate_pending_batches_known_and_unknown_models_against_golden_transcript()
     assert_eq!(known_value["remote_region"]["id"], "WOR");
     assert_eq!(known_value["remote_region"]["source"], "test");
 
+    // A failure verdict carries no methodology of its own; it is stamped
+    // with the estimator's, so a later ecologits can re-ask it (and the
+    // same one never does).
     let (unknown_version, unknown_json) = read_estimate_row(&db_path, "evt-unknown");
-    assert_eq!(unknown_version, "ecologits-unknown");
+    assert_eq!(unknown_version, "ecologits-0.11.1");
+    assert_eq!(
+        store
+            .count_llm_calls_to_estimate(Some("ecologits-0.11.1"))
+            .expect("count pending"),
+        0
+    );
     let unknown_value: serde_json::Value = serde_json::from_str(&unknown_json).unwrap();
     assert_eq!(unknown_value["status"], "unknown_model");
 
@@ -140,4 +149,38 @@ fn estimate_pending_batches_known_and_unknown_models_against_golden_transcript()
             "remote_region": {"id": "WOR", "source": "test"}
         })
     );
+}
+
+/// A call ecologits did not know under an older pin is asked again once the
+/// estimator runs a different methodology — the upgrade path for a model
+/// that was unknown when its calls were made.
+#[test]
+fn stale_unknown_model_is_reestimated_under_a_new_methodology() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let db_path = dir.path().join("state.db");
+    let mut store = Store::open(&db_path).expect("open store");
+    store
+        .insert_events(&[llm_call_event("evt-stale", "claude-opus-5-5")])
+        .expect("seed llm_call");
+    store
+        .upsert_estimate(&af_store::ImpactEstimate {
+            event_id: "evt-stale".to_string(),
+            methodology_version: "ecologits-0.11.1".to_string(),
+            json: serde_json::json!({"status": "unknown_model"}),
+        })
+        .expect("seed stale verdict");
+
+    // Default mode: every model is estimable, methodology "test".
+    let script = fake_sidecar_path();
+    let mut sidecar = Sidecar::spawn(&python3(), script.to_str().expect("utf8 path"), &[])
+        .expect("spawn fake_sidecar.py");
+
+    let region = EstimationRegion::explicit("WOR", "test");
+    let outcome = estimate_pending(&mut store, &mut sidecar, &region).expect("estimate_pending");
+    assert_eq!(outcome.estimated, 1, "{outcome:?}");
+
+    let (version, json) = read_estimate_row(&db_path, "evt-stale");
+    assert_eq!(version, "ecologits-test");
+    let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+    assert_eq!(value["status"], "ok");
 }

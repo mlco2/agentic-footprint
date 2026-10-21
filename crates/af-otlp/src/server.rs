@@ -427,7 +427,13 @@ fn handle_logs(mut request: tiny_http::Request, spool_dir: &Path, counters: &Cou
 }
 
 fn respond(request: tiny_http::Request, status: u16, body: &str) {
-    let response = Response::from_string(body.to_string()).with_status_code(status);
+    let mut response = Response::from_string(body.to_string()).with_status_code(status);
+    if let Ok(header) = tiny_http::Header::from_bytes(
+        crate::RECEIVER_HEADER.as_bytes(),
+        env!("CARGO_PKG_VERSION").as_bytes(),
+    ) {
+        response.add_header(header);
+    }
     let _ = request.respond(response);
 }
 

@@ -32,6 +32,7 @@ dependencies = [
  "tempfile",
  "time",
  "tiny_http",
+ "toml",
  "ureq",
  "windows-sys 0.61.2",
 ]

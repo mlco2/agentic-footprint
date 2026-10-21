@@ -22,7 +22,46 @@ pub struct SessionSummary {
     pub last_ts: String,
 }
 
+/// A session with tool activity but no `llm_call` — see
+/// [`Store::sessions_without_llm_calls`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct TelemetryGap {
+    pub session_id: String,
+    /// Action spans other than the `__session__` bootstrap span.
+    pub tool_spans: u64,
+    pub last_ts: String,
+}
+
 impl Store {
+    /// Sessions active since `since` (RFC 3339, compared as stored) that
+    /// recorded tool spans but no `llm_call`: hooks arrived, token
+    /// telemetry never did. The usual cause is an agent process started
+    /// before its OTLP settings were written — hooks reload while it runs,
+    /// its exporter does not. Most recent first.
+    pub fn sessions_without_llm_calls(&self, since: &str) -> Result<Vec<TelemetryGap>> {
+        let mut stmt = self.0.prepare(
+            "SELECT session_id,
+                    SUM(type = 'action_span'
+                        AND COALESCE(json_extract(json, '$.payload.tool_name'), '') <> '__session__'),
+                    MAX(ts)
+             FROM raw_events
+             GROUP BY session_id
+             HAVING SUM(type = 'llm_call') = 0
+                AND SUM(type = 'action_span'
+                        AND COALESCE(json_extract(json, '$.payload.tool_name'), '') <> '__session__') > 0
+                AND MAX(ts) >= ?1
+             ORDER BY MAX(ts) DESC, session_id ASC",
+        )?;
+        let rows = stmt.query_map([since], |row| {
+            Ok(TelemetryGap {
+                session_id: row.get(0)?,
+                tool_spans: row.get::<_, i64>(1)? as u64,
+                last_ts: row.get(2)?,
+            })
+        })?;
+        Ok(rows.collect::<std::result::Result<_, _>>()?)
+    }
+
     pub fn insert_opaque_events(&mut self, events: &[OpaqueEvent]) -> Result<usize> {
         if events.is_empty() {
             return Ok(0);

@@ -236,6 +236,14 @@ case ":${PATH:-}:" in
   *) echo "Add $BIN_DIR to PATH to invoke af directly." ;;
 esac
 
+# Only a published release binary can be self-updated later; a source build
+# or AF_INSTALL_BINARY copy must be updated the way it was installed.
+case "${AF_BINARY_URL:-}" in
+  https://github.com/mlco2/agentic-footprint/releases/download/*)
+    "$DEST" self record-install --binary "$DEST"
+    ;;
+esac
+
 RESOLVED_AF="$(command -v af 2>/dev/null || true)"
 if [ -n "$RESOLVED_AF" ] && [ "$RESOLVED_AF" != "$DEST" ]; then
   echo "Warning: your shell currently resolves af to $RESOLVED_AF" >&2

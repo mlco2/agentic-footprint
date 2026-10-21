@@ -40,7 +40,7 @@ use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use serde_json::{json, Map, Value};
 
 use af_core::{
@@ -86,7 +86,7 @@ const REJECT_HISTORY: usize = 100;
 
 /// The sampler script's path relative to the Python source root
 /// (see [`super::sidecar_script`]).
-const SAMPLER_SCRIPT: &str = "af_sampler/__main__.py";
+pub(crate) const SAMPLER_SCRIPT: &str = "af_sampler/__main__.py";
 
 /// The methodology artifact this build carries.
 ///
@@ -123,6 +123,9 @@ pub struct WatchArgs {
     pub debug: bool,
     pub no_sidecars: bool,
     pub no_otlp: bool,
+    /// Fail instead of continuing without a receiver when the OTLP
+    /// address cannot be bound.
+    pub require_receiver: bool,
     pub otlp_addr: String,
     pub debug_addr: String,
     pub interval: f64,
@@ -229,6 +232,14 @@ pub fn run(state_dir: &Path, args: WatchArgs) -> Result<()> {
                 );
                 Some(handle)
             }
+            // A service manager only retries a process that exits: the
+            // resident service runs with --require-receiver, so a port held
+            // by someone else (a foreground watch, a stale daemon) is
+            // retried until it frees up instead of never being served.
+            Err(err) if args.require_receiver => {
+                eprintln!("af watch: OTLP receiver unavailable ({err:#}); exiting");
+                bail!("OTLP receiver unavailable on {addr}");
+            }
             Err(err) => {
                 eprintln!("af watch: OTLP receiver unavailable ({err:#}); continuing without it");
                 None
@@ -275,6 +286,7 @@ pub fn run(state_dir: &Path, args: WatchArgs) -> Result<()> {
         debug: args.debug,
         no_sidecars: args.no_sidecars || suppress_duplicate_sidecars,
         no_otlp: args.no_otlp,
+        require_receiver: args.require_receiver,
         otlp_addr: args.otlp_addr.clone(),
         debug_addr: args.debug_addr.clone(),
         interval: args.interval,

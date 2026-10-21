@@ -6,7 +6,10 @@ use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
-use af_core::{estimate_events, fetch_zone_factors, EstimationOutcome, EstimationRegion, Zone};
+use af_core::{
+    estimate_events, estimator_methodology, fetch_zone_factors, EstimationOutcome,
+    EstimationRegion, Zone,
+};
 use af_sidecar::Sidecar;
 use af_store::Store;
 
@@ -81,6 +84,8 @@ impl Worker {
             .name("af-estimator".to_string())
             .spawn(move || {
                 let mut resolved_zone: Option<String> = None;
+                // Fixed for the life of this sidecar process.
+                let methodology = estimator_methodology(&mut sidecar);
                 while wake_rx.recv().is_ok() && !worker_stop.load(Ordering::Relaxed) {
                     let Some(config) = worker_config.lock().ok().and_then(|value| value.clone())
                     else {
@@ -101,7 +106,8 @@ impl Worker {
                         update.zone = Some(zone);
                     }
 
-                    let events = match store.llm_calls_without_estimate_limit(Some(ESTIMATE_BATCH))
+                    let events = match store
+                        .llm_calls_to_estimate_limit(Some(ESTIMATE_BATCH), methodology.as_deref())
                     {
                         Ok(events) => events,
                         Err(error) => {
@@ -119,12 +125,15 @@ impl Worker {
                             &mut sidecar,
                             &config.remote_region,
                             &events,
+                            methodology.as_deref(),
                         ) {
                             Ok(outcome) => update.outcome = outcome,
                             Err(error) => update.error = Some(format!("estimation: {error:#}")),
                         }
                     }
-                    update.pending = store.count_llm_calls_without_estimate().unwrap_or(0) as usize;
+                    update.pending = store
+                        .count_llm_calls_to_estimate(methodology.as_deref())
+                        .unwrap_or(0) as usize;
 
                     merge_completion(&worker_completion, &update);
                     update_health(&worker_health, &update);

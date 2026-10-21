@@ -67,7 +67,7 @@ fn venv_dir(state_dir: &Path) -> PathBuf {
 /// The venv's interpreter path: `bin/python` on unix, `Scripts\python.exe`
 /// on Windows. The single source of truth for the layout — provisioning,
 /// resolution, and doctor messages all go through here.
-fn venv_interpreter(venv: &Path) -> PathBuf {
+pub fn venv_interpreter(venv: &Path) -> PathBuf {
     #[cfg(unix)]
     return venv.join("bin").join("python");
     #[cfg(windows)]
@@ -115,25 +115,116 @@ fn uv_on_path() -> bool {
         .unwrap_or(false)
 }
 
-/// Provisions the managed venv with `uv` when available, otherwise with a
-/// matching system Python's standard-library `venv` and `pip` modules.
-pub fn setup(state_dir: &Path) -> Result<()> {
-    let manifest = manifest();
-    let venv = venv_dir(state_dir);
-    let requirements = [
-        requirement("ecologits", &manifest.packages.ecologits),
-        requirement("codecarbon", &manifest.packages.codecarbon),
-        requirement("psutil", &manifest.packages.psutil),
-    ];
-
-    if uv_on_path() {
-        return setup_with_uv(&manifest, &venv, &requirements);
-    }
-
-    setup_with_stdlib(&manifest, &venv, &requirements)
+/// The ecologits/codecarbon versions a managed venv runs. The manifest's
+/// pins are **floors**: the versions this binary was tested with, below
+/// which nothing is installed; `af python upgrade` moves above them. The
+/// venv itself is the record of what is installed (see
+/// [`installed_versions`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeVersions {
+    pub ecologits: String,
+    pub codecarbon: String,
 }
 
-fn setup_with_uv(manifest: &Manifest, venv: &Path, requirements: &[String]) -> Result<()> {
+pub fn floors() -> RuntimeVersions {
+    let manifest = manifest();
+    RuntimeVersions {
+        ecologits: manifest.packages.ecologits,
+        codecarbon: manifest.packages.codecarbon,
+    }
+}
+
+/// Numeric `X.Y.Z…` comparison key; `None` for anything else (a
+/// prerelease like `0.11.4rc1` does not parse, which is how prereleases
+/// are excluded).
+pub fn version_key(version: &str) -> Option<Vec<u64>> {
+    version.split('.').map(|part| part.parse().ok()).collect()
+}
+
+/// Prints the installed ecologits and codecarbon versions, one per line.
+const VERSIONS_SCRIPT: &str =
+    "import importlib.metadata as m; print(m.version('ecologits')); print(m.version('codecarbon'))";
+
+fn parse_versions(stdout: &[u8]) -> Option<RuntimeVersions> {
+    let stdout = std::str::from_utf8(stdout).ok()?;
+    let mut lines = stdout.lines().map(str::trim);
+    let mut next = || {
+        lines
+            .next()
+            .filter(|v| version_key(v).is_some())
+            .map(str::to_string)
+    };
+    Some(RuntimeVersions {
+        ecologits: next()?,
+        codecarbon: next()?,
+    })
+}
+
+/// What the venv at `venv` really has installed, asked of its own
+/// interpreter; `None` when there is no venv or it cannot answer.
+pub fn installed_versions(venv: &Path) -> Option<RuntimeVersions> {
+    let output = Command::new(venv_interpreter(venv))
+        .args(["-c", VERSIONS_SCRIPT])
+        .output()
+        .ok()?;
+    output
+        .status
+        .success()
+        .then(|| parse_versions(&output.stdout))
+        .flatten()
+}
+
+/// Whether every installed version is at least this binary's floor.
+pub fn meets_floors(versions: &RuntimeVersions) -> bool {
+    let floors = floors();
+    [
+        (&versions.ecologits, &floors.ecologits),
+        (&versions.codecarbon, &floors.codecarbon),
+    ]
+    .iter()
+    .all(|(version, floor)| {
+        matches!((version_key(version), version_key(floor)), (Some(v), Some(f)) if v >= f)
+    })
+}
+
+pub fn requirements_for(versions: &RuntimeVersions) -> Vec<String> {
+    vec![
+        requirement("ecologits", &versions.ecologits),
+        requirement("codecarbon", &versions.codecarbon),
+        requirement("psutil", &manifest().packages.psutil),
+    ]
+}
+
+/// Provisions the managed venv at the versions it already has (when they
+/// meet the floors), else at the floors: a re-setup never downgrades what
+/// `af python upgrade` installed, and never stays below this binary's pins.
+pub fn setup(state_dir: &Path) -> Result<()> {
+    let venv = venv_dir(state_dir);
+    let versions = installed_versions(&venv)
+        .filter(meets_floors)
+        .unwrap_or_else(floors);
+    provision(&venv, &requirements_for(&versions), None)
+}
+
+/// Creates (or refreshes) the venv at `venv` with exactly `requirements`,
+/// with `uv` when available, otherwise with a matching system Python's
+/// standard-library `venv` and `pip` modules. `exclude_newer` (RFC 3339)
+/// cools transitive dependencies too, and is only honored with uv; pip has
+/// no equivalent.
+pub fn provision(venv: &Path, requirements: &[String], exclude_newer: Option<&str>) -> Result<()> {
+    let manifest = manifest();
+    if uv_on_path() {
+        return setup_with_uv(&manifest, venv, requirements, exclude_newer);
+    }
+    setup_with_stdlib(&manifest, venv, requirements)
+}
+
+fn setup_with_uv(
+    manifest: &Manifest,
+    venv: &Path,
+    requirements: &[String],
+    exclude_newer: Option<&str>,
+) -> Result<()> {
     let venv_status = Command::new("uv")
         .args(["venv", "--python", &manifest.python.version])
         .arg(venv)
@@ -151,6 +242,12 @@ fn setup_with_uv(manifest: &Manifest, venv: &Path, requirements: &[String]) -> R
     let install_status = Command::new("uv")
         .args(["pip", "install", "--python"])
         .arg(&venv_python_path)
+        .args(
+            exclude_newer
+                .map(|cutoff| ["--exclude-newer", cutoff])
+                .into_iter()
+                .flatten(),
+        )
         .args(requirements)
         .status()
         .context("failed to run `uv pip install`")?;
@@ -243,70 +340,84 @@ pub struct DoctorFinding {
 
 /// Diagnoses the managed venv under `state_dir`, returning findings
 /// ordered most-severe first (`Error` before `Warn`). An empty result
-/// means everything checked out healthy.
-///
-/// Checks, in order:
-/// 1. `state_dir/venv` exists (Error if missing).
-/// 2. `state_dir/venv/bin/python` exists and is executable (Error if not;
-///    only checked when the venv dir itself exists).
-/// 3. `import ecologits, codecarbon, psutil` succeeds under the venv
-///    interpreter (Error if not; only run when step 3 passed).
+/// means everything checked out healthy. See [`runtime_status`].
 pub fn doctor(state_dir: &Path) -> Vec<DoctorFinding> {
-    let mut findings = Vec::new();
-
-    findings.extend(venv_finding(state_dir));
-
+    let mut findings: Vec<DoctorFinding> = runtime_status(state_dir).err().into_iter().collect();
     findings.sort_by_key(|f| f.severity);
     findings
 }
 
-/// Steps 2–4 of [`doctor`]: the venv chain, which reports **at most one**
-/// finding because each step is a precondition of the next — an
-/// interpreter that isn't there cannot also fail an import check, and
-/// listing both would invent a second problem out of one.
+/// The managed venv's installed versions, or the first thing wrong with
+/// it. Each step is a precondition of the next, so there is **at most one**
+/// finding — an interpreter that isn't there cannot also fail an import
+/// check, and listing both would invent a second problem out of one:
 ///
-/// `None` means the venv is healthy.
-fn venv_finding(state_dir: &Path) -> Option<DoctorFinding> {
+/// 1. `state_dir/venv` exists;
+/// 2. its interpreter exists and is executable;
+/// 3. `import ecologits, codecarbon, psutil` succeeds and reports both
+///    versions (one interpreter run);
+/// 4. those versions meet this binary's floors.
+pub fn runtime_status(state_dir: &Path) -> std::result::Result<RuntimeVersions, DoctorFinding> {
+    let error = |message: String, fix_hint: &str| DoctorFinding {
+        severity: Severity::Error,
+        message,
+        fix_hint: fix_hint.to_string(),
+    };
     let venv = venv_dir(state_dir);
     if !venv.exists() {
-        return Some(DoctorFinding {
-            severity: Severity::Error,
-            message: format!("venv directory missing: {}", venv.display()),
-            fix_hint: "run `af python setup`".to_string(),
-        });
+        return Err(error(
+            format!("venv directory missing: {}", venv.display()),
+            "run `af python setup`",
+        ));
     }
-
     let Some(python) = venv_python(state_dir) else {
-        return Some(DoctorFinding {
-            severity: Severity::Error,
-            message: format!(
+        return Err(error(
+            format!(
                 "venv interpreter missing or not executable: {}",
                 venv_interpreter(&venv).display()
             ),
-            fix_hint: "run `af python setup` to rebuild the venv".to_string(),
-        });
+            "run `af python setup` to rebuild the venv",
+        ));
     };
-
-    match Command::new(&python)
-        .args(["-c", "import ecologits, codecarbon, psutil"])
+    let output = Command::new(&python)
+        .args([
+            "-c",
+            &format!("import ecologits, codecarbon, psutil; {VERSIONS_SCRIPT}"),
+        ])
         .output()
-    {
-        Ok(output) if output.status.success() => None,
-        Ok(output) => Some(DoctorFinding {
-            severity: Severity::Error,
-            message: format!(
+        .map_err(|err| {
+            error(
+                format!("failed to execute {}: {err}", python.display()),
+                "run `af python setup` to rebuild the venv",
+            )
+        })?;
+    if !output.status.success() {
+        return Err(error(
+            format!(
                 "import check failed under {}: {}",
                 python.display(),
                 String::from_utf8_lossy(&output.stderr).trim()
             ),
-            fix_hint: "run `af python setup` to reinstall the pinned packages".to_string(),
-        }),
-        Err(err) => Some(DoctorFinding {
-            severity: Severity::Error,
-            message: format!("failed to execute {}: {err}", python.display()),
-            fix_hint: "run `af python setup` to rebuild the venv".to_string(),
-        }),
+            "run `af python setup` to reinstall the pinned packages",
+        ));
     }
+    let versions = parse_versions(&output.stdout).ok_or_else(|| {
+        error(
+            "cannot read the installed ecologits/codecarbon versions".to_string(),
+            "run `af python setup` to reinstall the pinned packages",
+        )
+    })?;
+    if !meets_floors(&versions) {
+        let floors = floors();
+        return Err(error(
+            format!(
+                "ecologits {} / codecarbon {} is older than this af needs ({} / {})",
+                versions.ecologits, versions.codecarbon, floors.ecologits, floors.codecarbon
+            ),
+            "run `af python setup` to install at least the pinned versions",
+        ));
+    }
+    Ok(versions)
 }
 
 #[cfg(test)]
@@ -314,11 +425,66 @@ mod tests {
     use super::*;
 
     #[test]
+    fn requirements_pin_the_given_versions_and_keep_psutil_open() {
+        let versions = RuntimeVersions {
+            ecologits: "0.11.3".into(),
+            codecarbon: "3.3.1".into(),
+        };
+        assert_eq!(
+            requirements_for(&versions),
+            ["ecologits==0.11.3", "codecarbon==3.3.1", "psutil>=6"]
+        );
+    }
+
+    #[test]
+    fn floors_are_the_manifest_pins() {
+        let floors = floors();
+        assert_eq!(floors.ecologits, manifest().packages.ecologits);
+        assert_eq!(floors.codecarbon, manifest().packages.codecarbon);
+    }
+
+    /// A venv whose interpreter answers the version query with `output`.
+    #[cfg(unix)]
+    fn fake_venv(dir: &Path, script: &str) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+        let venv = dir.join("venv");
+        let python = venv_interpreter(&venv);
+        std::fs::create_dir_all(python.parent().unwrap()).unwrap();
+        std::fs::write(&python, script).unwrap();
+        std::fs::set_permissions(&python, std::fs::Permissions::from_mode(0o755)).unwrap();
+        venv
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn installed_versions_are_read_from_the_venv_itself() {
+        let dir = tempfile::tempdir().unwrap();
+        let venv = fake_venv(dir.path(), "#!/bin/sh\nprintf '0.11.1\\n3.2.8\\n'\n");
+        assert_eq!(
+            installed_versions(&venv),
+            Some(RuntimeVersions {
+                ecologits: "0.11.1".into(),
+                codecarbon: "3.2.8".into(),
+            })
+        );
+        let broken = fake_venv(&dir.path().join("b"), "#!/bin/sh\nexit 1\n");
+        assert_eq!(installed_versions(&broken), None);
+        assert_eq!(installed_versions(&dir.path().join("missing")), None);
+    }
+
+    #[test]
+    fn version_keys_are_numeric_and_reject_prereleases() {
+        assert_eq!(version_key("0.11.10"), Some(vec![0, 11, 10]));
+        assert!(version_key("0.11.10") > version_key("0.11.9"));
+        assert_eq!(version_key("0.11.4rc1"), None);
+    }
+
+    #[test]
     fn manifest_parses_expected_pins() {
         let m = manifest();
         assert_eq!(m.python.version, "3.12");
-        assert_eq!(m.packages.ecologits, "0.11.1");
-        assert_eq!(m.packages.codecarbon, "3.2.8");
+        assert_eq!(m.packages.ecologits, "0.11.2");
+        assert_eq!(m.packages.codecarbon, "3.3.1");
         assert_eq!(m.packages.psutil, ">=6");
     }
 

@@ -16,7 +16,10 @@ use std::time::{Duration, Instant};
 use anyhow::{anyhow, bail, Context, Result};
 use serde_json::Value;
 
-pub use pyenv::{doctor, setup, venv_python, DoctorFinding, Severity};
+pub use pyenv::{
+    doctor, floors, installed_versions, meets_floors, provision, requirements_for, runtime_status,
+    setup, venv_interpreter, venv_python, version_key, DoctorFinding, RuntimeVersions, Severity,
+};
 
 /// Default timeout for [`Sidecar::request`]. Overridable per-instance via
 /// [`Sidecar::set_timeout`] — used by tests to keep the timeout-path test

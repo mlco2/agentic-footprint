@@ -117,8 +117,18 @@ impl LiveWatch {
     /// Spawns `af watch --debug` against `state_dir` with ephemeral debug
     /// and OTLP ports, retrying lost port races.
     pub fn start(state_dir: &Path, extra: &[&str]) -> LiveWatch {
+        LiveWatch::start_with_env(state_dir, extra, &[])
+    }
+
+    /// [`LiveWatch::start`] with extra environment for the watch process
+    /// (a `HOME`, an estimator seam).
+    pub fn start_with_env(
+        state_dir: &Path,
+        extra: &[&str],
+        envs: &[(&str, &std::ffi::OsStr)],
+    ) -> LiveWatch {
         for attempt in 0..5 {
-            let watch = LiveWatch::start_at(state_dir, free_addr(), free_addr(), extra);
+            let watch = LiveWatch::start_at(state_dir, free_addr(), free_addr(), extra, envs);
             match watch.wait_until_bound() {
                 Ok(()) => return watch,
                 Err(stderr) => {
@@ -138,10 +148,12 @@ impl LiveWatch {
         debug_addr: SocketAddr,
         otlp_addr: SocketAddr,
         extra: &[&str],
+        envs: &[(&str, &std::ffi::OsStr)],
     ) -> LiveWatch {
         let bin = assert_cmd::cargo::cargo_bin("af");
         let mut command = Command::new(bin);
         command
+            .envs(envs.iter().copied())
             .env("AF_STATE_DIR", state_dir)
             .args(["watch", "--debug"])
             .args(["--debug-addr", &debug_addr.to_string()])

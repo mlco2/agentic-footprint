@@ -151,3 +151,99 @@ pub fn close(actual: f64, expected: f64, what: &str) {
         "{what}: expected {expected}, got {actual}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Fakes for the network and the managed Python runtime
+// ---------------------------------------------------------------------------
+
+/// Serves `routes` (path -> (status, body)) until the test process exits;
+/// `{base}` in a body is replaced by the server's own URL. Unrouted paths
+/// answer 404.
+pub fn fake_server(routes: Vec<(&'static str, u16, Vec<u8>)>) -> String {
+    use std::io::{Read, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind fake server");
+    let base = format!("http://{}", listener.local_addr().expect("local addr"));
+    let routes: Vec<(String, u16, Vec<u8>)> = routes
+        .into_iter()
+        .map(|(path, status, body)| {
+            let body = match String::from_utf8(body) {
+                Ok(text) => text.replace("{base}", &base).into_bytes(),
+                Err(error) => error.into_bytes(),
+            };
+            (path.to_string(), status, body)
+        })
+        .collect();
+    std::thread::spawn(move || {
+        for mut stream in listener.incoming().flatten() {
+            let mut buffer = [0_u8; 8192];
+            let read = stream.read(&mut buffer).unwrap_or(0);
+            let request = String::from_utf8_lossy(&buffer[..read]);
+            let path = request.split_whitespace().nth(1).unwrap_or("").to_string();
+            let (status, body) = routes
+                .iter()
+                .find(|(route, _, _)| *route == path)
+                .map(|(_, status, body)| (*status, body.clone()))
+                .unwrap_or((404, b"not found".to_vec()));
+            let _ = write!(
+                stream,
+                "HTTP/1.1 {status} X\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            );
+            let _ = stream.write_all(&body);
+        }
+    });
+    base
+}
+
+/// A PyPI JSON document listing `(version, upload time)` releases.
+pub fn pypi_releases(entries: &[(&str, &str)]) -> Vec<u8> {
+    let releases: serde_json::Map<String, serde_json::Value> = entries
+        .iter()
+        .map(|(version, uploaded)| {
+            (
+                version.to_string(),
+                serde_json::json!([{"upload_time_iso_8601": uploaded, "yanked": false}]),
+            )
+        })
+        .collect();
+    serde_json::json!({ "releases": releases })
+        .to_string()
+        .into_bytes()
+}
+
+/// This binary's `(ecologits, codecarbon)` floors, from the manifest it
+/// embeds.
+pub fn floors() -> (String, String) {
+    let manifest: toml::Table = include_str!("../../../../python/manifest.toml")
+        .parse()
+        .expect("python/manifest.toml parses");
+    let pin = |name: &str| {
+        manifest["packages"][name]
+            .as_str()
+            .expect("pinned version")
+            .to_string()
+    };
+    (pin("ecologits"), pin("codecarbon"))
+}
+
+/// A managed venv under `state` whose interpreter answers every import
+/// check and reports these versions on the version query.
+#[cfg(unix)]
+pub fn fake_runtime_with(state: &Path, ecologits: &str, codecarbon: &str) {
+    use std::os::unix::fs::PermissionsExt;
+    let python = state.join("venv/bin/python");
+    fs::create_dir_all(python.parent().expect("venv bin dir")).expect("create venv");
+    fs::write(
+        &python,
+        format!("#!/bin/sh\nprintf '{ecologits}\\n{codecarbon}\\n'\n"),
+    )
+    .expect("write fake interpreter");
+    fs::set_permissions(&python, fs::Permissions::from_mode(0o755)).expect("chmod interpreter");
+}
+
+/// A healthy fake runtime at exactly this binary's floors.
+#[cfg(unix)]
+pub fn fake_runtime(state: &Path) {
+    let (ecologits, codecarbon) = floors();
+    fake_runtime_with(state, &ecologits, &codecarbon);
+}

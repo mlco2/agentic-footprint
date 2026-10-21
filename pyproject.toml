@@ -8,6 +8,13 @@ dependencies = []
 test = [
   "pytest==9.1.1",
 ]
+# Mirrors [packages] in python/manifest.toml (the pins `af` provisions);
+# python/tests/test_model_coverage.py fails if the two drift apart.
+runtime = [
+  "codecarbon==3.3.1",
+  "ecologits==0.11.2",
+  "psutil>=6",
+]
 
 [tool.uv]
 package = false

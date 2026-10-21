@@ -1,0 +1,478 @@
+{
+ "resourceLogs": [
+  {
+   "resource": {
+    "attributes": [
+     {
+      "key": "env",
+      "value": {
+       "stringValue": "dev"
+      }
+     },
+     {
+      "key": "telemetry.sdk.name",
+      "value": {
+       "stringValue": "opentelemetry"
+      }
+     },
+     {
+      "key": "telemetry.sdk.version",
+      "value": {
+       "stringValue": "0.31.0"
+      }
+     },
+     {
+      "key": "host.name",
+      "value": {
+       "stringValue": "host.local"
+      }
+     },
+     {
+      "key": "service.name",
+      "value": {
+       "stringValue": "codex_exec"
+      }
+     },
+     {
+      "key": "telemetry.sdk.language",
+      "value": {
+       "stringValue": "rust"
+      }
+     },
+     {
+      "key": "service.version",
+      "value": {
+       "stringValue": "0.153.2"
+      }
+     }
+    ],
+    "droppedAttributesCount": 0,
+    "entityRefs": []
+   },
+   "scopeLogs": [
+    {
+     "scope": {
+      "name": "codex_otel.log_only",
+      "version": "",
+      "attributes": [],
+      "droppedAttributesCount": 0
+     },
+     "logRecords": [
+      {
+       "timeUnixNano": "0",
+       "observedTimeUnixNano": "1792161446231656000",
+       "severityNumber": 9,
+       "severityText": "INFO",
+       "body": null,
+       "attributes": [
+        {
+         "key": "event.name",
+         "value": {
+          "stringValue": "codex.sse_event"
+         }
+        },
+        {
+         "key": "event.kind",
+         "value": {
+          "stringValue": "response.completed"
+         }
+        },
+        {
+         "key": "input_token_count",
+         "value": {
+          "stringValue": "12275"
+         }
+        },
+        {
+         "key": "output_token_count",
+         "value": {
+          "stringValue": "0"
+         }
+        },
+        {
+         "key": "cached_token_count",
+         "value": {
+          "intValue": "0"
+         }
+        },
+        {
+         "key": "cache_write_token_count",
+         "value": {
+          "intValue": "0"
+         }
+        },
+        {
+         "key": "reasoning_token_count",
+         "value": {
+          "intValue": "0"
+         }
+        },
+        {
+         "key": "tool_token_count",
+         "value": {
+          "stringValue": "12275"
+         }
+        },
+        {
+         "key": "event.timestamp",
+         "value": {
+          "stringValue": "2026-10-16T14:37:26.231Z"
+         }
+        },
+        {
+         "key": "conversation.id",
+         "value": {
+          "stringValue": "01a14525-5c46-74a2-9da1-5f4349e45cdb"
+         }
+        },
+        {
+         "key": "app.version",
+         "value": {
+          "stringValue": "0.153.2"
+         }
+        },
+        {
+         "key": "auth_mode",
+         "value": {
+          "stringValue": "Chatgpt"
+         }
+        },
+        {
+         "key": "originator",
+         "value": {
+          "stringValue": "codex_exec"
+         }
+        },
+        {
+         "key": "user.account_id",
+         "value": {
+          "stringValue": "00000000-0000-4000-8000-000000000000"
+         }
+        },
+        {
+         "key": "user.email",
+         "value": {
+          "stringValue": "user@example.com"
+         }
+        },
+        {
+         "key": "terminal.type",
+         "value": {
+          "stringValue": "ghostty/1.3.1"
+         }
+        },
+        {
+         "key": "model",
+         "value": {
+          "stringValue": "gpt-6-astra"
+         }
+        },
+        {
+         "key": "slug",
+         "value": {
+          "stringValue": "gpt-6-astra"
+         }
+        }
+       ],
+       "droppedAttributesCount": 0,
+       "flags": 0,
+       "traceId": "",
+       "spanId": "",
+       "eventName": "event otel/src/events/session_telemetry.rs:1012"
+      },
+      {
+       "timeUnixNano": "0",
+       "observedTimeUnixNano": "1792161446231706000",
+       "severityNumber": 9,
+       "severityText": "INFO",
+       "body": null,
+       "attributes": [
+        {
+         "key": "event.name",
+         "value": {
+          "stringValue": "codex.startup_phase"
+         }
+        },
+        {
+         "key": "startup.phase",
+         "value": {
+          "stringValue": "startup_prewarm_websocket_warmup"
+         }
+        },
+        {
+         "key": "duration_ms",
+         "value": {
+          "stringValue": "3009"
+         }
+        },
+        {
+         "key": "event.timestamp",
+         "value": {
+          "stringValue": "2026-10-16T14:37:26.231Z"
+         }
+        },
+        {
+         "key": "conversation.id",
+         "value": {
+          "stringValue": "01a14525-5c46-74a2-9da1-5f4349e45cdb"
+         }
+        },
+        {
+         "key": "app.version",
+         "value": {
+          "stringValue": "0.153.2"
+         }
+        },
+        {
+         "key": "auth_mode",
+         "value": {
+          "stringValue": "Chatgpt"
+         }
+        },
+        {
+         "key": "originator",
+         "value": {
+          "stringValue": "codex_exec"
+         }
+        },
+        {
+         "key": "user.account_id",
+         "value": {
+          "stringValue": "00000000-0000-4000-8000-000000000000"
+         }
+        },
+        {
+         "key": "user.email",
+         "value": {
+          "stringValue": "user@example.com"
+         }
+        },
+        {
+         "key": "terminal.type",
+         "value": {
+          "stringValue": "ghostty/1.3.1"
+         }
+        },
+        {
+         "key": "model",
+         "value": {
+          "stringValue": "gpt-6-astra"
+         }
+        },
+        {
+         "key": "slug",
+         "value": {
+          "stringValue": "gpt-6-astra"
+         }
+        }
+       ],
+       "droppedAttributesCount": 0,
+       "flags": 0,
+       "traceId": "",
+       "spanId": "",
+       "eventName": "event otel/src/events/session_telemetry.rs:250"
+      },
+      {
+       "timeUnixNano": "0",
+       "observedTimeUnixNano": "1792161446232436000",
+       "severityNumber": 9,
+       "severityText": "INFO",
+       "body": null,
+       "attributes": [
+        {
+         "key": "event.name",
+         "value": {
+          "stringValue": "codex.startup_phase"
+         }
+        },
+        {
+         "key": "startup.phase",
+         "value": {
+          "stringValue": "startup_prewarm_total"
+         }
+        },
+        {
+         "key": "startup.status",
+         "value": {
+          "stringValue": "ready"
+         }
+        },
+        {
+         "key": "duration_ms",
+         "value": {
+          "stringValue": "7402"
+         }
+        },
+        {
+         "key": "event.timestamp",
+         "value": {
+          "stringValue": "2026-10-16T14:37:26.232Z"
+         }
+        },
+        {
+         "key": "conversation.id",
+         "value": {
+          "stringValue": "01a14525-5c46-74a2-9da1-5f4349e45cdb"
+         }
+        },
+        {
+         "key": "app.version",
+         "value": {
+          "stringValue": "0.153.2"
+         }
+        },
+        {
+         "key": "auth_mode",
+         "value": {
+          "stringValue": "Chatgpt"
+         }
+        },
+        {
+         "key": "originator",
+         "value": {
+          "stringValue": "codex_exec"
+         }
+        },
+        {
+         "key": "user.account_id",
+         "value": {
+          "stringValue": "00000000-0000-4000-8000-000000000000"
+         }
+        },
+        {
+         "key": "user.email",
+         "value": {
+          "stringValue": "user@example.com"
+         }
+        },
+        {
+         "key": "terminal.type",
+         "value": {
+          "stringValue": "ghostty/1.3.1"
+         }
+        },
+        {
+         "key": "model",
+         "value": {
+          "stringValue": "gpt-6-astra"
+         }
+        },
+        {
+         "key": "slug",
+         "value": {
+          "stringValue": "gpt-6-astra"
+         }
+        }
+       ],
+       "droppedAttributesCount": 0,
+       "flags": 0,
+       "traceId": "",
+       "spanId": "",
+       "eventName": "event otel/src/events/session_telemetry.rs:250"
+      },
+      {
+       "timeUnixNano": "0",
+       "observedTimeUnixNano": "1792161446232465000",
+       "severityNumber": 9,
+       "severityText": "INFO",
+       "body": null,
+       "attributes": [
+        {
+         "key": "event.name",
+         "value": {
+          "stringValue": "codex.startup_phase"
+         }
+        },
+        {
+         "key": "startup.phase",
+         "value": {
+          "stringValue": "startup_prewarm_resolve"
+         }
+        },
+        {
+         "key": "startup.status",
+         "value": {
+          "stringValue": "ready"
+         }
+        },
+        {
+         "key": "duration_ms",
+         "value": {
+          "stringValue": "7370"
+         }
+        },
+        {
+         "key": "event.timestamp",
+         "value": {
+          "stringValue": "2026-10-16T14:37:26.232Z"
+         }
+        },
+        {
+         "key": "conversation.id",
+         "value": {
+          "stringValue": "01a14525-5c46-74a2-9da1-5f4349e45cdb"
+         }
+        },
+        {
+         "key": "app.version",
+         "value": {
+          "stringValue": "0.153.2"
+         }
+        },
+        {
+         "key": "auth_mode",
+         "value": {
+          "stringValue": "Chatgpt"
+         }
+        },
+        {
+         "key": "originator",
+         "value": {
+          "stringValue": "codex_exec"
+         }
+        },
+        {
+         "key": "user.account_id",
+         "value": {
+          "stringValue": "00000000-0000-4000-8000-000000000000"
+         }
+        },
+        {
+         "key": "user.email",
+         "value": {
+          "stringValue": "user@example.com"
+         }
+        },
+        {
+         "key": "terminal.type",
+         "value": {
+          "stringValue": "ghostty/1.3.1"
+         }
+        },
+        {
+         "key": "model",
+         "value": {
+          "stringValue": "gpt-6-astra"
+         }
+        },
+        {
+         "key": "slug",
+         "value": {
+          "stringValue": "gpt-6-astra"
+         }
+        }
+       ],
+       "droppedAttributesCount": 0,
+       "flags": 0,
+       "traceId": "",
+       "spanId": "",
+       "eventName": "event otel/src/events/session_telemetry.rs:250"
+      }
+     ],
+     "schemaUrl": ""
+    }
+   ],
+   "schemaUrl": ""
+  }
+ ]
+}

@@ -623,3 +623,129 @@ fn declared_geo_zones_are_distinct_sorted_and_skip_sessions_without_one() {
         vec!["FRA".to_string(), "USA".to_string()]
     );
 }
+
+fn estimate(event_id: &str, version: &str, status: &str) -> af_store::ImpactEstimate {
+    af_store::ImpactEstimate {
+        event_id: event_id.to_string(),
+        methodology_version: version.to_string(),
+        json: serde_json::json!({"status": status}),
+    }
+}
+
+/// An `unknown_model`/`missing_zone` verdict belongs to the methodology
+/// that gave it: once the estimator runs a different ecologits version the
+/// call is worth asking about again. Without this, a model added in a
+/// later ecologits release stayed unknown for every call made before the
+/// upgrade.
+#[test]
+fn failed_estimates_from_another_methodology_are_pending_again() {
+    let mut store = Store::open(Path::new(":memory:")).expect("open in-memory store");
+    let ids = [
+        "evt-new",
+        "evt-ok-old",
+        "evt-unknown-old",
+        "evt-zone-old",
+        "evt-unknown-legacy",
+        "evt-unknown-current",
+        "evt-error-old",
+    ];
+    let events: Vec<Envelope> = ids
+        .iter()
+        .map(|id| llm_call_envelope(id, "session-1"))
+        .collect();
+    store.insert_events(&events).expect("insert events");
+    for row in [
+        estimate("evt-ok-old", "ecologits-0.11.1", "ok"),
+        estimate("evt-unknown-old", "ecologits-0.11.1", "unknown_model"),
+        estimate("evt-zone-old", "ecologits-0.11.1", "missing_zone"),
+        // Rows written before failure verdicts carried a version.
+        estimate("evt-unknown-legacy", "ecologits-unknown", "unknown_model"),
+        estimate("evt-unknown-current", "ecologits-0.11.2", "unknown_model"),
+        estimate("evt-error-old", "ecologits-0.11.1", "error"),
+    ] {
+        store.upsert_estimate(&row).expect("upsert estimate");
+    }
+
+    let pending: Vec<String> = store
+        .llm_calls_to_estimate_limit(None, Some("ecologits-0.11.2"))
+        .expect("query pending")
+        .into_iter()
+        .map(|event| event.event_id)
+        .collect();
+    assert_eq!(
+        pending,
+        // (ts, event_id) order; every fixture shares one ts.
+        [
+            "evt-new",
+            "evt-unknown-legacy",
+            "evt-unknown-old",
+            "evt-zone-old"
+        ]
+    );
+    assert_eq!(
+        store
+            .count_llm_calls_to_estimate(Some("ecologits-0.11.2"))
+            .expect("count pending"),
+        4
+    );
+
+    // Without a known current methodology nothing is re-queued.
+    assert_eq!(
+        store
+            .count_llm_calls_to_estimate(None)
+            .expect("count pending"),
+        1
+    );
+}
+
+fn span_envelope(event_id: &str, session_id: &str, ts: &str, tool_name: &str) -> Envelope {
+    let mut span = fixtures::action_span(event_id, ts, ts);
+    span.tool_name = tool_name.to_string();
+    fixtures::envelope(event_id, session_id, ts, Payload::ActionSpan(span))
+}
+
+/// A Claude Code process started before telemetry was configured keeps
+/// firing hooks (they reload live) but never exports token usage: its
+/// sessions show tool activity and no llm_call. `af doctor` surfaces them.
+#[test]
+fn sessions_with_tool_activity_but_no_llm_calls_are_telemetry_gaps() {
+    let mut store = Store::open(Path::new(":memory:")).expect("open in-memory store");
+    store
+        .insert_events(&[
+            // Gap: two tool spans, no llm_call.
+            span_envelope(
+                "gap-boot",
+                "sess-gap",
+                "2026-10-10T10:00:00Z",
+                "__session__",
+            ),
+            span_envelope("gap-1", "sess-gap", "2026-10-10T10:01:00Z", "Bash"),
+            span_envelope("gap-2", "sess-gap", "2026-10-10T10:02:00Z", "Edit"),
+            // Healthy: tool span and llm_call.
+            span_envelope("ok-1", "sess-ok", "2026-10-10T10:01:00Z", "Bash"),
+            fixtures::envelope(
+                "ok-call",
+                "sess-ok",
+                "2026-10-10T10:01:30Z",
+                Payload::LlmCall(fixtures::llm_call()),
+            ),
+            // Empty session: only the bootstrap span.
+            span_envelope(
+                "empty-boot",
+                "sess-empty",
+                "2026-10-10T10:00:00Z",
+                "__session__",
+            ),
+            // Gap, but older than the window.
+            span_envelope("old-1", "sess-old", "2026-09-01T10:00:00Z", "Bash"),
+        ])
+        .expect("insert events");
+
+    let gaps = store
+        .sessions_without_llm_calls("2026-10-01T00:00:00Z")
+        .expect("query gaps");
+    assert_eq!(gaps.len(), 1, "{gaps:?}");
+    assert_eq!(gaps[0].session_id, "sess-gap");
+    assert_eq!(gaps[0].tool_spans, 2);
+    assert_eq!(gaps[0].last_ts, "2026-10-10T10:02:00Z");
+}

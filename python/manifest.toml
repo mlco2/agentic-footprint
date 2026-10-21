@@ -2,14 +2,16 @@
 #
 # `crates/af-sidecar` embeds this file at compile time (`include_str!`) so
 # the `af` binary is self-contained — no external file lookup at runtime.
-# Bumping a pin here and rebuilding is the only supported way to change
-# versions; sidecar protocol and provisioning are owned by the Rust control
-# plane and documented in docs/api-boundaries.md.
+# These are floors: the versions this binary is tested with. `af python
+# upgrade` (run by `af self update`) installs newer releases outside the
+# 7-day cooldown above them; nothing is ever installed below them. Sidecar protocol and provisioning
+# are owned by the Rust control plane and documented in
+# docs/api-boundaries.md.
 
 [python]
 version = "3.12"
 
 [packages]
-ecologits = "0.11.1"
-codecarbon = "3.2.8"
+ecologits = "0.11.2"
+codecarbon = "3.3.1"
 psutil = ">=6"

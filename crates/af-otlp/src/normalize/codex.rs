@@ -123,7 +123,7 @@ impl CodexNormalizer {
             return;
         };
         if let Ok(mut cache) = self.providers.lock() {
-            cache.insert(crate::sanitize_id(&conversation), provider);
+            cache.insert(crate::sanitize_id(&conversation), provider_id(&provider));
         }
     }
 
@@ -138,6 +138,12 @@ impl CodexNormalizer {
             })
             .unwrap_or_else(|| "unknown".to_string())
     }
+}
+
+/// Codex reports the provider's display name (`"OpenAI"`); the estimator's
+/// model registry is keyed by lowercase provider ids (`"openai"`).
+fn provider_id(display_name: &str) -> String {
+    display_name.trim().to_ascii_lowercase()
 }
 
 fn map_session(record: &LogRecord, index: usize) -> Option<Envelope> {
@@ -402,6 +408,34 @@ mod tests {
             panic!("expected llm_call payload");
         };
         assert_eq!(call.provider, "ollama");
+    }
+
+    #[test]
+    fn provider_display_name_is_normalized_to_the_estimator_id() {
+        // Codex 0.153 sends the provider's display name ("OpenAI"); the
+        // estimator's registry is keyed by lowercase ids ("openai"), so
+        // the raw value made every Codex call `unknown_model`.
+        let normalizer = CodexNormalizer::default();
+        let starts = record_with(&[
+            ("event.name", "codex.conversation_starts"),
+            ("conversation.id", "conv-2"),
+            ("provider_name", "OpenAI"),
+        ]);
+        normalizer.normalize(&starts, 0);
+        let completed = record_with(&[
+            ("event.name", "codex.sse_event"),
+            ("event.kind", "response.completed"),
+            ("conversation.id", "conv-2"),
+            ("model", "gpt-5.5"),
+            ("output_token_count", "9"),
+        ]);
+        let RecordOutcome::Envelope(envelope) = normalizer.normalize(&completed, 1) else {
+            panic!("expected llm_call envelope");
+        };
+        let Payload::LlmCall(call) = &envelope.payload else {
+            panic!("expected llm_call payload");
+        };
+        assert_eq!(call.provider, "openai");
     }
 
     #[test]

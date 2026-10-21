@@ -159,15 +159,32 @@ impl Store {
     /// The oldest pending `llm_call` events, capped for a bounded resident
     /// worker. `None` preserves the full synchronous report/replay behavior.
     pub fn llm_calls_without_estimate_limit(&self, limit: Option<usize>) -> Result<Vec<Envelope>> {
+        self.llm_calls_to_estimate_limit(limit, None)
+    }
+
+    /// The estimator's work queue: `llm_call` events with no estimate, plus
+    /// — when `current_methodology` (e.g. `"ecologits-0.11.2"`) is known —
+    /// events whose `unknown_model`/`missing_zone` verdict was given under
+    /// a different methodology version. Those verdicts are facts about the
+    /// ecologits release that gave them (its model registry, its zones),
+    /// so a newer release deserves the question again. Successful
+    /// estimates and transient `error`s are never re-queued here.
+    pub fn llm_calls_to_estimate_limit(
+        &self,
+        limit: Option<usize>,
+        current_methodology: Option<&str>,
+    ) -> Result<Vec<Envelope>> {
         let limit = limit.map(|value| value.min(i64::MAX as usize) as i64);
-        let mut stmt = self.0.prepare(
+        let mut stmt = self.0.prepare(&format!(
             "SELECT r.json FROM raw_events r
              LEFT JOIN impact_estimates e ON e.event_id = r.event_id
-             WHERE r.type = 'llm_call' AND e.event_id IS NULL
+             WHERE {PENDING_LLM_CALL}
              ORDER BY r.ts ASC, r.event_id ASC
-             LIMIT COALESCE(?1, -1)",
-        )?;
-        let rows = stmt.query_map([limit], |row| row.get::<_, String>(0))?;
+             LIMIT COALESCE(?2, -1)"
+        ))?;
+        let rows = stmt.query_map(params![current_methodology, limit], |row| {
+            row.get::<_, String>(0)
+        })?;
 
         let mut events = Vec::new();
         for row in rows {
@@ -187,13 +204,32 @@ impl Store {
     /// `Vec<Envelope>` just to call `.len()` makes the cost of reporting
     /// "3 calls are pending" scale with a backlog nobody is about to read.
     pub fn count_llm_calls_without_estimate(&self) -> Result<u64> {
+        self.count_llm_calls_to_estimate(None)
+    }
+
+    /// [`Store::llm_calls_to_estimate_limit`]'s count, over the same
+    /// predicate.
+    pub fn count_llm_calls_to_estimate(&self, current_methodology: Option<&str>) -> Result<u64> {
         let count: i64 = self.0.query_row(
-            "SELECT COUNT(*) FROM raw_events r
-             LEFT JOIN impact_estimates e ON e.event_id = r.event_id
-             WHERE r.type = 'llm_call' AND e.event_id IS NULL",
-            [],
+            &format!(
+                "SELECT COUNT(*) FROM raw_events r
+                 LEFT JOIN impact_estimates e ON e.event_id = r.event_id
+                 WHERE {PENDING_LLM_CALL}"
+            ),
+            params![current_methodology],
             |row| row.get(0),
         )?;
         Ok(count as u64)
     }
 }
+
+/// The pending-`llm_call` predicate over `raw_events r LEFT JOIN
+/// impact_estimates e`, with the current methodology version bound as `?1`
+/// (NULL: only never-estimated calls). Shared by the queue and its count so
+/// the two cannot disagree.
+const PENDING_LLM_CALL: &str = "r.type = 'llm_call' AND (
+        e.event_id IS NULL
+        OR (?1 IS NOT NULL
+            AND e.methodology_version <> ?1
+            AND json_extract(e.json, '$.status') IN ('unknown_model', 'missing_zone'))
+    )";

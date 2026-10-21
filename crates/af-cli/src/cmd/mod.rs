@@ -1,13 +1,17 @@
 pub mod debug_frames;
 pub mod debug_server;
+pub mod doctor;
 pub mod estimator;
 pub mod estimator_worker;
 pub mod hook;
+pub mod http;
 pub mod ingest;
 #[cfg(feature = "experimental-opencode")]
 pub mod opencode;
 pub mod python;
+pub mod python_upgrade;
 pub mod report;
+pub mod self_update;
 pub mod service;
 pub mod setup;
 pub mod validate_line;
@@ -16,7 +20,7 @@ pub mod watch;
 use std::path::{Path, PathBuf};
 
 use af_store::Store;
-use anyhow::Result;
+use anyhow::{Context, Result};
 
 /// Compile-time location of this repository's Python sidecar sources. The
 /// PoC ships no installable sidecar package, so a `cargo`-built `af` finds
@@ -50,20 +54,110 @@ pub fn now_rfc3339() -> String {
     af_core::rfc3339_ms(now_ms()).unwrap_or_default()
 }
 
+/// Replaces `path` with `bytes` atomically and durably: a fresh temp file
+/// beside it (keeping the existing file's permissions, `0600` for a new
+/// one), fsynced, renamed over `path`, and on unix the directory fsynced so
+/// the rename itself survives a crash. Creates the parent directory.
+pub fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
+    use std::io::Write;
+    let parent = path.parent().context("path has no parent directory")?;
+    std::fs::create_dir_all(parent)
+        .with_context(|| format!("create directory {}", parent.display()))?;
+    let temporary = path.with_file_name(format!(
+        ".{}.{}.tmp",
+        path.file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("file"),
+        std::process::id()
+    ));
+    let result = (|| -> Result<()> {
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temporary)
+            .with_context(|| format!("create temporary file {}", temporary.display()))?;
+        keep_permissions(&temporary, path)?;
+        file.write_all(bytes)
+            .with_context(|| format!("write temporary file {}", temporary.display()))?;
+        file.sync_all()
+            .with_context(|| format!("sync temporary file {}", temporary.display()))?;
+        std::fs::rename(&temporary, path).with_context(|| format!("replace {}", path.display()))?;
+        // Unix durability idiom only: fsyncing the directory makes the rename
+        // itself durable. Windows can't open a directory as a `File` (the
+        // call fails with PermissionDenied) and offers no equivalent through
+        // safe std, so the rename is as far as durability goes there.
+        #[cfg(unix)]
+        std::fs::File::open(parent)
+            .and_then(|directory| directory.sync_all())
+            .with_context(|| format!("sync directory {}", parent.display()))?;
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(&temporary);
+    }
+    result
+}
+
+#[cfg(unix)]
+fn keep_permissions(temporary: &Path, existing: &Path) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    let mode = std::fs::metadata(existing)
+        .map(|metadata| metadata.permissions().mode())
+        .unwrap_or(0o600);
+    std::fs::set_permissions(temporary, std::fs::Permissions::from_mode(mode & 0o777))
+        .with_context(|| format!("set permissions {}", temporary.display()))
+}
+
+#[cfg(not(unix))]
+fn keep_permissions(_temporary: &Path, _existing: &Path) -> Result<()> {
+    Ok(())
+}
+
+/// The Python sidecar scripts this binary ships, by path under
+/// `state_dir/python`.
+const SIDECAR_SOURCES: &[(&str, &str)] = &[
+    (
+        "af_sampler/__main__.py",
+        include_str!("../../../../python/af_sampler/__main__.py"),
+    ),
+    (
+        "af_estimator/__main__.py",
+        include_str!("../../../../python/af_estimator/__main__.py"),
+    ),
+];
+
 /// Locates one Python sidecar script (`af_sampler/__main__.py`,
-/// `af_estimator/__main__.py`) under `state_dir`.
+/// `af_estimator/__main__.py`) under `state_dir`, first making the
+/// installed copy this binary's own: whoever spawns a sidecar gets the
+/// scripts that match the running `af`, whatever installed or updated it.
 ///
-/// An installed copy under the state dir wins over the in-repo one, so a
-/// packaged deployment never depends on a build-time source path. `None`
-/// when neither exists — every caller here treats a missing sidecar as a
-/// degraded mode with a stated reason, never as an error.
+/// When the state dir cannot be written, the in-repo copy is the fallback
+/// (a `cargo`-built `af`). `None` when neither exists — every caller here
+/// treats a missing sidecar as a degraded mode with a stated reason, never
+/// as an error.
 pub fn sidecar_script(state_dir: &Path, subpath: &str) -> Option<PathBuf> {
     let installed = state_dir.join("python").join(subpath);
-    if installed.is_file() {
+    if let Some((_, source)) = SIDECAR_SOURCES.iter().find(|(path, _)| *path == subpath) {
+        let current = std::fs::read_to_string(&installed).ok();
+        if current.as_deref() == Some(*source)
+            || write_atomic(&installed, source.as_bytes()).is_ok()
+        {
+            return Some(installed);
+        }
+    } else if installed.is_file() {
         return Some(installed);
     }
     let repo = PathBuf::from(REPO_PYTHON).join(subpath);
     repo.is_file().then_some(repo)
+}
+
+/// Installs every sidecar script this binary ships under `state_dir`.
+pub fn install_sidecar_scripts(state_dir: &Path) -> Result<()> {
+    for (subpath, _) in SIDECAR_SOURCES {
+        sidecar_script(state_dir, subpath)
+            .with_context(|| format!("install sidecar script {subpath}"))?;
+    }
+    Ok(())
 }
 
 /// Resolves the local machine grid zone for one pass, most explicit first:
@@ -133,6 +227,21 @@ pub fn resolve_remote_region(flag: Option<&str>) -> af_core::EstimationRegion {
 
 #[cfg(test)]
 mod tests {
+    /// The scripts belong to the binary: whoever spawns a sidecar gets the
+    /// running af's own copy, whatever an older af left in the state dir.
+    #[test]
+    fn sidecar_script_replaces_a_stale_installed_copy_with_this_binarys() {
+        let state = tempfile::tempdir().unwrap();
+        let stale = state.path().join("python/af_estimator/__main__.py");
+        std::fs::create_dir_all(stale.parent().unwrap()).unwrap();
+        std::fs::write(&stale, "# from an older af\n").unwrap();
+        let script = super::sidecar_script(state.path(), "af_estimator/__main__.py").unwrap();
+        assert_eq!(script, stale);
+        assert!(std::fs::read_to_string(&script)
+            .unwrap()
+            .contains("def handle_version"));
+    }
+
     #[test]
     fn timestamps_are_rfc3339_with_milliseconds() {
         assert_eq!(
