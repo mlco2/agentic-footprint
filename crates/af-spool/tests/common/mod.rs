@@ -20,7 +20,7 @@ use std::path::Path;
 /// filename grammar the library no longer implements.
 ///
 /// Note the file itself is **not** created: `tail` tests write their own
-/// content, and `quarantine` never touches the source file at all.
+/// content.
 pub fn spool_file(dir: &Path, collector: &str, session_id: &str) -> SpoolFile {
     SpoolFile {
         collector: collector.to_string(),

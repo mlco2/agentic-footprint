@@ -75,7 +75,7 @@ struct WorkerHandle {
 /// What the receiver has seen since it started.
 ///
 /// Exposed because "the exporter is talking to us" is a different fact from
-/// "events reached the spool", and a debugging surface that cannot tell
+/// "events reached the store", and a debugging surface that cannot tell
 /// them apart cannot answer the first question a user of this receiver
 /// asks. Counted at the HTTP boundary, so a batch that normalized to zero
 /// events still registers as an accepted request.
@@ -98,7 +98,8 @@ impl Counters {
         self.logs_requests.load(Ordering::Relaxed)
     }
 
-    /// Contract #1 events normalized out of those requests and spooled.
+    /// Contract #1 events normalized out of those requests and handed to the
+    /// sink.
     pub fn logs_accepted(&self) -> u64 {
         self.logs_accepted.load(Ordering::Relaxed)
     }
@@ -116,7 +117,7 @@ impl Counters {
     }
 
     /// Valid OTLP log records no installed normalizer claimed. These are not
-    /// malformed and are not quarantined; the count exposes coverage gaps.
+    /// malformed and are not rejected; the count exposes coverage gaps.
     pub fn logs_unclaimed(&self) -> u64 {
         self.logs_unclaimed.load(Ordering::Relaxed)
     }
@@ -132,8 +133,9 @@ impl Counters {
         self.logs_persistence_failed_events.load(Ordering::Relaxed)
     }
 
-    /// `/v1/logs` bodies written to `rejected/`: unparseable JSON, or a
-    /// batch containing at least one dropped record. Counted per body, not
+    /// `/v1/logs` bodies reported to the sink as a metadata-only reject
+    /// (the body itself is not kept): unparseable JSON, too many records, or
+    /// a batch containing at least one dropped record. Counted per body, not
     /// per record.
     pub fn bodies_quarantined(&self) -> u64 {
         self.bodies_quarantined.load(Ordering::Relaxed)
@@ -196,6 +198,13 @@ impl Drop for ServerHandle {
 /// thread. Normalized events and metadata-only rejects are sent to `sink`;
 /// the receiver writes nothing to disk.
 pub fn serve(addr: SocketAddr, sink: SyncSender<Inbound>) -> anyhow::Result<ServerHandle> {
+    // Unauthenticated by design, so reachable only from this machine: the
+    // Host check alone cannot stop a LAN client that sends `Host: 127.0.0.1`.
+    if !addr.ip().is_loopback() {
+        anyhow::bail!(
+            "af-otlp: refusing to listen on {addr}: the receiver serves loopback addresses only"
+        );
+    }
     let server = Server::http(addr)
         .map_err(|err| anyhow::anyhow!("af-otlp: failed to bind {addr}: {err}"))?;
     let bound_addr = server

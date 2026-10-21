@@ -1,11 +1,12 @@
 //! Reducing an untrusted id to one safe path component.
 //!
-//! The OTLP receiver takes `session.id` from an exporter's log attributes
-//! and builds a spool filename out of it. That value is not ours: it is
-//! whatever the agent process put on the wire, and anything that can reach
-//! `127.0.0.1:4318` can put anything there. Unsanitized,
-//! `session.id = "../../../../../.zshrc"` makes the receiver append JSON to
-//! a file outside the spool.
+//! The OTLP receiver takes a session id from an exporter's log attributes
+//! and stores events under it. That value is not ours: it is whatever the
+//! agent process put on the wire, and anything that can reach
+//! `127.0.0.1:4318` can put anything there. The hook, on the other side of
+//! the join, turns the same id into a spool filename, where
+//! `"../../../../../.zshrc"` would name a file outside the spool; so both
+//! reduce it to one safe path component.
 //!
 //! The rule is the same one `collectors/claude-code/af-hook.sh`'s
 //! `sanitize_id()` applies, deliberately: two collectors that disagree

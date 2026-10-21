@@ -18,6 +18,7 @@ mod common;
 
 use std::time::Duration;
 
+use common::collector;
 use common::live::{
     spooled_session_id, state_dir, stored_session_id, wait_until, ClaudeCode, LiveWatch,
 };
@@ -40,13 +41,6 @@ fn has_event(events: &[Value], sid: &str, type_: &str, pred: impl Fn(&Value) -> 
 }
 
 /// The named collector's health row, if present.
-fn collector<'a>(health: &'a Value, name: &str) -> Option<&'a Value> {
-    health["collectors"]
-        .as_array()?
-        .iter()
-        .find(|row| row["name"] == name)
-}
-
 /// Token + span flow with no Python at all (`--no-sidecars`): the fresh
 /// session's hooks and OTEL exports must both reach the debug console, and
 /// nothing may be rejected. Estimates staying pending without the estimator

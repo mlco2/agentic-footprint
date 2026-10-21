@@ -17,9 +17,9 @@ use std::process::Command;
 use std::time::{Duration, SystemTime};
 
 use anyhow::Result;
-use time::OffsetDateTime;
 
-const DEFAULT_LOGS_ENDPOINT: &str = "http://127.0.0.1:4318/v1/logs";
+use super::setup::{self, CodexOtel};
+use super::DEFAULT_LOGS_ENDPOINT;
 
 #[derive(Debug, Clone, clap::Args)]
 pub struct Args {
@@ -140,22 +140,23 @@ pub fn run(state_dir: &Path, args: Args) -> Result<i32> {
 }
 
 /// The per-user files whose telemetry settings each agent reads once, at
-/// start. Only files that carry OTEL configuration count: an unrelated
-/// edit to a file setup never touched says nothing about telemetry.
+/// start. Only files that carry OTEL configuration count, judged the way
+/// `af setup` reads them: an unrelated edit to a file setup never touched
+/// says nothing about telemetry.
 fn startup_configs(home: &Path) -> Vec<StartupConfig> {
-    let candidates = [
+    let candidates: [(&str, PathBuf, SetsOtel); 2] = [
         (
             "claude",
-            home.join(".claude").join("settings.json"),
-            "OTEL_",
+            setup::claude_user_settings(home),
+            claude_sets_otel,
         ),
-        ("codex", super::setup::codex_config_path(home), "otel"),
+        ("codex", setup::codex_config_path(home), codex_sets_otel),
     ];
     candidates
         .into_iter()
-        .filter_map(|(agent, path, marker)| {
+        .filter_map(|(agent, path, has_otel)| {
             let contents = std::fs::read_to_string(&path).ok()?;
-            if !contents.contains(marker) {
+            if !has_otel(&contents) {
                 return None;
             }
             let modified = std::fs::metadata(&path).ok()?.modified().ok()?;
@@ -166,6 +167,17 @@ fn startup_configs(home: &Path) -> Vec<StartupConfig> {
             })
         })
         .collect()
+}
+
+/// Whether a config file's contents carry OTEL configuration.
+type SetsOtel = fn(&str) -> bool;
+
+fn claude_sets_otel(contents: &str) -> bool {
+    serde_json::from_str(contents).is_ok_and(|settings| setup::claude_settings_set_otel(&settings))
+}
+
+fn codex_sets_otel(contents: &str) -> bool {
+    setup::codex_otel_state(contents, DEFAULT_LOGS_ENDPOINT) != CodexOtel::Absent
 }
 
 fn stale_processes<'a>(
@@ -236,19 +248,10 @@ fn parse_etime(value: &str) -> Option<Duration> {
     ))
 }
 
-/// `days` ago, in the second-precision UTC form the store's `ts` column
-/// compares against.
+/// `days` ago, in the fixed-width millisecond UTC form the store's `ts`
+/// column holds, so the two compare as text.
 fn since_timestamp(days: u32) -> String {
-    let at = OffsetDateTime::now_utc() - time::Duration::days(i64::from(days));
-    format!(
-        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z",
-        at.year(),
-        u8::from(at.month()),
-        at.day(),
-        at.hour(),
-        at.minute(),
-        at.second()
-    )
+    af_core::rfc3339_ms(super::now_ms() - i64::from(days) * 86_400_000).unwrap_or_default()
 }
 
 #[cfg(test)]

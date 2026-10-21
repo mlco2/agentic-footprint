@@ -650,7 +650,9 @@ class _PsutilInspector:
             for proc in self._psutil.process_iter(["ppid"]):
                 ppid = proc.info.get("ppid")
                 if ppid is not None:
-                    children.setdefault(ppid, []).append(proc.pid)
+                    # The Process itself, not its pid: it already carries the
+                    # creation time psutil read to identify it.
+                    children.setdefault(ppid, []).append(proc)
             self._children = children
         return self._children
 
@@ -677,18 +679,17 @@ class _PsutilInspector:
         children = self._child_map()
         members, seen, stack = [root], {root.pid}, [root.pid]
         while stack:
-            for child_pid in children.get(stack.pop(), ()):
-                if child_pid in seen:
+            for child in children.get(stack.pop(), ()):
+                if child.pid in seen:
                     continue
-                seen.add(child_pid)
+                seen.add(child.pid)
                 try:
-                    child = psutil.Process(child_pid)
                     if child.create_time() < root_ctime:
                         continue
                 except (psutil.Error, OSError):
                     continue
                 members.append(child)
-                stack.append(child_pid)
+                stack.append(child.pid)
         return members
 
     def __call__(self, pid: int):

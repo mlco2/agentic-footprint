@@ -78,7 +78,13 @@ export class ReportStore {
     const desired = Math.max(this.desiredVersions.get(sessionId) ?? -1, version);
     this.desiredVersions.set(sessionId, desired);
     this.trackSession(sessionId);
-    if (this.focused === undefined || this.focused === sessionId) this.startRefresh(sessionId);
+    if (this.wanted(sessionId)) this.startRefresh(sessionId);
+  }
+
+  /** Whether `sessionId` is to be kept fresh: every session until a view
+   * says which one it shows, then only that one. */
+  private wanted(sessionId: string): boolean {
+    return this.focused === undefined || this.focused === sessionId;
   }
 
   private startRefresh(sessionId: string): void {
@@ -89,7 +95,7 @@ export class ReportStore {
   }
 
   private async refreshSession(sessionId: string): Promise<void> {
-    while (this.desiredVersions.has(sessionId) && (this.focused === undefined || this.focused === sessionId)) {
+    while (this.desiredVersions.has(sessionId) && this.wanted(sessionId)) {
       const desired = this.desiredVersions.get(sessionId) ?? -1;
       try {
         const encoded = encodeURIComponent(sessionId);

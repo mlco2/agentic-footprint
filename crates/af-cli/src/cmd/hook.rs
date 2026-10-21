@@ -149,10 +149,17 @@ pub fn handle(state_dir: &Path, input: &str, now_ms: i64) -> Result<()> {
             // nothing this hook can usefully record.
             if !tool_use_id_raw.is_empty() {
                 let tool_use_id = sanitize_id(&tool_use_id_raw);
-                std::fs::create_dir_all(&openspan_dir)
+                create_private_dir(&openspan_dir)
                     .with_context(|| format!("creating {}", openspan_dir.display()))?;
                 let record = serde_json::json!({"t_start": ts, "tool_name": tool_name});
-                std::fs::write(openspan_dir.join(&tool_use_id), record.to_string())
+                private_file()
+                    .write(true)
+                    .create(true)
+                    .truncate(true)
+                    .open(openspan_dir.join(&tool_use_id))
+                    .and_then(|mut file| {
+                        std::io::Write::write_all(&mut file, record.to_string().as_bytes())
+                    })
                     .context("writing the open-span record")?;
             }
         }
@@ -361,6 +368,29 @@ fn envelope(
     }
 }
 
+/// Creates `dir` and any missing parents owner-only (`0700` on unix), as
+/// the sh shim's `umask 077` does: the hook can be the first thing to
+/// create the state dir, before `af watch` ever restricted it, and what it
+/// writes carries tool inputs. Directories that already exist keep their
+/// mode.
+fn create_private_dir(dir: &Path) -> std::io::Result<()> {
+    let mut builder = std::fs::DirBuilder::new();
+    builder.recursive(true);
+    #[cfg(unix)]
+    std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
+    builder.create(dir)
+}
+
+/// Open options whose newly created file is owner-only (`0600` on unix);
+/// see [`create_private_dir`].
+fn private_file() -> std::fs::OpenOptions {
+    #[cfg_attr(not(unix), allow(unused_mut))]
+    let mut options = std::fs::OpenOptions::new();
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+    options
+}
+
 /// Appends one Contract #1 event line to this session's spool file. A
 /// single write keeps each line complete; collectors never delete spool
 /// lines once written.
@@ -368,11 +398,11 @@ fn emit(state_dir: &Path, session_id: &str, event: &Envelope) -> Result<()> {
     use std::io::Write;
 
     let spool_dir = state_dir.join("spool");
-    std::fs::create_dir_all(&spool_dir)
+    create_private_dir(&spool_dir)
         .with_context(|| format!("creating spool dir {}", spool_dir.display()))?;
     let line = serde_json::to_string(event).context("serializing the event")?;
     let path = spool_dir.join(af_spool::spool_file_name(COLLECTOR_NAME, session_id));
-    let mut file = std::fs::OpenOptions::new()
+    let mut file = private_file()
         .create(true)
         .append(true)
         .open(&path)
@@ -459,10 +489,10 @@ fn log_line(state_dir: &Path, message: &str) {
     use std::io::Write;
 
     let tmp = state_dir.join("tmp");
-    if std::fs::create_dir_all(&tmp).is_err() {
+    if create_private_dir(&tmp).is_err() {
         return;
     }
-    if let Ok(mut file) = std::fs::OpenOptions::new()
+    if let Ok(mut file) = private_file()
         .create(true)
         .append(true)
         .open(tmp.join("hook-errors.log"))

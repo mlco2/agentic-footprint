@@ -5,7 +5,7 @@
 # Distribution-neutral inputs (parameters win over environment variables):
 #   AF_INSTALL_BINARY=C:\path\to\af.exe   install an already-built binary
 #   AF_BINARY_URL=https://.../af.exe      download a release binary directly
-#   AF_BINARY_SHA256=<hex>                optional checksum for AF_BINARY_URL
+#   AF_BINARY_SHA256=<hex>                required SHA-256 of AF_BINARY_URL
 #
 # From a source checkout, nothing is needed:
 #   .\install.ps1        (builds target\release\af.exe with cargo)
@@ -88,16 +88,19 @@ if ($BinaryPath) {
     }
     Copy-Item -LiteralPath $BinaryPath -Destination $staging -Force
 } elseif ($BinaryUrl) {
+    # A URL alone is not a source of trust: whoever serves it decides what
+    # runs next, with the user's permissions.
+    if (-not $BinarySha256) {
+        throw 'AF_BINARY_URL needs AF_BINARY_SHA256, the SHA-256 of what it points at (from the release''s SHA256SUMS); nothing was downloaded'
+    }
     Write-Host "Downloading $BinaryUrl"
     Invoke-WebRequest -Uri $BinaryUrl -OutFile $staging
-    if ($BinarySha256) {
-        $actual = Get-Sha256 $staging
-        if ($actual -ne $BinarySha256.ToLowerInvariant()) {
-            Remove-Item -LiteralPath $staging -Force
-            throw "checksum mismatch for ${BinaryUrl}: expected $BinarySha256, got $actual"
-        }
-        Write-Host 'Checksum verified.'
+    $actual = Get-Sha256 $staging
+    if ($actual -ne $BinarySha256.ToLowerInvariant()) {
+        Remove-Item -LiteralPath $staging -Force
+        throw "checksum mismatch for ${BinaryUrl}: expected $BinarySha256, got $actual"
     }
+    Write-Host 'Checksum verified.'
 } elseif (Test-Path (Join-Path $PSScriptRoot 'Cargo.toml')) {
     Write-Host 'Building af.exe from this checkout (cargo build --release -p af-cli)'
     Push-Location $PSScriptRoot

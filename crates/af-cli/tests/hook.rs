@@ -399,3 +399,55 @@ fn session_ids_are_sanitized_per_the_shared_vectors() {
         assert_eq!(events[0]["session_id"], sanitized);
     }
 }
+
+/// What the hook creates is the user's alone, whatever the inherited
+/// umask: it can run before `af watch` ever restricted the state dir, and a
+/// spool line carries tool inputs. The sh shim's counterpart is its
+/// "Private files" case.
+#[cfg(unix)]
+#[test]
+fn everything_the_hook_creates_is_owner_only() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let parent = state_dir();
+    let state = parent.path().join("fresh-state");
+    run_hook(
+        &state,
+        &json!({"session_id": SESSION, "hook_event_name": "SessionStart"}),
+    );
+    run_hook(
+        &state,
+        &json!({
+            "session_id": SESSION,
+            "hook_event_name": "PreToolUse",
+            "tool_use_id": "toolu_private",
+            "tool_name": "Bash",
+        }),
+    );
+    // Not JSON: the error goes to the hook's log.
+    let mut cmd = Command::cargo_bin("af").unwrap();
+    cmd.env("AF_STATE_DIR", &state)
+        .arg("hook")
+        .write_stdin("not json")
+        .assert()
+        .success();
+
+    let mut created = vec![state.clone()];
+    let mut pending = vec![state.clone()];
+    while let Some(dir) = pending.pop() {
+        for entry in std::fs::read_dir(&dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                pending.push(path.clone());
+            }
+            created.push(path);
+        }
+    }
+    assert!(created.contains(&spool_path(&state, SESSION)));
+    assert!(created.contains(&openspan_path(&state, SESSION, "toolu_private")));
+    assert!(created.contains(&state.join("tmp").join("hook-errors.log")));
+    for path in created {
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode & 0o077, 0, "{} is {mode:o}", path.display());
+    }
+}

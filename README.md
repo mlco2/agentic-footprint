@@ -38,7 +38,9 @@ foreground `af watch` process by default.
 - **License:** [MIT](LICENSE)
 
 Architecture in one line: per-agent **collectors** emit raw facts (tokens, joules,
-action spans) to a local JSONL spool → a standard **Rust control plane** owns all
+action spans) to a local JSONL spool (hooks, the energy sampler) or as OTLP
+telemetry to the local receiver, which stores it directly → a standard
+**Rust control plane** owns all
 estimation methodology (managed Python env running ecologits/codecarbon) and aggregates
 at session/task/tool level → **presentation** layers (statusline, CLI, future
 dashboards) consume the read model.

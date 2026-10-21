@@ -48,6 +48,10 @@
 # timestamp behavior are implemented and tested alongside this collector.
 
 set -u
+# Everything this hook creates is the user's alone: it may run before
+# `af watch` has restricted the state dir, and a spool line carries tool
+# inputs from the session.
+umask 077
 
 SCHEMA_VERSION="0.1.0"
 COLLECTOR_NAME="cc-hooks"

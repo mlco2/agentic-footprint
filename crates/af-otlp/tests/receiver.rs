@@ -929,3 +929,16 @@ fn reject_metadata_stays_small_whatever_the_attribute_names() {
         .iter()
         .all(|key| key.len() <= af_otlp::MAX_ATTRIBUTE_KEY_BYTES));
 }
+
+#[test]
+fn the_receiver_refuses_to_listen_beyond_loopback() {
+    let (tx, _rx) = mpsc::sync_channel(1);
+    for addr in ["0.0.0.0:0", "[::]:0"] {
+        let error = af_otlp::serve(addr.parse().unwrap(), tx.clone())
+            .err()
+            .unwrap_or_else(|| panic!("{addr} was accepted"));
+        assert!(error.to_string().contains("loopback"), "{error:#}");
+    }
+    let handle = af_otlp::serve("127.0.0.1:0".parse().unwrap(), tx).expect("loopback is fine");
+    handle.shutdown();
+}

@@ -7,9 +7,8 @@
 //!
 //! Fixtures are copied into a fresh tempdir spool per test run — never
 //! point `AF_STATE_DIR` at the repo fixtures directly, since ingest mutates
-//! spool-adjacent state (`rejected/`, `state.db`) in place.
+//! spool-adjacent state (`state.db`) in place.
 
-use std::fs;
 use std::path::Path;
 
 use serde_json::Value;
@@ -35,9 +34,19 @@ fn event_counts<'a>(report: &'a Value, session_id: &str) -> &'a serde_json::Map<
         .expect("event_counts is an object")
 }
 
-fn count_rejected_files(state_dir: &Path) -> usize {
-    fs::read_dir(state_dir.join("rejected"))
-        .expect("rejected dir exists")
+/// Spool rejects recorded in the store. Metadata only: there is no column
+/// a raw line could be in, and nothing is written next to the database.
+fn count_spool_rejects(state_dir: &Path) -> usize {
+    assert!(
+        !state_dir.join("rejected").exists(),
+        "rejected lines must not be copied to disk"
+    );
+    af_store::Store::open_read_only(&state_dir.join("state.db"))
+        .expect("open db")
+        .recent_rejects(af_store::REJECT_RING)
+        .expect("read rejects")
+        .iter()
+        .filter(|row| row.source.starts_with("spool:") && row.bytes > 0)
         .count()
 }
 
@@ -71,22 +80,22 @@ fn ingest_pipeline_and_report_facts_summary() {
     );
 
     assert_eq!(
-        count_rejected_files(dir.path()),
+        count_spool_rejects(dir.path()),
         1,
-        "expected only invalid JSON to be quarantined; unknown types are preserved"
+        "expected only invalid JSON to be rejected; unknown types are preserved"
     );
 
     // Second run against the same (now-ingested) spool: offsets have
     // already advanced past every line, including the rejects, so nothing
-    // new is ingested or quarantined and the report output is unchanged.
+    // new is ingested or rejected and the report output is unchanged.
     let second = run_report(dir.path());
     assert_eq!(
         first, second,
         "report output must be idempotent across ingest runs"
     );
     assert_eq!(
-        count_rejected_files(dir.path()),
+        count_spool_rejects(dir.path()),
         1,
-        "second run must not produce additional quarantine files"
+        "second run must not record the reject again"
     );
 }

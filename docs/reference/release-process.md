@@ -28,3 +28,18 @@ Releases are produced only from tags matching `v*.*.*`.
 The comparison proves repeatability inside the pinned release runner image. A
 future higher-assurance step can add independent builders and compare their
 outputs across infrastructures.
+
+## Supply-chain controls
+
+- Every action in `.github/workflows/` is pinned by commit SHA, and checkouts
+  do not persist credentials.
+- The release workflow is read-only by default; only the publishing job is
+  granted `contents: write`, `id-token: write` (for the keyless signature),
+  and `attestations: write`.
+- Each archive, binary, and `SHA256SUMS` gets a Sigstore bundle signed with
+  the workflow's GitHub OIDC identity, plus a GitHub build-provenance
+  attestation. `af self update` verifies the bundle before installing; see
+  [Verify a release](../how-to/verify-release.md).
+- Dependencies come from releases at least seven days old, and CI checks the
+  Rust, console, and Python locks for advisories; see the
+  [developer guide](../contributing/developer-guide.md#dependencies-and-ci-security).

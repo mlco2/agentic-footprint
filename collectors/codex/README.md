@@ -1,11 +1,11 @@
 # Codex collector
 
 For the complete copy-paste setup, verification, privacy, and troubleshooting
-procedure, see
-[`docs/codex-opencode-user-guide.md`](../../docs/codex-opencode-user-guide.md).
+procedure, see [`docs/how-to/codex.md`](../../docs/how-to/codex.md).
 
 Codex uses the existing `af watch` OTLP receiver; no wrapper or app-server
-proxy is required for ordinary CLI/TUI sessions.
+proxy is required for ordinary CLI/TUI sessions. The receiver stores the
+normalized facts directly in the SQLite store; there is no Codex spool file.
 
 Enable native Codex log export to the receiver:
 
@@ -57,4 +57,4 @@ already embed Codex, but it is experimental and is not required by this
 collector.
 
 Receiver degradation and control-plane failures follow the shared
-[`error-handling policy`](../../docs/error-handling.md).
+[`error-handling policy`](../../docs/contributing/error-handling.md).

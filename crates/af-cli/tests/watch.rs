@@ -107,17 +107,22 @@ impl Watch {
         panic!("af watch lost the port race five times running");
     }
 
-    /// `Ok(())` once the debug port accepts a connection, `Err(stderr)` if
-    /// the child instead reported a bind failure or died.
+    /// `Ok(())` once this child says it serves the debug port and the port
+    /// accepts a connection, `Err(stderr)` if the child instead reported a
+    /// bind failure. A connection alone proves nothing: another test's
+    /// `af watch` may hold the port this one failed to bind.
     fn wait_until_bound(&self) -> Result<(), String> {
         let deadline = Instant::now() + Duration::from_secs(20);
+        let advertised = format!("debug console on http://{}/", self.addr);
         while Instant::now() < deadline {
-            if TcpStream::connect_timeout(&self.addr, Duration::from_millis(200)).is_ok() {
-                return Ok(());
-            }
             let stderr = self.stderr();
             if stderr.contains("failed to bind debug server") {
                 return Err(stderr);
+            }
+            if stderr.contains(&advertised)
+                && TcpStream::connect_timeout(&self.addr, Duration::from_millis(200)).is_ok()
+            {
+                return Ok(());
             }
             std::thread::sleep(Duration::from_millis(50));
         }

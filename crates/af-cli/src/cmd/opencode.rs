@@ -319,6 +319,11 @@ struct Checkpoint {
     saved: u64,
     at: Instant,
     events: usize,
+    /// [`CHECKPOINT_INTERVAL`], as a field so a test can count saves
+    /// without racing a real clock.
+    interval: Duration,
+    /// Cursor writes so far.
+    saves: usize,
 }
 
 impl Checkpoint {
@@ -327,6 +332,8 @@ impl Checkpoint {
             saved,
             at: Instant::now(),
             events: 0,
+            interval: CHECKPOINT_INTERVAL,
+            saves: 0,
         }
     }
 
@@ -335,7 +342,7 @@ impl Checkpoint {
             return false;
         }
         self.events += 1;
-        self.events >= CHECKPOINT_EVENTS || self.at.elapsed() >= CHECKPOINT_INTERVAL
+        self.events >= CHECKPOINT_EVENTS || self.at.elapsed() >= self.interval
     }
 
     fn save(
@@ -360,7 +367,11 @@ impl Checkpoint {
             }
         }
         save_cursor(target.path, target.server, session_id, latest, state)?;
-        *self = Checkpoint::new(latest);
+        *self = Checkpoint {
+            interval: self.interval,
+            saves: self.saves + 1,
+            ..Checkpoint::new(latest)
+        };
         Ok(())
     }
 }
@@ -732,9 +743,6 @@ fn load_cursor(path: &Path, server: &str, session_id: &str) -> Result<Option<Cur
     Ok(Some(cursor))
 }
 
-#[cfg(test)]
-static CURSOR_SAVES: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-
 fn save_cursor(
     path: &Path,
     server: &str,
@@ -742,18 +750,6 @@ fn save_cursor(
     after: u64,
     normalizer: &NormalizerState,
 ) -> Result<()> {
-    #[cfg(test)]
-    CURSOR_SAVES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let parent = path.parent().context("OpenCode cursor has no parent")?;
-    fs::create_dir_all(parent)
-        .with_context(|| format!("create cursor directory {}", parent.display()))?;
-    let temporary = path.with_file_name(format!(
-        ".{}.{}.tmp",
-        path.file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or("cursor"),
-        std::process::id()
-    ));
     let value = CursorState {
         version: CURSOR_VERSION,
         server: canonical_server(server).to_string(),
@@ -761,26 +757,10 @@ fn save_cursor(
         after,
         normalizer: normalizer.clone(),
     };
-    let result = (|| -> Result<()> {
-        let mut file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&temporary)
-            .with_context(|| format!("create cursor temporary file {}", temporary.display()))?;
-        serde_json::to_writer(&mut file, &value).context("serialize OpenCode cursor")?;
-        file.write_all(b"\n").context("finish OpenCode cursor")?;
-        file.sync_all().context("sync OpenCode cursor")?;
-        fs::rename(&temporary, path)
-            .with_context(|| format!("replace OpenCode cursor {}", path.display()))?;
-        File::open(parent)
-            .and_then(|directory| directory.sync_all())
-            .with_context(|| format!("sync cursor directory {}", parent.display()))?;
-        Ok(())
-    })();
-    if result.is_err() {
-        let _ = fs::remove_file(&temporary);
-    }
-    result
+    let mut bytes = serde_json::to_vec(&value).context("serialize OpenCode cursor")?;
+    bytes.push(b'\n');
+    super::write_atomic(path, &bytes)
+        .with_context(|| format!("save OpenCode cursor {}", path.display()))
 }
 
 fn spool_path(state_dir: &Path, session_id: &str) -> PathBuf {
@@ -1079,26 +1059,35 @@ data: {"id":"evt_abcdefghijklmnop","type":"session.next.step.ended","durable":{"
                 "data: {{\"id\":\"evt_started_{seq:06}\",\"type\":\"session.next.step.started\",\"durable\":{{\"aggregateID\":\"ses\",\"seq\":{seq}}},\"data\":{{\"timestamp\":{seq},\"sessionID\":\"ses\",\"assistantMessageID\":\"msg{seq}\",\"model\":{{\"providerID\":\"p\",\"id\":\"m\"}}}}}}\n\n"
             ));
         }
-        let before = CURSOR_SAVES.load(std::sync::atomic::Ordering::Relaxed);
         let mut normalizer = Normalizer::new(None, NormalizerState::default());
         let mut latest = 0;
-        collect_reader(
+        let target = CursorTarget {
+            path: &cursor,
+            server: "http://server",
+        };
+        // What `collect_reader` does, with a clock that never fires, so
+        // the count is the event batches' alone.
+        let mut checkpoint = Checkpoint::new(latest);
+        checkpoint.interval = Duration::MAX;
+        read_frames(
             BufReader::new(Cursor::new(frames)),
             &mut normalizer,
             &spool,
             "ses",
             &mut latest,
-            Some(CursorTarget {
-                path: &cursor,
-                server: "http://server",
-            }),
+            Some(target),
+            &mut checkpoint,
         )
         .unwrap();
-        let saves = CURSOR_SAVES.load(std::sync::atomic::Ordering::Relaxed) - before;
+        checkpoint
+            .save(target, &spool, "ses", latest, &normalizer.state)
+            .unwrap();
         assert_eq!(latest, 500);
-        // Tests run in parallel and share the counter, so bound it loosely:
-        // per event would be 500.
-        assert!(saves <= 20, "{saves} saves for 500 events");
+        assert_eq!(
+            checkpoint.saves,
+            500 / CHECKPOINT_EVENTS + 1,
+            "one save per batch and one at the end, not one per event"
+        );
         let saved = load_cursor(&cursor, "http://server", "ses")
             .unwrap()
             .unwrap();

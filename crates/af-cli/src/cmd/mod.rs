@@ -29,6 +29,11 @@ use anyhow::{Context, Result};
 /// its Python next to its own source tree.
 const REPO_PYTHON: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../python");
 
+/// The OTLP HTTP/JSON logs endpoint `af setup` configures agents with and
+/// `af watch` serves by default — one value, so setup, the service and
+/// doctor cannot each assume a different one.
+pub const DEFAULT_LOGS_ENDPOINT: &str = "http://127.0.0.1:4318/v1/logs";
+
 /// Fallback electricity-mix zone: ecologits' world-average mix. Used only
 /// when nothing else declares one, and recorded as `source: "default"` on
 /// every join so a defaulted figure is never mistaken for a declared one.

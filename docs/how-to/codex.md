@@ -70,7 +70,8 @@ inspect raw facts without sampling or estimation:
 
 Keep this process running. If port `4318` is already used, select another
 loopback address with `--otlp-addr` and use the same address in the Codex
-configuration below.
+configuration below. `af watch` refuses a non-loopback `--otlp-addr` or
+`--debug-addr`: neither listener has authentication.
 
 The installed launchd/systemd service runs without `--debug`. On macOS inspect
 `$AF_STATE_DIR/logs/`; on Linux use
@@ -177,11 +178,20 @@ invocation.
 
 ### Verify Codex export
 
-After a Codex turn, confirm that a spool file exists:
+Codex telemetry is not written to the spool: the receiver in `af watch`
+normalizes it and stores it directly in `$AF_STATE_DIR/state.db`, once a
+minute (a new session is written at once). After a Codex turn, wait for that
+flush, then check:
 
 ```sh
-ls "$AF_STATE_DIR"/spool/otlp-codex.*.jsonl
+"$AF_BIN" report --format text
+"$AF_BIN" doctor
 ```
+
+The text report's `EVENT_COUNTS` column should include `llm_call=` for the
+session. `af doctor` checks the
+receiver and flags a running `codex` process that started before its
+telemetry configuration last changed.
 
 With `af watch --debug`, open the debug console:
 

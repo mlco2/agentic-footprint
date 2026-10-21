@@ -1,8 +1,9 @@
 # OpenCode collector
 
-For the complete server, session discovery, collector, verification, and
-troubleshooting procedure, see
-[`docs/codex-opencode-user-guide.md`](../../docs/codex-opencode-user-guide.md).
+OpenCode collection is experimental: `af collect opencode` exists only in a
+build with `--features experimental-opencode`, and there is no user guide for
+it yet. The live test procedure is in
+[`docs/contributing/testing-live.md`](../../docs/contributing/testing-live.md).
 
 `af collect opencode` subscribes to OpenCode's durable per-session SSE route
 and appends raw Contract #1 facts to
@@ -30,15 +31,17 @@ session ID. The cursor contains both the exclusive durable sequence and any
 unmatched step/tool/shell starts needed to settle events after a restart.
 Live mode reconnects indefinitely with bounded exponential backoff and jitter.
 
-The cursor advances only after all Contract #1 facts derived from an event have
-been fully appended. A replayed or regressed sequence is logged and skipped; a
+The cursor never names a sequence whose facts are not on disk. It is
+checkpointed at most once a second or every 64 durable events, and when the
+stream ends; each checkpoint fsyncs the spool first, then replaces the cursor
+atomically. A replayed or regressed sequence is logged and skipped; a
 sequence gap is logged before processing continues. Corrupt or mismatched
 cursor state fails closed with a clear error. `--after` explicitly overrides
 the saved cursor and starts with empty pending lifecycle state.
 
-A process crash between a successful spool append and the following atomic
-cursor replace can replay the last fact. Stable OpenCode event IDs keep that
-at-least-once boundary deduplicable downstream; advancing before append would
+A process crash between checkpoints replays the events since the last one.
+Stable OpenCode event IDs keep that at-least-once boundary deduplicable (the
+store ignores an event ID it already holds); advancing before append would
 instead risk permanent fact loss.
 
 ## Offline fixtures
@@ -61,4 +64,4 @@ collectors/opencode/test_collector.sh
 ```
 
 Collector degradation and control-plane failures follow the shared
-[`error-handling policy`](../../docs/error-handling.md).
+[`error-handling policy`](../../docs/contributing/error-handling.md).

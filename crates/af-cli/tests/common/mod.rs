@@ -79,7 +79,7 @@ pub fn seed_state_dir_with_adversarial() -> tempfile::TempDir {
 }
 
 /// Never point `AF_STATE_DIR` at the repo fixtures directly: ingest mutates
-/// spool-adjacent state (`rejected/`, `state.db`) in place.
+/// spool-adjacent state (`state.db`) in place.
 fn copy_fixture(state_dir: &Path, from: &str, to: &str) {
     let spool_dir = state_dir.join("spool");
     fs::create_dir_all(&spool_dir).expect("create spool dir");
@@ -214,16 +214,28 @@ pub fn pypi_releases(entries: &[(&str, &str)]) -> Vec<u8> {
 /// This binary's `(ecologits, codecarbon)` floors, from the manifest it
 /// embeds.
 pub fn floors() -> (String, String) {
-    let manifest: toml::Table = include_str!("../../../../python/manifest.toml")
-        .parse()
-        .expect("python/manifest.toml parses");
-    let pin = |name: &str| {
-        manifest["packages"][name]
-            .as_str()
-            .expect("pinned version")
-            .to_string()
-    };
-    (pin("ecologits"), pin("codecarbon"))
+    let floors = af_sidecar::floors();
+    (floors.ecologits, floors.codecarbon)
+}
+
+/// Executables under `bin` that exit 0, standing in for agents on `PATH`.
+#[cfg(unix)]
+pub fn stub_executables(bin: &Path, names: &[&str]) {
+    use std::os::unix::fs::PermissionsExt;
+    fs::create_dir_all(bin).expect("create bin dir");
+    for name in names {
+        let stub = bin.join(name);
+        fs::write(&stub, "#!/bin/sh\nexit 0\n").expect("write stub");
+        fs::set_permissions(&stub, fs::Permissions::from_mode(0o700)).expect("chmod stub");
+    }
+}
+
+/// The `/debug/health` collectors row named `name`.
+pub fn collector<'a>(health: &'a serde_json::Value, name: &str) -> Option<&'a serde_json::Value> {
+    health["collectors"]
+        .as_array()?
+        .iter()
+        .find(|row| row["name"] == name)
 }
 
 /// A managed venv under `state` whose interpreter answers every import

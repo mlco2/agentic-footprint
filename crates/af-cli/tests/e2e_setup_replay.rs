@@ -29,12 +29,12 @@ use std::collections::BTreeMap;
 use std::ffi::{OsStr, OsString};
 use std::io::{Read, Write};
 use std::net::TcpStream;
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
 use assert_cmd::Command as AfCommand;
+use common::collector;
 use common::live::{repo_root, LiveWatch};
 use serde_json::Value;
 
@@ -74,12 +74,7 @@ impl Machine {
         for dir in [&home, &project, &bin] {
             std::fs::create_dir_all(dir).expect("create dir");
         }
-        for name in ["claude", "codex"] {
-            let stub = bin.join(name);
-            std::fs::write(&stub, "#!/bin/sh\nexit 0\n").expect("write stub");
-            std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o700))
-                .expect("chmod stub");
-        }
+        common::stub_executables(&bin, &["claude", "codex"]);
         let path = std::env::join_paths(std::iter::once(bin).chain(std::env::split_paths(
             &std::env::var_os("PATH").unwrap_or_default(),
         )))
@@ -339,13 +334,6 @@ fn post_json(url: &str, body: &Path) {
         status.starts_with('2'),
         "POST {url} answered {status:?}: {response}"
     );
-}
-
-fn collector<'a>(health: &'a Value, name: &str) -> Option<&'a Value> {
-    health["collectors"]
-        .as_array()?
-        .iter()
-        .find(|row| row["name"] == name)
 }
 
 fn session_entry<'a>(report: &'a Value, session: &str) -> &'a Value {

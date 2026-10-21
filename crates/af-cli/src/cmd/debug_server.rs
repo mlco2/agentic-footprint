@@ -570,6 +570,10 @@ pub fn serve(addr: SocketAddr, state: Arc<Mutex<DebugState>>) -> Result<DebugSer
         );
     }
 
+    // Session data with no authentication: this machine only.
+    if !addr.ip().is_loopback() {
+        anyhow::bail!("refusing to serve /debug on {addr}: loopback addresses only");
+    }
     let server = Server::http(addr)
         .map_err(|err| anyhow::anyhow!("failed to bind debug server on {addr}: {err}"))?;
     let bound = server
@@ -1079,6 +1083,19 @@ fn hex_digit(byte: u8) -> Option<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_debug_server_refuses_to_listen_beyond_loopback() {
+        for addr in ["0.0.0.0:0", "[::]:0"] {
+            let error = serve(
+                addr.parse().unwrap(),
+                Arc::new(Mutex::new(DebugState::default())),
+            )
+            .err()
+            .unwrap_or_else(|| panic!("{addr} was accepted"));
+            assert!(error.to_string().contains("loopback"), "{error:#}");
+        }
+    }
 
     fn state_with_frames() -> DebugState {
         let mut state = DebugState::default();

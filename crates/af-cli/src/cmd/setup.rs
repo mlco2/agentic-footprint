@@ -8,7 +8,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use anyhow::{anyhow, bail, Context, Result};
 use serde_json::{json, Map, Value};
 
-const DEFAULT_LOGS_ENDPOINT: &str = "http://127.0.0.1:4318/v1/logs";
+use super::DEFAULT_LOGS_ENDPOINT;
+
 const CLAUDE_HOOK: &str = include_str!("../../../../collectors/claude-code/af-hook.sh");
 const CLAUDE_EVENTS: &[&str] = &[
     "SessionStart",
@@ -432,10 +433,11 @@ fn inspect_claude(
             detail: "jq is required by the Claude Code hook but was not found on PATH".to_string(),
         }]);
     }
+    let [user_settings, project_settings, _] = claude_scopes(home, project);
     let settings = if global {
-        home.join(".claude").join("settings.json")
+        user_settings
     } else {
-        project.join(".claude").join("settings.json")
+        project_settings
     };
     let existing = match fs::read_to_string(&settings) {
         Ok(contents) => serde_json::from_str(&contents)
@@ -506,10 +508,24 @@ fn inspect_claude(
 /// later scope wins over the same key in an earlier one.
 fn claude_scopes(home: &Path, project: &Path) -> [PathBuf; 3] {
     [
-        home.join(".claude").join("settings.json"),
+        claude_user_settings(home),
         project.join(".claude").join("settings.json"),
         project.join(".claude").join("settings.local.json"),
     ]
+}
+
+/// Claude Code's user-scope settings, read by every project.
+pub(crate) fn claude_user_settings(home: &Path) -> PathBuf {
+    home.join(".claude").join("settings.json")
+}
+
+/// Whether Claude Code settings set any OTEL exporter variable in their
+/// `env`, the block [`merge_claude_settings`] writes.
+pub(crate) fn claude_settings_set_otel(settings: &Value) -> bool {
+    settings
+        .get("env")
+        .and_then(Value::as_object)
+        .is_some_and(|env| env.keys().any(|key| key.starts_with("OTEL_")))
 }
 
 /// Finds a setting that would stop the configuration setup writes from
@@ -709,14 +725,14 @@ fn same_directory(left: Option<&Path>, right: &Path) -> bool {
 /// spelling, or an endpoint that only appears in a comment are all judged
 /// by their meaning rather than their text.
 #[derive(Debug, PartialEq, Eq)]
-enum CodexOtel {
+pub(crate) enum CodexOtel {
     Absent,
     Matches,
     Other,
     Invalid(String),
 }
 
-fn codex_otel_state(contents: &str, endpoint: &str) -> CodexOtel {
+pub(crate) fn codex_otel_state(contents: &str, endpoint: &str) -> CodexOtel {
     let table = match contents.parse::<toml::Table>() {
         Ok(table) => table,
         Err(error) => {

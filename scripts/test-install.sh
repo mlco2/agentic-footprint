@@ -23,6 +23,13 @@ SH
 done
 cat >"$TMP/fake-bin/uv" <<'SH'
 #!/bin/sh
+# af runs uv without configuration discovery; anything else is a regression.
+if [ "$1" = "--no-config" ]; then
+  shift
+elif [ "$1" != "--version" ]; then
+  echo "fake uv: expected --no-config, got: $*" >&2
+  exit 1
+fi
 if [ "$1" = "--version" ]; then
   echo "uv 0-test"
   exit 0
@@ -170,5 +177,19 @@ HOME="$TMP/home" \
   AF_INSTALL_BIN_DIR="$UPGRADE_DIR" \
   "$REPO_ROOT/install.sh" --no-python --no-setup >"$TMP/current.log" 2>&1
 grep -q 'already up to date' "$TMP/current.log"
+
+# A URL install without a checksum is refused before anything is fetched:
+# the URL is unreachable, so reaching the download would fail differently.
+for input in AF_BINARY_URL AF_SOURCE_URL; do
+  if env HOME="$TMP/home" AF_INSTALL_BIN_DIR="$TMP/url-bin" \
+      "$input=http://127.0.0.1:9/af" \
+      sh -c 'cd / && "$0" --no-python --no-setup' "$REPO_ROOT/install.sh" >"$TMP/url.log" 2>&1; then
+    echo "install.sh accepted $input without a checksum" >&2
+    exit 1
+  fi
+  grep -q "SHA256" "$TMP/url.log" || { cat "$TMP/url.log" >&2; exit 1; }
+  ! grep -q "Downloading" "$TMP/url.log"
+  test ! -e "$TMP/url-bin/af"
+done
 
 echo "ok - install.sh installs af and completes wizard setup"

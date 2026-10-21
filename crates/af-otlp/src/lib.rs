@@ -4,9 +4,9 @@
 //! `OTEL_EXPORTER_OTLP_PROTOCOL=http/json`, exports OTel logs and metrics
 //! over HTTP to a configurable `OTEL_EXPORTER_OTLP_ENDPOINT`. This crate is
 //! that endpoint: [`serve`] runs a tiny HTTP server accepting `POST
-//! /v1/logs` (normalized into Contract #1 `llm_call` events and appended to
-//! the spool) and `POST /v1/metrics` (accepted, discarded — no Contract #1
-//! shape for raw OTel metrics yet). Anything else 404s.
+//! /v1/logs` (normalized into Contract #1 `llm_call` events and sent to the
+//! caller's channel) and `POST /v1/metrics` (accepted, discarded — no
+//! Contract #1 shape for raw OTel metrics yet). Anything else 404s.
 //!
 //! [`normalize_logs`] flattens OTLP resource/scope/record attributes once and
 //! dispatches each record to ordered normalizers. The built-ins cover Claude

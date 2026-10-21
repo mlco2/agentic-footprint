@@ -4,14 +4,15 @@
 # Current distribution-neutral inputs:
 #   AF_INSTALL_BINARY=/path/to/af       install an already-built binary
 #   AF_BINARY_URL=https://.../af        download a release binary directly
-#   AF_BINARY_SHA256=<hex>               optional checksum for AF_BINARY_URL
+#   AF_BINARY_SHA256=<hex>               required SHA-256 of AF_BINARY_URL
 #   AF_SOURCE_URL=https://.../src.tar.gz download source and build with Cargo
+#   AF_SOURCE_SHA256=<hex>               required SHA-256 of AF_SOURCE_URL
 #
 # From a source checkout, no environment variable is needed:
 #   ./install.sh
 #
 # Once a canonical release host exists, the public curl command only needs to
-# set AF_BINARY_URL (and ideally AF_BINARY_SHA256) before piping this script.
+# set AF_BINARY_URL and AF_BINARY_SHA256 before piping this script.
 set -eu
 
 BIN_DIR="${AF_INSTALL_BIN_DIR:-$HOME/.local/bin}"
@@ -36,8 +37,9 @@ Options:
 Inputs for non-checkout installation:
   AF_INSTALL_BINARY path to an existing `af` binary
   AF_BINARY_URL     URL of a standalone `af` binary
-  AF_BINARY_SHA256  optional SHA-256 checksum for AF_BINARY_URL
+  AF_BINARY_SHA256  SHA-256 of the AF_BINARY_URL download (required)
   AF_SOURCE_URL     source archive URL to build when no binary URL is available
+  AF_SOURCE_SHA256  SHA-256 of the AF_SOURCE_URL download (required)
 USAGE
 }
 
@@ -152,6 +154,28 @@ sha256_file() {
   fi
 }
 
+# Refuses a download that does not match the SHA-256 the caller supplied. A
+# URL alone is not a source of trust: whoever serves it (or sits between)
+# decides what runs next, with the user's permissions.
+verify_download() {
+  actual="$(sha256_file "$1")"
+  expected="$(printf '%s' "$2" | tr 'A-F' 'a-f')"
+  [ "$actual" = "$expected" ] || {
+    echo "install.sh: checksum mismatch for $3" >&2
+    echo "  expected: $expected" >&2
+    echo "  actual:   $actual" >&2
+    exit 1
+  }
+}
+
+require_checksum() {
+  [ -n "$2" ] || {
+    echo "install.sh: $1 needs ${1%_URL}_SHA256, the SHA-256 of what it points at" >&2
+    echo "  (from the release's SHA256SUMS); nothing was downloaded" >&2
+    exit 1
+  }
+}
+
 WORK="$(make_temp_dir)"
 trap 'rm -rf "$WORK"' EXIT HUP INT TERM
 SOURCE_BINARY=""
@@ -163,23 +187,17 @@ if [ -n "${AF_INSTALL_BINARY:-}" ]; then
     exit 1
   }
 elif [ -n "${AF_BINARY_URL:-}" ]; then
+  require_checksum AF_BINARY_URL "${AF_BINARY_SHA256:-}"
   need curl
   SOURCE_BINARY="$WORK/af"
   echo "Downloading af from $AF_BINARY_URL"
   curl --fail --location --silent --show-error "$AF_BINARY_URL" --output "$SOURCE_BINARY"
-  if [ -n "${AF_BINARY_SHA256:-}" ]; then
-    actual="$(sha256_file "$SOURCE_BINARY")"
-    [ "$actual" = "$AF_BINARY_SHA256" ] || {
-      echo "install.sh: checksum mismatch" >&2
-      echo "  expected: $AF_BINARY_SHA256" >&2
-      echo "  actual:   $actual" >&2
-      exit 1
-    }
-  fi
+  verify_download "$SOURCE_BINARY" "$AF_BINARY_SHA256" "$AF_BINARY_URL"
 elif [ -f "Cargo.toml" ] && [ -f "crates/af-cli/Cargo.toml" ]; then
   build_source_checkout "$PWD"
   SOURCE_BINARY="$PWD/target/release/af"
 elif [ -n "${AF_SOURCE_URL:-}" ]; then
+  require_checksum AF_SOURCE_URL "${AF_SOURCE_SHA256:-}"
   need curl
   need cargo
   need tar
@@ -188,6 +206,7 @@ elif [ -n "${AF_SOURCE_URL:-}" ]; then
   mkdir -p "$SOURCE_DIR"
   echo "Downloading af source from $AF_SOURCE_URL"
   curl --fail --location --silent --show-error "$AF_SOURCE_URL" --output "$ARCHIVE"
+  verify_download "$ARCHIVE" "$AF_SOURCE_SHA256" "$AF_SOURCE_URL"
   tar -xzf "$ARCHIVE" -C "$SOURCE_DIR" --strip-components=1
   build_source_checkout "$SOURCE_DIR"
   SOURCE_BINARY="$SOURCE_DIR/target/release/af"

@@ -17,6 +17,14 @@ opens the agent setup prompt. Claude Code is configured in user settings so
 new projects work without repeating setup; Codex already uses user
 configuration.
 
+The managed runtime is a Python virtual environment under
+`$AF_STATE_DIR/venv`, created with `uv` when it is on `PATH` (otherwise with a
+matching system Python's `venv` and `pip`) from the pins in
+`python/manifest.toml`. `uv` runs with `--no-config`, so a `uv.toml` or
+`[tool.uv]` in the directory you install from cannot change where packages come
+from. The sidecars then run as `python -I` from a directory af owns, so code or
+a `.codecarbon.config` in your project is never picked up.
+
 Source-checkout installs rebuild the console before compiling Rust so the
 binary always embeds the current UI. If `af` already exists at the destination,
 the installer shows the installed and candidate versions and asks before
@@ -56,6 +64,17 @@ Custom install and project paths:
 Release archives are signed and checksummed. Until the canonical repository URL
 is published, the installer accepts explicit release inputs:
 
+A URL input always needs its SHA-256 (`AF_BINARY_SHA256`, `AF_SOURCE_SHA256`,
+from the release's `SHA256SUMS`); the installer refuses before downloading
+anything without it. After the download it compares the file's SHA-256 with
+the one supplied, case-insensitively, and stops with both values on a
+mismatch, before anything is installed or built. A URL by itself is not a
+source of trust: whoever serves it decides what runs next. The checksum is only
+as trustworthy as where you copied it from, so take it from the release page,
+or check the release first as described in
+[Verify a release](verify-release.md). `AF_INSTALL_BINARY` and source-checkout
+installs are not checksummed: you already have the file.
+
 ```sh
 curl -LsSf https://example.invalid/install.sh | \
   AF_BINARY_URL=https://example.invalid/releases/af \
@@ -67,7 +86,7 @@ It can also install a locally supplied binary or build a source archive:
 
 ```sh
 AF_INSTALL_BINARY=/absolute/path/to/af ./install.sh
-AF_SOURCE_URL=https://example.invalid/source.tar.gz ./install.sh
+AF_SOURCE_URL=https://example.invalid/source.tar.gz AF_SOURCE_SHA256=<sha256> ./install.sh
 ```
 
 The shell script only obtains and places the binary. All agent detection and
@@ -150,8 +169,11 @@ af self update --dry-run  # show what would change
 ```
 
 `af self update` updates an af that the installer placed from a GitHub release
-binary. It checks the download against the release's `SHA256SUMS` (and its
-sigstore signature when `cosign` is installed), replaces the binary, refreshes
+binary. It checks the download against the release's `SHA256SUMS` and its
+Sigstore signature, which must come from this repository's release workflow
+for that tag. The signature is verified inside `af`, with nothing extra to
+install. `--allow-unsigned` skips the signature and relies on the checksum
+alone, which comes from the same release. It then replaces the binary, refreshes
 the managed CodeCarbon/EcoLogits runtime, and restarts the background
 receiver. The runtime moves to the newest releases published at least 7 days
 ago, and only after they pass a smoke test; otherwise the current runtime is
@@ -165,13 +187,17 @@ af doctor
 ```
 
 `af doctor` is read-only. It checks that the receiver answering on the
-endpoint is this af, lists running `claude`/`codex` processes that started
+endpoint is this af and that the managed CodeCarbon/EcoLogits runtime works,
+lists running `claude`/`codex` processes that started
 before the telemetry configuration they read at startup last changed, and lists
 recent sessions that recorded tool activity but no token telemetry. Claude Code
 reloads hooks while it runs but not its OTLP exporter settings, so a process
 started before setup records tool calls and never token usage: restart it. A
 process started before an unrelated edit to the same settings file is reported
 too; restarting it is harmless. It exits 1 when anything needs attention.
+`af watch` writes received telemetry once a minute, so a session that just
+started can be reported for a minute before its first token telemetry is
+stored.
 
 On macOS and Linux, service commands are idempotent:
 
@@ -182,7 +208,9 @@ af service status
 ```
 
 On macOS, logs are written under `$AF_STATE_DIR/logs/`. On Linux, inspect them
-with `journalctl --user -u agentic-footprint-watch.service`. The background
+with `journalctl --user -u agentic-footprint-watch.service`. Both service
+definitions set a `077` umask, so the logs and every file the service creates
+are readable by your account only. The background
 service deliberately does not use `--debug`; run a separate foreground
 `af watch --debug --no-otlp` only when inspecting the debug UI.
 

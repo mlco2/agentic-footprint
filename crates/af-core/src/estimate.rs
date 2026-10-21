@@ -87,20 +87,8 @@ pub fn estimate_pending(
     sidecar: &mut Sidecar,
     region: &EstimationRegion,
 ) -> Result<EstimationOutcome> {
-    estimate_pending_limit(store, sidecar, region, None)
-}
-
-/// Resident-worker variant of [`estimate_pending`]. The database remains the
-/// durable queue; `limit` only bounds how long one wake can monopolize the
-/// estimator thread.
-pub fn estimate_pending_limit(
-    store: &mut Store,
-    sidecar: &mut Sidecar,
-    region: &EstimationRegion,
-    limit: Option<usize>,
-) -> Result<EstimationOutcome> {
     let current = estimator_methodology(sidecar);
-    let events = store.llm_calls_to_estimate_limit(limit, current.as_deref())?;
+    let events = store.llm_calls_to_estimate(current.as_deref())?;
     estimate_events(store, sidecar, region, &events, current.as_deref())
 }
 
@@ -131,12 +119,7 @@ pub fn estimate_events(
     current_methodology: Option<&str>,
 ) -> Result<EstimationOutcome> {
     let computed = compute_estimates(sidecar, region, events, current_methodology);
-    store.in_transaction(|store| -> af_store::Result<()> {
-        for row in &computed.rows {
-            store.upsert_estimate(row)?;
-        }
-        Ok(())
-    })?;
+    store.upsert_estimates(&computed.rows)?;
     match computed.error {
         Some(error) => Err(error),
         None => Ok(computed.outcome),

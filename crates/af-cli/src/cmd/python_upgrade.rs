@@ -287,7 +287,9 @@ fn smoke_sampler(python: &Path, script: &Path, scratch: &Path) -> Result<()> {
         ],
     )
     .context("spawn the sampler from the new runtime")?;
-    let spool = scratch.join("spool/codecarbon.smoke.jsonl");
+    let spool = scratch
+        .join("spool")
+        .join(af_spool::spool_file_name("codecarbon", "smoke"));
     let has_sample = || {
         std::fs::read_to_string(&spool).is_ok_and(|text| {
             text.lines().any(|line| {

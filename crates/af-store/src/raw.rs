@@ -42,15 +42,15 @@ impl Store {
         let mut stmt = self.0.prepare(
             "SELECT session_id,
                     SUM(type = 'action_span'
-                        AND COALESCE(json_extract(json, '$.payload.tool_name'), '') <> '__session__'),
-                    MAX(ts)
+                        AND COALESCE(json_extract(json, '$.payload.tool_name'), '') <> '__session__')
+                        AS tool_spans,
+                    MAX(ts) AS last_ts
              FROM raw_events
              GROUP BY session_id
              HAVING SUM(type = 'llm_call') = 0
-                AND SUM(type = 'action_span'
-                        AND COALESCE(json_extract(json, '$.payload.tool_name'), '') <> '__session__') > 0
-                AND MAX(ts) >= ?1
-             ORDER BY MAX(ts) DESC, session_id ASC",
+                AND tool_spans > 0
+                AND last_ts >= ?1
+             ORDER BY last_ts DESC, session_id ASC",
         )?;
         let rows = stmt.query_map([since], |row| {
             Ok(TelemetryGap {
@@ -211,13 +211,13 @@ impl Store {
     /// Returns the stored tail offset for `(collector, session)`, or `0` if
     /// no offset has been recorded yet.
     pub fn get_offset(&self, collector: &str, session: &str) -> Result<u64> {
+        // Cached: a full reconciliation asks once per spool file.
         let offset: Option<i64> = self
             .0
-            .query_row(
+            .prepare_cached(
                 "SELECT offset FROM ingest_offsets WHERE collector = ?1 AND session_id = ?2",
-                params![collector, session],
-                |row| row.get(0),
-            )
+            )?
+            .query_row(params![collector, session], |row| row.get(0))
             .optional()?;
         Ok(offset.unwrap_or(0) as u64)
     }

@@ -10,9 +10,10 @@ use std::time::{Duration, Instant};
 use anyhow::{anyhow, bail, Context, Result};
 use clap::Subcommand;
 
+use super::DEFAULT_LOGS_ENDPOINT;
+
 const LABEL: &str = "dev.agentic-footprint.af-watch";
 const SYSTEMD_UNIT: &str = "agentic-footprint-watch.service";
-const DEFAULT_ENDPOINT: &str = "http://127.0.0.1:4318/v1/logs";
 
 #[derive(Debug, Clone, clap::Args)]
 pub struct Args {
@@ -55,7 +56,7 @@ pub fn run(state_dir: &Path, args: Args) -> Result<()> {
     let endpoint = args
         .endpoint
         .or_else(installed_endpoint)
-        .unwrap_or_else(|| DEFAULT_ENDPOINT.to_string());
+        .unwrap_or_else(|| DEFAULT_LOGS_ENDPOINT.to_string());
     match args.action {
         Action::Install => ensure_installed(state_dir, &binary, &endpoint),
         Action::Start => start(manager(), state_dir, &endpoint),
@@ -510,6 +511,8 @@ fn with_manual_recovery(err: anyhow::Error, state_dir: &Path, endpoint: &str) ->
     anyhow!("{err:#}; {}", manual_instructions(state_dir, endpoint))
 }
 
+/// `Umask` 63 is 0o077: the logs launchd creates, and every file the
+/// service writes, are the user's alone.
 fn launchd_plist(binary: &Path, addr: SocketAddr, state_dir: &Path, logs: &Path) -> String {
     format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
@@ -521,6 +524,7 @@ fn launchd_plist(binary: &Path, addr: SocketAddr, state_dir: &Path, logs: &Path)
   </array>
   <key>EnvironmentVariables</key><dict><key>AF_STATE_DIR</key><string>{}</string></dict>
   <key>RunAtLoad</key><true/><key>KeepAlive</key><true/>
+  <key>Umask</key><integer>63</integer>
   <key>StandardOutPath</key><string>{}</string>
   <key>StandardErrorPath</key><string>{}</string>
 </dict></plist>
@@ -534,7 +538,7 @@ fn launchd_plist(binary: &Path, addr: SocketAddr, state_dir: &Path, logs: &Path)
 
 fn systemd_unit(binary: &Path, addr: SocketAddr, state_dir: &Path) -> String {
     format!(
-        "[Unit]\nDescription=Agentic Footprint resident receiver\n\n[Service]\nType=simple\nExecStart={} watch --require-receiver --otlp-addr {addr}\nEnvironment={}\nRestart=on-failure\nRestartSec=2\n\n[Install]\nWantedBy=default.target\n",
+        "[Unit]\nDescription=Agentic Footprint resident receiver\n\n[Service]\nType=simple\nExecStart={} watch --require-receiver --otlp-addr {addr}\nEnvironment={}\nUMask=0077\nRestart=on-failure\nRestartSec=2\n\n[Install]\nWantedBy=default.target\n",
         systemd_escape(binary),
         systemd_environment("AF_STATE_DIR", state_dir),
     )
@@ -591,6 +595,21 @@ mod tests {
         // retries, rather than run on without a receiver.
         assert!(launchd.contains("<string>--require-receiver</string>"));
         assert!(systemd.contains(" --require-receiver"));
+    }
+
+    /// The manager creates the log files, and anything the service writes
+    /// before `af watch` restricts the state dir: both owner-only.
+    #[test]
+    fn service_definitions_create_files_owner_only() {
+        let binary = Path::new("/tmp/af");
+        let state = Path::new("/tmp/state");
+        let addr = "127.0.0.1:4318".parse().unwrap();
+        let launchd = launchd_plist(binary, addr, state, Path::new("/tmp/logs"));
+        assert!(
+            launchd.contains("<key>Umask</key><integer>63</integer>"),
+            "{launchd}"
+        );
+        assert!(systemd_unit(binary, addr, state).contains("\nUMask=0077\n"));
     }
 
     /// One-shot HTTP server answering with `head` (status line + headers).
@@ -651,7 +670,7 @@ mod tests {
     #[test]
     fn endpoint_must_be_loopback_http_logs() {
         assert_eq!(
-            endpoint_addr(DEFAULT_ENDPOINT).unwrap(),
+            endpoint_addr(DEFAULT_LOGS_ENDPOINT).unwrap(),
             "127.0.0.1:4318".parse().unwrap()
         );
         assert!(endpoint_addr("https://127.0.0.1:4318/v1/logs").is_err());

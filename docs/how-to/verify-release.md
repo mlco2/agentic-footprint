@@ -13,21 +13,15 @@ On macOS, use `shasum -a 256 -c SHA256SUMS`.
 
 ## Verify the keyless signature
 
-Install `cosign`, then verify an archive and its bundle:
+`af self update` checks every update against its archive's Sigstore bundle
+before replacing anything. The certificate must name exactly
+`https://github.com/mlco2/agentic-footprint/.github/workflows/release.yml@refs/tags/<tag>`,
+issued by `https://token.actions.githubusercontent.com`, and appear in the
+Rekor transparency log. The signature is keyless: GitHub Actions obtains a
+short-lived identity through OIDC, so the project keeps no long-lived signing
+key in repository secrets.
 
-```sh
-cosign verify-blob \
-  --bundle agentic-footprint-vX.Y.Z-aarch64-apple-darwin.tar.gz.sigstore.json \
-  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-  --certificate-identity-regexp \
-    'https://github.com/mlco2/agentic-footprint/.github/workflows/release.yml@refs/tags/vX.Y.Z' \
-  agentic-footprint-vX.Y.Z-aarch64-apple-darwin.tar.gz
-```
-
-Replace the version placeholder with the published release version.
-The signature is keyless: GitHub Actions obtains a short-lived identity through
-OIDC, so the project does not keep a long-lived signing key in repository
-secrets.
+To check a first download by hand, verify its provenance as shown below.
 
 ## Verify GitHub provenance
 

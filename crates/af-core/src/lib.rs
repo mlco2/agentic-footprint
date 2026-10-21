@@ -23,8 +23,8 @@ pub use correlate::{
     correlate, parse_ts, rfc3339_ms, SessionTree, Span, SpanId, BOOTSTRAP_TOOL_NAME,
 };
 pub use estimate::{
-    compute_estimates, estimate_events, estimate_pending, estimate_pending_limit,
-    estimator_methodology, ComputedEstimates, EstimationOutcome, EstimationRegion,
+    compute_estimates, estimate_events, estimate_pending, estimator_methodology, ComputedEstimates,
+    EstimationOutcome, EstimationRegion,
 };
 pub use join::{
     build_joins, fetch_zone_factors, session_unit_key, stale_zone_estimates, sum_criteria,

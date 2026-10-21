@@ -8,7 +8,7 @@ mod pyenv;
 
 use std::io::{BufRead, BufReader, Write};
 use std::path::Path;
-use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
+use std::process::{Child, ChildStdin, ChildStdout, Stdio};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -63,8 +63,19 @@ impl Sidecar {
     /// `spawn` again with whatever configuration is current *then* — see
     /// `af watch`. A `respawn` method that replayed the *original*
     /// arguments would be a second, staler source of truth for that.
+    ///
+    /// The interpreter runs isolated (`-I`) from the script's own directory:
+    /// nothing on `PYTHONPATH`, in the user site or in the directory `af`
+    /// was started from is importable, and a library that reads
+    /// configuration from its working directory (codecarbon's
+    /// `.codecarbon.config`) reads af's, not a project's. The sidecar
+    /// scripts import only the standard library and the managed venv.
     pub fn spawn(python: &Path, module: &str, args: &[&str]) -> Result<Sidecar> {
-        let mut command = Command::new(python);
+        let workdir = Path::new(module)
+            .parent()
+            .filter(|dir| !dir.as_os_str().is_empty())
+            .unwrap_or(Path::new("."));
+        let mut command = pyenv::isolated_python(python, workdir);
         command
             .arg(module)
             .args(args)

@@ -26,9 +26,9 @@ deterministic Rust tests do not need agent credentials or network access.
 | Area | Responsibility |
 |---|---|
 | `crates/af-events` | Contract #1 Rust types and validation |
-| `crates/af-spool` | JSONL discovery, incremental tailing, and quarantine |
-| `crates/af-otlp` | OTLP HTTP/JSON receiver and source normalizers |
-| `crates/af-store` | Raw/derived SQLite persistence and migrations |
+| `crates/af-spool` | JSONL discovery and incremental tailing; malformed lines are returned, not stored |
+| `crates/af-otlp` | OTLP HTTP/JSON receiver (it writes nothing itself) and source normalizers |
+| `crates/af-store` | Raw/derived SQLite persistence, the metadata-only `rejects` table, and migrations |
 | `crates/af-sidecar` | Managed Python environment and JSON-stdio process client |
 | `crates/af-core` | Correlation, estimation orchestration, attribution, joins, replay |
 | `crates/af-cli` | User commands, setup wizard, resident control plane, debug API |
@@ -72,6 +72,28 @@ git diff --check
 
 Loopback receiver/debug tests may require sandbox permission. Live agent tests
 are manual and documented in [`testing-live.md`](testing-live.md).
+
+## Dependencies and CI security
+
+- **Cooldown.** Dependency bumps, automated or by hand and in every
+  ecosystem, use releases at least seven days old. Renovate enforces it with
+  `minimumReleaseAge` (`renovate.json`), `pyproject.toml` records it under
+  `[tool.agentic-footprint.dependency-policy]`, and the managed Python runtime
+  applies it at install time: `python/manifest.toml` pins are floors, and
+  `af python upgrade` (run by `af self update`) moves only to releases outside
+  the seven-day window.
+- **Pinned actions.** Every GitHub Action is referenced by full commit SHA,
+  with the version in a comment. Workflows default to `contents: read`, a job
+  that needs more asks for it, and checkouts set `persist-credentials: false`.
+- **Advisories.** The CI `audit` job runs `cargo audit` against `Cargo.lock`
+  (`make audit` runs it locally with `--deny warnings`). The `advisories` job
+  runs `npm audit --audit-level=moderate` on the console lock and `pip-audit`
+  on the hashed requirements exported from `uv.lock`. The Python check covers
+  the pinned versions, not every version the managed runtime may resolve.
+- **Plumber.** The `plumber` job runs the [Plumber](https://getplumber.io) CI
+  security gate (pinned actions, token scopes, credential persistence,
+  untrusted triggers, branch protection) and fails below 90 points. The
+  remaining 10 are lost because `main` still allows force pushes.
 
 ## Adding or changing an integration
 

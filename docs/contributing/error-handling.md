@@ -18,7 +18,7 @@ Levels are `info`, `warn`, and `error`. Examples:
 
 ```text
 af[opencode] warn: sequence gap for ses_...: expected 4, received 6
-af[otlp] error: failed to write spool under ...
+af[otlp] warn: dropped 2 claimed OTLP record(s) that failed to normalize
 af[claude-hook] warn: skipped 1 corrupt open-span file
 ```
 
@@ -32,7 +32,7 @@ Collectors and receiver request handlers are best-effort relative to the agent:
 
 - malformed individual source events are skipped with a warning;
 - claimed records that cannot normalize increment a dropped counter and are
-  quarantined when the transport permits it;
+  recorded as a metadata-only reject (see [Rejected data](#rejected-data));
 - unrelated records are unclaimed, not errors;
 - transient stream failures reconnect with bounded backoff;
 - spool append and cursor persistence failures are errors and must not advance
@@ -40,8 +40,8 @@ Collectors and receiver request handlers are best-effort relative to the agent:
 - hook collectors always exit successfully so they cannot fail the host agent;
   persistent hook errors go to `$AF_STATE_DIR/tmp/hook-errors.log`.
 
-A warning must correspond to an observable counter, quarantine artifact, or
-specific skipped source item whenever practical.
+A warning must correspond to an observable counter, reject row, or specific
+skipped source item whenever practical.
 
 ## Control-plane policy
 
@@ -60,16 +60,24 @@ Resident processing degrades only where missing data is an honest state:
 missing estimators produce `pending`, unknown execution locations stay
 `unknown`, and missing provider correlation stays `unknown`.
 
-## Quarantine and rejected data
+## Rejected data
 
-- Raw malformed spool lines go under `$AF_STATE_DIR/rejected/` with source and
-  reason metadata.
-- Malformed or claimed-but-dropped OTLP batches are quarantined without
-  returning a transport failure to the agent exporter.
-- Quarantine write failures are logged as errors because the evidence itself
-  could not be preserved.
-- Source files and accepted spool lines are append-only and are never deleted by
-  quarantine logic.
+- A malformed spool line or a refused OTLP record is recorded as metadata
+  only — when, the source, the reason, attribute names and a size — in the
+  store's `rejects` table, a ring of the newest 1,000. The raw line or body is
+  never copied anywhere: it is whatever a collector or exporter sent.
+- A refused OTLP record never becomes a transport failure for the agent's
+  exporter; the request is answered `200` and the reject is counted. The
+  exceptions are limits, not content: a body over the size cap gets `413`, as
+  does a request with more log records than the receiver normalizes in one go,
+  and a full queue or unreadable body gets a retryable `503`.
+- OTLP rejects reach the `rejects` table with the next flush of `af watch`,
+  like the facts beside them; until then they are visible only in the
+  receiver's counters (`/debug/health`).
+- A reject that cannot be recorded is logged and never costs the accepted
+  facts beside it.
+- Source files and accepted spool lines are append-only and are never deleted
+  by reject handling.
 
 ## Testing requirements
 
@@ -77,6 +85,6 @@ Every new failure path should test the applicable behavior:
 
 - exit status for CLI failures;
 - no host-agent failure for hook/receiver degradation;
-- counter or quarantine evidence for dropped data;
+- counter or reject-row evidence for dropped data;
 - no cursor advancement before successful spool append;
 - stable stdout format when diagnostics are emitted to stderr.

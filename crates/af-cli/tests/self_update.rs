@@ -97,6 +97,7 @@ fn release_routes(tag: &str, asset: &[u8], sums_digest: &str) -> Vec<(&'static s
         "assets": [
             {"name": name, "browser_download_url": "{base}/download/af"},
             {"name": "SHA256SUMS", "browser_download_url": "{base}/download/SHA256SUMS"},
+            {"name": format!("{name}.sigstore.json"), "browser_download_url": "{base}/download/bundle"},
         ]
     });
     vec![
@@ -106,6 +107,7 @@ fn release_routes(tag: &str, asset: &[u8], sums_digest: &str) -> Vec<(&'static s
             release.to_string().into_bytes(),
         ),
         ("/download/af", 200, asset.to_vec()),
+        ("/download/bundle", 200, b"{}".to_vec()),
         (
             "/download/SHA256SUMS",
             200,
@@ -113,6 +115,12 @@ fn release_routes(tag: &str, asset: &[u8], sums_digest: &str) -> Vec<(&'static s
         ),
     ]
 }
+
+/// A fake release server cannot produce a sigstore signature for a test
+/// binary (that takes a real OIDC identity), so tests about what happens
+/// *after* verification pass this; the signature check itself is unit-tested
+/// against a real bundle in `cmd::self_update`.
+const UNSIGNED: &str = "--allow-unsigned";
 
 fn self_update(install: &Install, base: &str, extra: &[&str]) -> assert_cmd::assert::Assert {
     Command::new(&install.binary)
@@ -135,10 +143,36 @@ fn newer_release_replaces_the_binary_and_updates_the_receipt() {
         NEW_BINARY,
         &sha256_hex(NEW_BINARY),
     ));
-    self_update(&install, &base, &[])
+    self_update(&install, &base, &[UNSIGNED])
         .success()
         .stdout(predicate::str::contains("v9.9.9"))
-        .stdout(predicate::str::contains("checksum"));
+        .stdout(predicate::str::contains("checksum verified"));
+    assert_eq!(std::fs::read(&install.binary).unwrap(), NEW_BINARY);
+}
+
+/// The checksum comes from the same release as the binary, so on its own
+/// it proves only that the download was not corrupted: a release whose
+/// signature does not verify is refused, unless the user opts out.
+#[cfg(unix)]
+#[test]
+fn an_unverified_signature_is_refused_unless_unsigned_is_allowed() {
+    let install = install(true);
+    let original = std::fs::read(&install.binary).unwrap();
+    let base = fake_server(release_routes(
+        "v9.9.9",
+        NEW_BINARY,
+        &sha256_hex(NEW_BINARY),
+    ));
+    self_update(&install, &base, &[])
+        .failure()
+        .stderr(predicate::str::contains("signature"))
+        .stderr(predicate::str::contains("nothing was changed"));
+    assert_eq!(std::fs::read(&install.binary).unwrap(), original);
+    assert!(!install.binary.with_extension("new").exists());
+
+    self_update(&install, &base, &[UNSIGNED])
+        .success()
+        .stdout(predicate::str::contains("signature not verified"));
     assert_eq!(std::fs::read(&install.binary).unwrap(), NEW_BINARY);
 }
 
@@ -267,7 +301,7 @@ fn the_new_binary_upgrades_the_python_runtime_and_only_its_summary_is_shown() {
         .env("AF_UPDATE_BASE_URL", &base)
         .env("PATH", "/usr/bin:/bin")
         .env("AF_SERVICE_MANAGER", "unsupported")
-        .args(["self", "update"])
+        .args(["self", "update", UNSIGNED])
         .assert()
         .success()
         .stdout(predicate::str::contains("Runtime: ecologits test"))
@@ -335,7 +369,7 @@ fn an_update_through_a_symlink_replaces_its_target() {
         .env("AF_UPDATE_BASE_URL", &base)
         .env("PATH", "/usr/bin:/bin")
         .env("AF_SERVICE_MANAGER", "unsupported")
-        .args(["self", "update", "--no-python"])
+        .args(["self", "update", "--no-python", UNSIGNED])
         .assert()
         .success();
     assert!(std::fs::symlink_metadata(&link)

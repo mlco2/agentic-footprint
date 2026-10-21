@@ -665,7 +665,7 @@ fn failed_estimates_from_another_methodology_are_pending_again() {
     }
 
     let pending: Vec<String> = store
-        .llm_calls_to_estimate_limit(None, Some("ecologits-0.11.2"))
+        .llm_calls_to_estimate(Some("ecologits-0.11.2"))
         .expect("query pending")
         .into_iter()
         .map(|event| event.event_id)

@@ -1,7 +1,7 @@
 //! State directory resolution shared by all `af` subcommands.
 //!
-//! Layout under the resolved directory: `spool/`, `rejected/`, `state.db`,
-//! managed sidecars, and integration state.
+//! Layout under the resolved directory: `spool/`, `state.db`, managed
+//! sidecars, and integration state.
 
 use std::path::PathBuf;
 

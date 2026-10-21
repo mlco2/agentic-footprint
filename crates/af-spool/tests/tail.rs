@@ -4,7 +4,7 @@ use std::io::Write;
 use std::path::PathBuf;
 
 use af_events::RejectReason;
-use af_spool::{quarantine, scan, spool_file_from_path, tail};
+use af_spool::{scan, spool_file_from_path, tail};
 
 mod common;
 use common::{event_id, spool_file, valid_line};
@@ -228,30 +228,4 @@ fn targeted_path_accepts_an_alias_of_the_same_spool_directory() {
     let parsed = spool_file_from_path(&spool, &notified).expect("aliased direct child");
     assert_eq!(parsed.collector, "collector");
     assert_eq!(parsed.session_id, "session");
-}
-
-#[test]
-fn quarantine_writes_reason_and_raw_line() {
-    let dir = tempfile::tempdir().unwrap();
-    let rejected_dir = dir.path().join("rejected");
-    let file = spool_file(dir.path(), "claude-code", "sess-1");
-    let reason = RejectReason::Json("expected value at line 1 column 1".to_string());
-
-    quarantine(&rejected_dir, &file, "not valid json", &reason);
-
-    let mut entries: Vec<PathBuf> = fs::read_dir(&rejected_dir)
-        .unwrap()
-        .map(|e| e.unwrap().path())
-        .collect();
-    assert_eq!(entries.len(), 1);
-    let written = entries.remove(0);
-
-    let file_name = written.file_name().unwrap().to_str().unwrap();
-    assert!(file_name.starts_with("claude-code.sess-1."));
-    assert!(file_name.ends_with(".txt"));
-
-    let content = fs::read_to_string(&written).unwrap();
-    let mut lines = content.lines();
-    assert_eq!(lines.next().unwrap(), format!("reason: {reason:?}"));
-    assert_eq!(lines.next().unwrap(), "not valid json");
 }

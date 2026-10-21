@@ -64,6 +64,16 @@ try {
     Assert ((Get-Sha (Join-Path $binDir 'af.exe')) -eq (Get-Sha (Join-Path $root 'af-v2.exe'))) `
         'failed install leaves the old binary intact'
 
+    # A URL without a checksum is refused before anything is fetched.
+    $failed = $false
+    try {
+        & $installer -BinaryUrl ([Uri](Join-Path $root 'af-v1.exe')).AbsoluteUri `
+            -BinarySha256 '' -BinDir $binDir -Yes -NoSetup -NoPython
+    } catch { $failed = $true }
+    Assert $failed 'a URL install without a checksum is refused'
+    Assert ((Get-Sha (Join-Path $binDir 'af.exe')) -eq (Get-Sha (Join-Path $root 'af-v2.exe'))) `
+        'a refused URL install leaves the old binary intact'
+
     # Uninstall: binary and PATH entry go; nothing else.
     & $installer -BinDir $binDir -Uninstall
     Assert (-not (Test-Path (Join-Path $binDir 'af.exe'))) 'uninstall removes af.exe'

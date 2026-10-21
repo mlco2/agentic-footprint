@@ -141,6 +141,28 @@ fn is_executable(path: &Path, _meta: &std::fs::Metadata) -> bool {
         .is_some_and(|ext| ext.eq_ignore_ascii_case("exe"))
 }
 
+/// An interpreter invocation that cannot pick up code or configuration from
+/// wherever `af` was started: `-I` keeps the working directory and the
+/// script's directory off `sys.path` and ignores `PYTHON*` variables and the
+/// user site, and the process runs from `workdir`, a directory af owns —
+/// so neither a project's `ecologits.py` nor its `.codecarbon.config` is
+/// ever read.
+pub fn isolated_python(python: &Path, workdir: &Path) -> Command {
+    let mut command = Command::new(python);
+    command.arg("-I").current_dir(workdir);
+    command
+}
+
+/// `uv` with no configuration discovery: `uv.toml` and `[tool.uv]` are read
+/// from the working directory and its parents, which a project controls
+/// (an index URL there would choose where the managed runtime comes from).
+/// Environment variables (`UV_INDEX_URL`, a user's mirror) still apply.
+fn uv(workdir: &Path) -> Command {
+    let mut command = Command::new("uv");
+    command.arg("--no-config").current_dir(workdir);
+    command
+}
+
 fn uv_on_path() -> bool {
     Command::new("uv")
         .arg("--version")
@@ -197,7 +219,7 @@ fn parse_versions(stdout: &[u8]) -> Option<RuntimeVersions> {
 /// What the venv at `venv` really has installed, asked of its own
 /// interpreter; `None` when there is no venv or it cannot answer.
 pub fn installed_versions(venv: &Path) -> Option<RuntimeVersions> {
-    let output = Command::new(venv_interpreter(venv))
+    let output = isolated_python(&venv_interpreter(venv), venv.parent().unwrap_or(venv))
         .args(["-c", VERSIONS_SCRIPT])
         .output()
         .ok()?;
@@ -247,19 +269,24 @@ pub fn setup(state_dir: &Path) -> Result<()> {
 /// no equivalent.
 pub fn provision(venv: &Path, requirements: &[String], exclude_newer: Option<&str>) -> Result<()> {
     let manifest = manifest();
+    // Every tool runs from the venv's parent, a directory af owns (see
+    // [`isolated_python`]).
+    let workdir = venv.parent().unwrap_or(venv);
+    std::fs::create_dir_all(workdir).with_context(|| format!("creating {}", workdir.display()))?;
     if uv_on_path() {
-        return setup_with_uv(&manifest, venv, requirements, exclude_newer);
+        return setup_with_uv(&manifest, venv, workdir, requirements, exclude_newer);
     }
-    setup_with_stdlib(&manifest, venv, requirements)
+    setup_with_stdlib(&manifest, venv, workdir, requirements)
 }
 
 fn setup_with_uv(
     manifest: &Manifest,
     venv: &Path,
+    workdir: &Path,
     requirements: &[String],
     exclude_newer: Option<&str>,
 ) -> Result<()> {
-    let venv_status = Command::new("uv")
+    let venv_status = uv(workdir)
         .args(["venv", "--python", &manifest.python.version])
         .arg(venv)
         .status()
@@ -273,7 +300,7 @@ fn setup_with_uv(
     }
 
     let venv_python_path = venv_interpreter(venv);
-    let install_status = Command::new("uv")
+    let install_status = uv(workdir)
         .args(["pip", "install", "--python"])
         .arg(&venv_python_path)
         .args(
@@ -312,14 +339,20 @@ fn stdlib_python_candidates(version: &str) -> Vec<(String, Vec<String>)> {
     ];
 }
 
-fn setup_with_stdlib(manifest: &Manifest, venv: &Path, requirements: &[String]) -> Result<()> {
+fn setup_with_stdlib(
+    manifest: &Manifest,
+    venv: &Path,
+    workdir: &Path,
+    requirements: &[String],
+) -> Result<()> {
     let candidates = stdlib_python_candidates(&manifest.python.version);
     let (python, python_args) = candidates
         .iter()
         .find(|(program, args)| {
             Command::new(program)
+                .current_dir(workdir)
                 .args(args)
-                .args(["-c", "import venv"])
+                .args(["-I", "-c", "import venv"])
                 .status()
                 .map(|status| status.success())
                 .unwrap_or(false)
@@ -327,8 +360,9 @@ fn setup_with_stdlib(manifest: &Manifest, venv: &Path, requirements: &[String]) 
         .context("neither uv nor a usable python3 with the venv module was found on PATH")?;
 
     let venv_status = Command::new(python)
+        .current_dir(workdir)
         .args(python_args)
-        .args(["-m", "venv"])
+        .args(["-I", "-m", "venv"])
         .arg(venv)
         .status()
         .with_context(|| format!("failed to run `{python} -m venv`"))?;
@@ -340,7 +374,7 @@ fn setup_with_stdlib(manifest: &Manifest, venv: &Path, requirements: &[String]) 
     }
 
     let venv_python_path = venv_interpreter(venv);
-    let install_status = Command::new(&venv_python_path)
+    let install_status = isolated_python(&venv_python_path, workdir)
         .args(["-m", "pip", "install"])
         .args(requirements)
         .status()
@@ -372,13 +406,11 @@ pub struct DoctorFinding {
     pub fix_hint: String,
 }
 
-/// Diagnoses the managed venv under `state_dir`, returning findings
-/// ordered most-severe first (`Error` before `Warn`). An empty result
-/// means everything checked out healthy. See [`runtime_status`].
+/// Diagnoses the managed venv under `state_dir`: at most one finding (see
+/// [`runtime_status`]), and an empty result means everything checked out
+/// healthy.
 pub fn doctor(state_dir: &Path) -> Vec<DoctorFinding> {
-    let mut findings: Vec<DoctorFinding> = runtime_status(state_dir).err().into_iter().collect();
-    findings.sort_by_key(|f| f.severity);
-    findings
+    runtime_status(state_dir).err().into_iter().collect()
 }
 
 /// The managed venv's installed versions, or the first thing wrong with
@@ -391,6 +423,8 @@ pub fn doctor(state_dir: &Path) -> Vec<DoctorFinding> {
 /// 3. `import ecologits, codecarbon, psutil` succeeds and reports both
 ///    versions (one interpreter run);
 /// 4. those versions meet this binary's floors.
+///
+/// The check runs from `state_dir`, never from where `af` was started.
 pub fn runtime_status(state_dir: &Path) -> std::result::Result<RuntimeVersions, DoctorFinding> {
     let error = |message: String, fix_hint: &str| DoctorFinding {
         severity: Severity::Error,
@@ -413,7 +447,7 @@ pub fn runtime_status(state_dir: &Path) -> std::result::Result<RuntimeVersions, 
             "run `af python setup` to rebuild the venv",
         ));
     };
-    let output = Command::new(&python)
+    let output = isolated_python(&python, state_dir)
         .args([
             "-c",
             &format!("import ecologits, codecarbon, psutil; {VERSIONS_SCRIPT}"),
@@ -457,6 +491,41 @@ pub fn runtime_status(state_dir: &Path) -> std::result::Result<RuntimeVersions, 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A state dir whose venv interpreter is the system `python3`, with a
+    /// module planted next to it that leaves a marker when imported.
+    #[cfg(unix)]
+    fn planted_state_dir(module: &str) -> (tempfile::TempDir, PathBuf) {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let bin = dir.path().join("venv/bin");
+        std::fs::create_dir_all(&bin).expect("venv bin");
+        let python3 = String::from_utf8(
+            Command::new("sh")
+                .args(["-c", "command -v python3"])
+                .output()
+                .expect("which")
+                .stdout,
+        )
+        .expect("utf8");
+        std::os::unix::fs::symlink(python3.trim(), bin.join("python")).expect("symlink python");
+        let marker = dir.path().join("imported");
+        std::fs::write(
+            dir.path().join(format!("{module}.py")),
+            format!("open({:?}, 'w').write('x')\n", marker.display().to_string()),
+        )
+        .expect("plant module");
+        (dir, marker)
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_runtime_check_never_imports_from_the_working_directory() {
+        let (dir, marker) = planted_state_dir("ecologits");
+        // Whatever directory af runs from, a project's `ecologits.py` must
+        // not be what the health check imports.
+        let _ = runtime_status(dir.path());
+        assert!(!marker.exists(), "a planted module ran");
+    }
 
     #[cfg(unix)]
     #[test]
@@ -640,11 +709,8 @@ mod tests {
     }
 
     #[test]
-    fn doctor_findings_are_sorted_most_severe_first() {
+    fn doctor_reports_at_most_one_finding() {
         let dir = tempfile::tempdir().unwrap();
-        let findings = doctor(dir.path());
-        for pair in findings.windows(2) {
-            assert!(pair[0].severity <= pair[1].severity);
-        }
+        assert_eq!(doctor(dir.path()).len(), 1, "the first problem only");
     }
 }

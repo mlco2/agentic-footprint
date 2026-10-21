@@ -1,16 +1,13 @@
-//! af-spool: incremental JSONL spool reader with offset tracking and
-//! quarantine of malformed lines.
+//! af-spool: incremental JSONL spool reader with offset tracking.
 //!
 //! Collectors append single-line Contract #1 events to files under the
 //! spool directory named `<collector>.<session_id>.jsonl`.
-//! [`scan`] discovers those files, [`tail`] reads new
-//! complete lines from a byte offset using [`af_events::parse_line`], and
-//! [`quarantine`] archives lines that fail to parse.
+//! [`scan`] discovers those files, and [`tail`] reads new complete lines
+//! from a byte offset using [`af_events::parse_line`], handing back the
+//! lines that fail to parse as [`RejectedLine`]s for the caller to record.
 
-mod reject;
 mod tail;
 
-pub use reject::{quarantine, quarantine_bytes};
 pub use tail::{tail, RejectedLine, TailResult};
 
 use std::path::{Path, PathBuf};

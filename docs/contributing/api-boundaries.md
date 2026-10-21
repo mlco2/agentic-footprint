@@ -29,12 +29,16 @@ or on a specific coding agent.
 ## Topic ownership
 
 - **Wire facts:** `af-events` and `schemas/`. Adding a fact field starts here.
-- **Filesystem transport:** `af-spool`. Filename grammar, tail offsets, and
-  rejected-line persistence have one implementation.
+- **Filesystem transport:** `af-spool`. Filename grammar and tail offsets
+  have one implementation; lines that fail to parse are handed back to the
+  caller, not stored.
 - **OTLP transport and source parsing:** `af-otlp`. Normalizers claim records
-  through descriptors and return envelope/unclaimed/dropped outcomes.
+  through descriptors and return envelope/unclaimed/dropped outcomes. The
+  server writes nothing: it sends normalized events and metadata-only rejects
+  over a bounded channel to its owner (`af watch`), which stores them.
 - **Persistence:** `af-store`. Callers do not issue ad-hoc SQL outside this
-  crate.
+  crate. This includes the `rejects` table, the one place rejected input is
+  recorded, as metadata only.
 - **Methodology:** `af-core` and managed sidecars. Collectors never estimate.
 - **Process orchestration and UX:** `af-cli`. Setup, watch, reporting, and HTTP
   presentation are binary concerns.
@@ -62,7 +66,8 @@ or on a specific coding agent.
 - `af-store` exposes a typed `Error`/`Result` because SQLite vs JSON failures
   are meaningful to callers.
 - `af-spool` uses `std::io::Result` for direct filesystem operations and
-  carries rejected-line metadata as values.
+  returns rejected lines as values (`RejectedLine`); the caller keeps only
+  their metadata.
 - `af-core`, `af-sidecar`, `af-otlp::serve`, and CLI commands use
   `anyhow::Result` where failures combine multiple external systems and are
   ultimately rendered to a human operator.

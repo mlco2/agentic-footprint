@@ -3,7 +3,7 @@
 For an end-to-end installation and usage walkthrough—including building
 `af`, provisioning Python, configuring OTLP, running `af watch`, and adding
 the optional statusline—see
-[`docs/claude-code-user-guide.md`](../../docs/claude-code-user-guide.md).
+[`docs/how-to/claude-code.md`](../../docs/how-to/claude-code.md).
 
 `af-hook.sh` is a POSIX `sh` shim that turns Claude Code's six lifecycle
 hooks into Contract #1 events, appended to
@@ -32,13 +32,20 @@ outside `$AF_STATE_DIR/spool/` or `$AF_STATE_DIR/tmp/openspans/<session_id>/`.
 The same rule is implemented in `crates/af-otlp` and `python/af_sampler`,
 and all three are pinned to the shared conformance vectors in
 `tests/fixtures/sanitize-vectors.json` — two collectors that disagree
-about what a session id may contain produce two filenames for one session.
+about what a session id may contain record one session under two ids, and
+the join sees two sessions.
+
+Everything the shim creates (spool files, open-span files, the error log,
+missing directories) is owner-only: it runs under `umask 077`, because it may
+run before `af watch` has restricted the state dir and a spool line carries
+tool inputs from the session.
 
 This collector observes local tool-call *spans* (when a tool started, when
 it finished, what kind it was). It does **not** capture LLM token usage —
-that's the OTLP receiver's job (`crates/af-otlp`, Task 8); the two
-collectors are complementary and write to separate spool files
-(`cc-hooks.*` vs `otlp-cc.*`) for the same session.
+that's the OTLP receiver's job (`crates/af-otlp`). The two are
+complementary and carry the same session id: this collector writes the
+`cc-hooks.*` spool file, while the receiver in `af watch` stores the
+`otlp-cc` facts directly in the SQLite store, without a spool file.
 
 ## `.claude/settings.json` hooks snippet
 
@@ -97,7 +104,7 @@ break. This is why `SessionStart`'s bootstrap `action_span` can report
 process running this session," without any other way to discover that pid
 from the hook payload.
 
-## OTel env block (Task 8 receiver, run alongside this collector)
+## OTel env block (the `af watch` receiver, run alongside this collector)
 
 Set these before launching `claude` to also capture LLM call telemetry via
 the local OTLP receiver (`crates/af-otlp::serve`, `POST /v1/logs`):
@@ -145,7 +152,7 @@ assume a nonzero span duration.
 | `Stop` / `SessionEnd` | Closes every remaining open-span with `status: "unknown"` and deletes its file; a stray file that doesn't parse as JSON is counted, deleted, and skipped (nothing emitted for it) rather than crashing the sweep |
 
 Collector degradation and control-plane failures follow the shared
-[`error-handling policy`](../../docs/error-handling.md).
+[`error-handling policy`](../../docs/contributing/error-handling.md).
 
 ## Test fixtures (`test-data/`)
 

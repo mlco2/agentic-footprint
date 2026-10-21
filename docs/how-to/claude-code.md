@@ -219,7 +219,18 @@ By default:
 - the debug console is served at `http://127.0.0.1:9414` when `--debug` is
   enabled;
 - hooks append JSONL facts under `$AF_STATE_DIR/spool/`;
-- estimates and derived joins are stored in `$AF_STATE_DIR/state.db`.
+- OTLP telemetry is normalized by the receiver and stored directly in
+  `$AF_STATE_DIR/state.db`, with the ingested hook facts, estimates, and
+  derived joins.
+
+`--otlp-addr` and `--debug-addr` accept loopback addresses only (`127.0.0.1`,
+`::1`); anything else is refused at startup, because neither listener has
+authentication.
+
+`af watch` writes to the store once a minute, not on every received batch (see
+[why writes are batched](../explanation/rebuild-architecture.md#why-writes-are-batched)).
+A new session is written at once; after that, the report, statusline, and
+debug console can lag the session by up to a minute.
 
 Optional location settings:
 
@@ -258,13 +269,14 @@ claude
 
 The hooks and OTLP exporter are independent but complementary:
 
-- hook files are named `cc-hooks.<session-id>.jsonl` and describe local
-  actions;
-- OTLP files are named `otlp-cc.<session-id>.jsonl` and contain normalized
-  LLM-call facts.
+- hooks write `$AF_STATE_DIR/spool/cc-hooks.<session-id>.jsonl`, which
+  describes local actions;
+- the OTLP exporter posts to the receiver in `af watch`, which stores the
+  normalized LLM-call facts (collector `otlp-cc`) in the SQLite store. There
+  is no spool file for them.
 
-Both must use the same Claude Code session ID for the control plane to join
-the facts into one session.
+Both carry the same Claude Code session ID, which is how the control plane
+joins the facts into one session.
 
 ## 7. Inspect the results
 
@@ -275,7 +287,8 @@ http://127.0.0.1:9414
 ```
 
 You can also produce a report from another terminal. SQLite WAL mode allows
-the report reader and resident watch writer to overlap:
+the report and the resident watch to overlap. The report sees what the watch
+has flushed, so the last minute of token telemetry may not be in it yet:
 
 ```sh
 export AF_STATE_DIR="$HOME/.local/state/agentic-footprint"
@@ -291,14 +304,20 @@ derived records from the preserved raw facts:
 "$AF_BIN" replay --format json --remote-region FRA
 ```
 
-Stop `af watch` with `Ctrl-C`. It performs a final ingest pass and shuts down
+Stop `af watch` with `Ctrl-C`. It stores the telemetry it has received,
+performs a final ingest pass, rebuilds the affected sessions, and shuts down
 its sidecars. If you are ending a short scripted Claude Code run, allow a few
-seconds for the OTLP exporter to flush before stopping the watch process.
+seconds for the OTLP exporter to flush before stopping the watch process:
+anything the exporter sends after the receiver has stopped is not received.
+A watch that is killed instead of stopped loses the telemetry it had not yet
+flushed, up to a minute of it.
 
 ## 8. Optional Claude Code statusline
 
 The included statusline reads already-computed local data; it performs no
-network request and does not ingest or estimate anything itself.
+network request and does not ingest or estimate anything itself. It shows what
+`af watch` last flushed, so its values can be up to a minute behind the
+session.
 
 On macOS/Linux, create an executable wrapper so the richer shell statusline
 always knows the absolute binary and script paths:
@@ -356,17 +375,26 @@ directly, replacing the path with the installed executable:
 
 ## 9. Verify collection
 
-After starting one Claude Code session and running at least one tool, check:
+After starting one Claude Code session and running at least one tool, wait
+for the next flush (up to a minute), then check:
 
 ```sh
-find "$AF_STATE_DIR/spool" -maxdepth 1 -type f -name '*.jsonl' -print
+ls "$AF_STATE_DIR"/spool/cc-hooks.*.jsonl
 "$AF_BIN" report --format text
+"$AF_BIN" doctor
 ```
 
-For the complete setup, expect both a `cc-hooks.*.jsonl` file and an
-`otlp-cc.*.jsonl` file for the session. The report should show local action
-spans and LLM calls; impact estimates may appear shortly after ingestion
-because `af watch` estimates asynchronously.
+For the complete setup, expect a `cc-hooks.*.jsonl` spool file for the
+session; token telemetry has no file, it is stored in `state.db`. The text
+report's `EVENT_COUNTS` column should include both `action_span=` and
+`llm_call=` for the session; impact estimates may appear
+shortly after ingestion because `af watch` estimates asynchronously.
+`af doctor` lists recent sessions that recorded tool activity but no token
+telemetry. With a foreground `af watch --debug`, the `otlp_receiver` counters
+in `http://127.0.0.1:9414/debug/health` show whether the exporter is reaching
+the receiver (`logs_requests`) and whether its records became events
+(`logs_accepted`), and the collectors list shows an `otlp-cc` row once the
+session's telemetry is stored.
 
 ## 10. Troubleshooting
 
@@ -380,8 +408,11 @@ because `af watch` estimates asynchronously.
 - Inspect `$AF_STATE_DIR/tmp/hook-errors.log`.
 - Run `collectors/claude-code/test_hooks.sh` from the repository root.
 
-### No `otlp-cc.*` file
+### No LLM calls in the report
 
+- Wait for the next flush: `af watch` writes received telemetry once a minute.
+- Run `af doctor`: it checks the receiver and reports a Claude Code process
+  that started before its telemetry configuration last changed (restart it).
 - Run `af setup --check` and confirm the receiver is reachable. On
   macOS/Linux, `af service status` also diagnoses the installed service.
 - Confirm telemetry and OTLP variables are exported in the Claude Code

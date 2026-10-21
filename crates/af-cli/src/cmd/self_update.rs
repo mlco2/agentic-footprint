@@ -121,6 +121,10 @@ pub struct UpdateArgs {
     /// GitHub token for API rate limits (default: $GITHUB_TOKEN)
     #[arg(long)]
     pub token: Option<String>,
+    /// Install without verifying the release signature (the checksum is still
+    /// checked, but it comes from the same release as the binary)
+    #[arg(long)]
+    pub allow_unsigned: bool,
 }
 
 pub fn run(state_dir: &Path, args: Args) -> Result<i32> {
@@ -192,9 +196,9 @@ fn fetch_release(
 }
 
 /// Downloads this platform's asset from `release` beside `exe` (as
-/// `<exe>.new`), verified against `SHA256SUMS` and, when `cosign` is
-/// installed, its sigstore bundle. Returns the staged path and what was
-/// verified; on any failure the staged file is removed and `exe` is
+/// `<exe>.new`), verified against `SHA256SUMS` and, unless
+/// `allow_unsigned`, its sigstore bundle. Returns the staged path and what
+/// was verified; nothing is written unless every check passed, and `exe` is
 /// untouched.
 fn stage_verified(
     agent: &ureq::Agent,
@@ -202,6 +206,7 @@ fn stage_verified(
     target: &str,
     exe: &Path,
     token: Option<&str>,
+    allow_unsigned: bool,
 ) -> Result<(PathBuf, &'static str)> {
     use sha2::{Digest, Sha256};
     let asset = asset_name(target);
@@ -220,54 +225,65 @@ fn stage_verified(
         "checksum mismatch for {asset}: expected {expected}, got {actual}; nothing was changed"
     );
 
+    // The checksum comes from the same release as the binary: it proves the
+    // download intact, not who built it. The signature does.
+    let verified = if allow_unsigned {
+        "checksum verified; signature not verified (--allow-unsigned)"
+    } else {
+        let bundle = http::get(
+            agent,
+            release.asset_url(&format!("{asset}.sigstore.json"))?,
+            token,
+        )?;
+        let bundle = String::from_utf8(bundle).context("the sigstore bundle is not UTF-8")?;
+        verify_bundle(
+            &bytes,
+            &bundle,
+            &release_identity(&release.tag),
+            GITHUB_ACTIONS_ISSUER,
+        )
+        .with_context(|| {
+            format!(
+                "the signature of {asset} in {} does not verify; nothing was changed",
+                release.tag
+            )
+        })?;
+        "checksum and sigstore signature verified"
+    };
+
     let staged = exe.with_extension("new");
     std::fs::write(&staged, &bytes).with_context(|| format!("write {}", staged.display()))?;
-    match verify_signature(agent, release, &asset, &staged, token) {
-        Ok(verified) => Ok((staged, verified)),
-        Err(error) => {
-            let _ = std::fs::remove_file(&staged);
-            Err(error)
-        }
-    }
+    Ok((staged, verified))
 }
 
-/// Verifies `staged` against the release's sigstore bundle with `cosign`
-/// when it is installed, and says what was verified either way.
-fn verify_signature(
-    agent: &ureq::Agent,
-    release: &Release,
-    asset: &str,
-    staged: &Path,
-    token: Option<&str>,
-) -> Result<&'static str> {
-    if std::process::Command::new("cosign")
-        .arg("version")
-        .output()
-        .is_err()
-    {
-        return Ok("checksum verified; install cosign to also verify the signature");
-    }
-    let bundle_name = format!("{asset}.sigstore.json");
-    let bundle = staged.with_extension("sigstore.json");
-    std::fs::write(
-        &bundle,
-        http::get(agent, release.asset_url(&bundle_name)?, token)?,
-    )?;
-    let status = std::process::Command::new("cosign")
-        .args(["verify-blob", "--bundle"])
-        .arg(&bundle)
-        .args([
-            "--certificate-identity-regexp",
-            "^https://github.com/mlco2/agentic-footprint/",
-            "--certificate-oidc-issuer",
-            "https://token.actions.githubusercontent.com",
-        ])
-        .arg(staged)
-        .status()
-        .context("run cosign verify-blob");
-    let _ = std::fs::remove_file(&bundle);
-    anyhow::ensure!(status?.success(), "cosign could not verify {asset}");
-    Ok("checksum and sigstore signature verified")
+/// The OIDC issuer of GitHub Actions' signing certificates.
+const GITHUB_ACTIONS_ISSUER: &str = "https://token.actions.githubusercontent.com";
+
+/// The certificate a release asset's signature must carry: issued to this
+/// repository's release workflow, running for this tag. A pattern over the
+/// repository would also accept a signature from any other workflow or
+/// branch of it.
+fn release_identity(tag: &str) -> String {
+    format!("https://github.com/{REPO}/.github/workflows/release.yml@refs/tags/{tag}")
+}
+
+/// Verifies `artifact` against a sigstore bundle, in-process: the
+/// certificate must chain to the Sigstore trust root embedded in this
+/// binary, name exactly `identity` from `issuer`, be logged in the Rekor
+/// transparency log, and have signed these very bytes.
+fn verify_bundle(artifact: &[u8], bundle: &str, identity: &str, issuer: &str) -> Result<()> {
+    use sigstore_verify::trust_root::{TrustedRoot, SIGSTORE_PRODUCTION_TRUSTED_ROOT};
+    use sigstore_verify::types::Bundle;
+    use sigstore_verify::{verify, VerificationPolicy};
+
+    let bundle = Bundle::from_json(bundle).context("not a sigstore bundle")?;
+    let root = TrustedRoot::from_json(SIGSTORE_PRODUCTION_TRUSTED_ROOT)
+        .context("the embedded Sigstore trust root")?;
+    let policy = VerificationPolicy::any_identity()
+        .require_identity(identity)
+        .require_issuer(issuer);
+    verify(artifact, &bundle, &policy, &root)?;
+    Ok(())
 }
 
 /// Moves `staged` over `current`. Unix: a rename (a running process keeps
@@ -398,7 +414,8 @@ fn update_command(state_dir: &Path, args: UpdateArgs) -> Result<i32> {
     }
 
     if swap {
-        let (staged, verified) = stage_verified(&agent, &release, target, &exe, token)?;
+        let (staged, verified) =
+            stage_verified(&agent, &release, target, &exe, token, args.allow_unsigned)?;
         replace_binary(&exe, &staged)?;
         println!("Updated af from v{current} to {} ({verified})", release.tag);
     } else {
@@ -424,6 +441,55 @@ fn update_command(state_dir: &Path, args: UpdateArgs) -> Result<i32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A real artifact and its keyless bundle (sigstore/fulcio's release
+    /// checksums; see tests/fixtures/sigstore/README.md): a bundle cannot be
+    /// minted offline for a test binary.
+    const SIGNED: &[u8] =
+        include_bytes!("../../../../tests/fixtures/sigstore/fulcio_checksums.txt");
+    const BUNDLE: &str =
+        include_str!("../../../../tests/fixtures/sigstore/fulcio_checksums.txt.sigstore.json");
+    const SIGNER: &str = "keyless@projectsigstore.iam.gserviceaccount.com";
+    const SIGNER_ISSUER: &str = "https://accounts.google.com";
+
+    #[test]
+    fn a_genuine_signature_from_the_expected_signer_verifies() {
+        verify_bundle(SIGNED, BUNDLE, SIGNER, SIGNER_ISSUER).expect("genuine bundle");
+    }
+
+    #[test]
+    fn a_signature_from_any_other_signer_is_refused() {
+        let error = verify_bundle(
+            SIGNED,
+            BUNDLE,
+            &release_identity("v1.9.0"),
+            GITHUB_ACTIONS_ISSUER,
+        )
+        .expect_err("someone else's signature");
+        assert!(format!("{error:#}").contains("identity"), "{error:#}");
+        verify_bundle(SIGNED, BUNDLE, SIGNER, GITHUB_ACTIONS_ISSUER)
+            .expect_err("the right name from another issuer");
+    }
+
+    #[test]
+    fn a_tampered_artifact_or_a_broken_bundle_is_refused() {
+        let mut tampered = SIGNED.to_vec();
+        tampered.push(b'x');
+        verify_bundle(&tampered, BUNDLE, SIGNER, SIGNER_ISSUER).expect_err("one byte more");
+        verify_bundle(SIGNED, "{}", SIGNER, SIGNER_ISSUER).expect_err("not a bundle");
+    }
+
+    #[test]
+    fn releases_must_be_signed_by_the_release_workflow_for_their_tag() {
+        assert_eq!(
+            release_identity("v0.2.0"),
+            "https://github.com/mlco2/agentic-footprint/.github/workflows/release.yml@refs/tags/v0.2.0"
+        );
+        assert_eq!(
+            GITHUB_ACTIONS_ISSUER,
+            "https://token.actions.githubusercontent.com"
+        );
+    }
 
     #[test]
     fn versions_parse_with_or_without_v_and_reject_prereleases() {

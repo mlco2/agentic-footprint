@@ -1,6 +1,6 @@
 //! Ingest pipeline: scan the spool for collector files, tail each from its
 //! last recorded offset, insert newly parsed events into the store,
-//! quarantine lines that failed to parse, and persist the new offset.
+//! record what failed to parse (metadata only), and persist the new offset.
 //!
 //! Idempotent by construction: a spool file's offset only advances past
 //! bytes that were actually consumed, and `Store::insert_events` dedupes on
@@ -13,17 +13,17 @@ use std::time::{Duration, Instant};
 use anyhow::Result;
 
 use af_events::Envelope;
-use af_spool::{quarantine, scan, spool_file_from_path, tail, SpoolFile};
+use af_spool::{scan, spool_file_from_path, tail, SpoolFile};
 use af_store::Store;
 
-/// One quarantined line, located well enough to be found again by hand.
+/// One rejected line, located well enough to be found again by hand.
 ///
 /// `af watch --debug` streams these to the console's Health tab, which
 /// renders the reason, the origin file and the offset side by side — the
 /// three facts that turn "a line was rejected" into something a developer
 /// can act on.
 pub struct RejectRecord {
-    /// When the line was quarantined (RFC 3339, UTC). The line's own `ts`
+    /// When the line was rejected (RFC 3339, UTC). The line's own `ts`
     /// is unavailable by definition: it failed to parse.
     pub ts: String,
     pub reason: String,
@@ -40,7 +40,8 @@ pub struct RejectRecord {
 pub struct IngestSummary {
     /// Newly inserted events across all spool files (dedup-adjusted).
     pub ingested: usize,
-    /// Lines quarantined because they failed to parse.
+    /// Lines rejected because they failed to parse (recorded, metadata
+    /// only, in the store's reject ring).
     pub rejected: usize,
     /// Unknown event types preserved verbatim for audit/replay.
     pub opaque: usize,
@@ -102,8 +103,8 @@ pub struct IngestMetrics {
     pub total_duration: Duration,
 }
 
-/// Runs one ingest pass against `state_dir` (`spool/`, `rejected/`
-/// beneath it — see [`crate::paths::state_dir`]), inserting into `store`.
+/// Runs one ingest pass against `state_dir` (`spool/` beneath it — see
+/// [`crate::paths::state_dir`]), inserting into `store`.
 ///
 /// The store is the **caller's**, not one opened here. `af watch` runs this
 /// once per pass and then does its own work against the same database; when
@@ -121,7 +122,6 @@ pub fn ingest(store: &mut Store, state_dir: &Path) -> Result<IngestSummary> {
     let discovery_duration = discovery_started.elapsed();
     ingest_files(
         store,
-        state_dir,
         files,
         IngestMetrics {
             full_scan: true,
@@ -152,7 +152,6 @@ pub fn ingest_paths(
     let discovery_duration = discovery_started.elapsed();
     ingest_files(
         store,
-        state_dir,
         files,
         IngestMetrics {
             dirty_paths: paths.len(),
@@ -171,22 +170,19 @@ pub fn ingest_paths(
 /// so the next pass reads the same bytes again.
 fn ingest_files(
     store: &mut Store,
-    state_dir: &Path,
     files: Vec<SpoolFile>,
     metrics: IngestMetrics,
     total_started: Instant,
 ) -> Result<IngestSummary> {
-    store.in_transaction(|store| ingest_files_in(store, state_dir, files, metrics, total_started))
+    store.in_transaction(|store| ingest_files_in(store, files, metrics, total_started))
 }
 
 fn ingest_files_in(
     store: &mut Store,
-    state_dir: &Path,
     files: Vec<SpoolFile>,
     mut metrics: IngestMetrics,
     total_started: Instant,
 ) -> Result<IngestSummary> {
-    let rejected_dir = state_dir.join("rejected");
     let mut ingested = 0usize;
     let mut rejected = 0usize;
     let mut opaque = 0usize;
@@ -245,22 +241,38 @@ fn ingest_files_in(
         metrics.opaque_events_inserted += opaque_inserted;
         opaque += opaque_inserted;
 
-        for entry in &result.rejected {
-            quarantine(&rejected_dir, file, &entry.line, &entry.reason);
-            rejected += 1;
-            rejects.push(RejectRecord {
-                ts: crate::cmd::now_rfc3339(),
-                reason: entry.reason.to_string(),
-                origin: file
-                    .path
-                    .file_name()
-                    .map(|name| name.to_string_lossy().into_owned())
-                    .unwrap_or_else(|| file.path.display().to_string()),
-                line: entry.line_number,
-                byte_offset: entry.byte_offset,
-                raw: entry.line.clone(),
-            });
+        // Recorded in the store's bounded reject ring, never copied to disk:
+        // a raw line is whatever a collector wrote, and a file per reject
+        // had neither a quota nor private permissions.
+        let mut reject_rows = Vec::with_capacity(result.rejected.len());
+        if !result.rejected.is_empty() {
+            let ts = crate::cmd::now_rfc3339();
+            let origin = file
+                .path
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_else(|| file.path.display().to_string());
+            for entry in &result.rejected {
+                let reason = entry.reason.to_string();
+                reject_rows.push(af_store::RejectRow {
+                    ts: ts.clone(),
+                    source: format!("spool:{}", file.collector),
+                    reason: reason.clone(),
+                    attribute_keys: Vec::new(),
+                    bytes: entry.line.len() as u64,
+                });
+                rejects.push(RejectRecord {
+                    ts: ts.clone(),
+                    reason,
+                    origin: origin.clone(),
+                    line: entry.line_number,
+                    byte_offset: entry.byte_offset,
+                    raw: entry.line.clone(),
+                });
+            }
         }
+        store.insert_rejects(&reject_rows)?;
+        rejected += reject_rows.len();
 
         if result.new_offset != offset {
             let offset_started = Instant::now();

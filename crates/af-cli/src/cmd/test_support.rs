@@ -25,3 +25,12 @@ pub(crate) fn wal_commits(db: &Path) -> usize {
     }
     commits
 }
+
+/// Renames a table behind the store's back, so a test can make one write
+/// fail (and then succeed again once it is renamed back).
+pub(crate) fn rename_table(db: &Path, from: &str, to: &str) {
+    rusqlite::Connection::open(db)
+        .expect("open db")
+        .execute_batch(&format!("ALTER TABLE {from} RENAME TO {to}"))
+        .expect("rename");
+}

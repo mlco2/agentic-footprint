@@ -82,8 +82,9 @@ enum Commands {
         #[arg(long)]
         no_sidecars: bool,
         /// Address for the local OTLP http/json receiver (`POST /v1/logs`,
-        /// `POST /v1/metrics`). A port that is already in use is reported
-        /// and the watch continues without a receiver.
+        /// `POST /v1/metrics`). Loopback only (127.0.0.1, ::1). A port that
+        /// is already in use is reported and the watch continues without a
+        /// receiver.
         #[arg(long, default_value = cmd::watch::DEFAULT_OTLP_ADDR, conflicts_with = "no_otlp")]
         otlp_addr: String,
         /// Do not start the OTLP receiver at all. Mutually exclusive with
@@ -96,7 +97,7 @@ enum Commands {
         #[arg(long, conflicts_with = "no_otlp")]
         require_receiver: bool,
         /// Address for the `/debug` HTTP+SSE console API. Only bound with
-        /// `--debug`.
+        /// `--debug`. Loopback only (127.0.0.1, ::1).
         #[arg(long, default_value = cmd::watch::DEFAULT_DEBUG_ADDR)]
         debug_addr: String,
         /// Sampler window length in seconds, passed to the codecarbon
@@ -168,10 +169,7 @@ fn main() {
     match cli.command {
         Commands::Setup(args) => {
             let state_dir = paths::state_dir();
-            if let Err(err) = cmd::setup::run(&state_dir, args) {
-                eprintln!("af setup: {err:#}");
-                std::process::exit(1);
-            }
+            exit_with("af setup", cmd::setup::run(&state_dir, args).map(|()| 0));
         }
         Commands::Doctor(args) => {
             exit_with("af doctor", cmd::doctor::run(&paths::state_dir(), args))
@@ -181,10 +179,10 @@ fn main() {
         }
         Commands::Service(args) => {
             let state_dir = paths::state_dir();
-            if let Err(err) = cmd::service::run(&state_dir, args) {
-                eprintln!("af service: {err:#}");
-                std::process::exit(1);
-            }
+            exit_with(
+                "af service",
+                cmd::service::run(&state_dir, args).map(|()| 0),
+            );
         }
         #[cfg(feature = "experimental-opencode")]
         Commands::Collect { collector } => {
@@ -192,10 +190,7 @@ fn main() {
             let result = match collector {
                 CollectAction::Opencode(args) => cmd::opencode::run(&state_dir, args),
             };
-            if let Err(err) = result {
-                eprintln!("af collect opencode: {err:#}");
-                std::process::exit(1);
-            }
+            exit_with("af collect opencode", result.map(|()| 0));
         }
         Commands::Report {
             format,
@@ -238,19 +233,16 @@ fn main() {
                 remote_region,
                 batch_interval: std::time::Duration::from_millis(batch_interval_ms),
             };
-            if let Err(err) = cmd::watch::run(&state_dir, args) {
-                eprintln!("af watch: {err:#}");
-                std::process::exit(1);
-            }
+            exit_with("af watch", cmd::watch::run(&state_dir, args).map(|()| 0));
         }
         Commands::Python { action } => {
             let state_dir = paths::state_dir();
             match action {
                 PythonAction::Setup => {
-                    if let Err(err) = cmd::python::run_setup(&state_dir) {
-                        eprintln!("af python setup: {err:#}");
-                        std::process::exit(1);
-                    }
+                    exit_with(
+                        "af python setup",
+                        cmd::python::run_setup(&state_dir).map(|()| 0),
+                    );
                 }
                 PythonAction::Upgrade { dry_run } => exit_with(
                     "af python upgrade",

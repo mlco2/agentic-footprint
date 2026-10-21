@@ -198,9 +198,14 @@ pub fn rebuild_prepared_stored(
 ) -> Result<RebuildOutcome> {
     let pending_llm_calls = 0;
     let mut joins = 0usize;
-    let mut batch: Vec<(String, serde_json::Value)> = Vec::new();
+    let mut joins_written = 0usize;
     let mut notes = Vec::new();
 
+    // One transaction for the whole pass (nested in the caller's flush when
+    // there is one), written a session at a time so no pass holds every
+    // session's records at once; unchanged records are not rewritten: see
+    // `Store::upsert_joins`.
+    store.in_transaction(|store| -> Result<()> {
     for (session_id, prepared) in sessions {
         let first_ts = prepared
             .events
@@ -226,7 +231,7 @@ pub fn rebuild_prepared_stored(
                 ));
             }
         }
-        for join in build_joins(
+        let batch: Vec<(String, serde_json::Value)> = build_joins(
             session_id,
             first_ts,
             last_ts,
@@ -236,14 +241,15 @@ pub fn rebuild_prepared_stored(
             &estimates,
             &zone,
             remote_region.id.as_deref(),
-        ) {
-            batch.push((join.unit_key, join.record));
-            joins += 1;
-        }
+        )
+        .into_iter()
+        .map(|join| (join.unit_key, join.record))
+        .collect();
+        joins += batch.len();
+        joins_written += store.upsert_joins(&batch)?;
     }
-    // One transaction for the whole pass, and unchanged records are not
-    // rewritten: see `Store::upsert_joins`.
-    let joins_written = store.upsert_joins(&batch)?;
+    Ok(())
+    })?;
 
     Ok(RebuildOutcome {
         zone,
@@ -269,7 +275,6 @@ fn rebuild_joins(
     let pending_llm_calls = store.count_llm_calls_without_estimate()? as usize;
 
     let mut visited = 0usize;
-    let mut joins = 0usize;
     let mut batch: Vec<(String, serde_json::Value)> = Vec::new();
     let mut summaries = store.session_summaries()?;
     summaries.sort_by(|a, b| a.session_id.cmp(&b.session_id));
@@ -320,7 +325,6 @@ fn rebuild_joins(
             remote_region.id.as_deref(),
         ) {
             batch.push((join.unit_key, join.record));
-            joins += 1;
         }
     }
     // One transaction for the whole pass, and unchanged records are not
@@ -333,7 +337,7 @@ fn rebuild_joins(
         pending_llm_calls,
         wiped,
         sessions: visited,
-        joins,
+        joins: batch.len(),
         joins_written,
         notes,
     })

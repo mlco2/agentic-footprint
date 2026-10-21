@@ -26,6 +26,9 @@ serde = { version = "1", features = ["derive"] }
 sha2 = "0.10"
 time.workspace = true
 ureq = "2.12"
+# Release signatures, verified in-process: no cosign to install. Pinned
+# exactly — the crate is pre-1.0 and its API moves between releases.
+sigstore-verify = { version = "=0.14.0", default-features = false }
 af-console = { path = "../af-console" }
 af-core = { path = "../af-core" }
 af-events = { path = "../af-events" }

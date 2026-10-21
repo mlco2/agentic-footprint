@@ -6,7 +6,7 @@
 # upgrade` (run by `af self update`) installs newer releases outside the
 # 7-day cooldown above them; nothing is ever installed below them. Sidecar protocol and provisioning
 # are owned by the Rust control plane and documented in
-# docs/api-boundaries.md.
+# docs/contributing/api-boundaries.md.
 
 [python]
 version = "3.12"

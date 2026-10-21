@@ -487,15 +487,10 @@ mod tests {
 
         migrate(&conn).expect("migrate to current");
 
-        let has_column: bool = conn
-            .query_row(
-                "SELECT COUNT(*) FROM pragma_table_info('impact_joins') WHERE name = 'session_id'",
-                [],
-                |row| row.get::<_, i64>(0),
-            )
-            .expect("table info")
-            == 1;
-        assert!(has_column, "v4 adds impact_joins.session_id");
+        assert!(
+            has_column(&conn, "impact_joins", "session_id").expect("table info"),
+            "v4 adds impact_joins.session_id"
+        );
         let store = Store(conn);
         let joins = store.joins_for_session("s1").expect("read after migration");
         assert_eq!(joins.len(), 1, "an existing join must still be found");

@@ -13,16 +13,12 @@ use std::time::Instant;
 
 use af_core::{apportion_traced, build_joins, correlate, Zone};
 use af_events::{fixtures, ActionSpan, Attribution, Envelope, LlmCall, Payload};
-use time::{format_description::well_known::Rfc3339, OffsetDateTime};
 
 const BASE_MS: i64 = 1_785_326_400_000;
 const ROOT_PID: i64 = 4242;
 
 fn ts(offset_ms: i64) -> String {
-    OffsetDateTime::from_unix_timestamp_nanos((BASE_MS + offset_ms) as i128 * 1_000_000)
-        .expect("representable timestamp")
-        .format(&Rfc3339)
-        .expect("formattable timestamp")
+    af_core::rfc3339_ms(BASE_MS + offset_ms).expect("representable timestamp")
 }
 
 fn attributed(

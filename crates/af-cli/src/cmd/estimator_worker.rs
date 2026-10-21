@@ -105,6 +105,8 @@ struct Config {
 pub struct Completion {
     pub sessions: BTreeSet<String>,
     pub zone: Option<Zone>,
+    /// One batch's counts, for the worker's health. Not accumulated into
+    /// the completion the loop takes, which reads only the rows.
     pub outcome: EstimationOutcome,
     pub pending: usize,
     pub error: Option<String>,
@@ -404,11 +406,6 @@ fn merge_completion(target: &Arc<Mutex<Completion>>, update: Completion) {
     if update.zone.is_some() {
         target.zone = update.zone.clone();
     }
-    target.outcome.estimated += update.outcome.estimated;
-    target.outcome.unknown_model += update.outcome.unknown_model;
-    target.outcome.missing_zone += update.outcome.missing_zone;
-    target.outcome.missing_usage += update.outcome.missing_usage;
-    target.outcome.errors += update.outcome.errors;
     target.pending = update.pending;
     if update.error.is_some() {
         target.error = update.error.clone();
@@ -440,6 +437,7 @@ fn set_state(health: &Arc<Mutex<Health>>, state: &'static str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cmd::test_support::rename_table;
     use af_events::{fixtures, Envelope, Payload};
     use std::time::Instant;
 
@@ -506,13 +504,6 @@ mod tests {
             2,
             "the worker leaves writing to the loop"
         );
-    }
-
-    fn rename_table(db: &Path, from: &str, to: &str) {
-        rusqlite::Connection::open(db)
-            .expect("open db")
-            .execute_batch(&format!("ALTER TABLE {from} RENAME TO {to}"))
-            .expect("rename");
     }
 
     /// The worker is woken by new calls. One that failed must not wait for

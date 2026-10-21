@@ -44,7 +44,7 @@ pub struct TailResult {
 /// One line that failed to parse, located precisely enough to be found
 /// again by hand.
 ///
-/// `byte_offset` and `line_number` exist because a quarantined line is only
+/// `byte_offset` and `line_number` exist because a rejected line is only
 /// actionable if the reader can point at it in the original file: the debug
 /// console's Health tab renders exactly these three facts (reason, origin,
 /// offset) next to the raw text. `line_number` is 1-based and counted from
@@ -153,7 +153,7 @@ pub fn tail(file: &SpoolFile, from_offset: u64) -> io::Result<TailResult> {
 /// Counts newline-terminated lines in `[0, upto)` of `f`.
 ///
 /// Only called when a line was actually rejected, so the cost of re-reading
-/// the already-consumed prefix is paid once per quarantined line batch —
+/// the already-consumed prefix is paid once per rejected line batch —
 /// never on the healthy path. Reads in chunks so a large spool file is not
 /// buffered whole just to place one bad line.
 fn count_lines_before(f: &mut File, upto: u64) -> io::Result<u64> {

@@ -307,14 +307,7 @@ fn always_ok_receiver() -> String {
 
 #[cfg(unix)]
 fn stub_agents(bin: &std::path::Path) {
-    std::fs::create_dir_all(bin).unwrap();
-    for name in ["codex", "claude", "jq"] {
-        let path = bin.join(name);
-        std::fs::write(&path, "#!/bin/sh\nexit 0\n").unwrap();
-        let mut permissions = std::fs::metadata(&path).unwrap().permissions();
-        permissions.set_mode(0o700);
-        std::fs::set_permissions(path, permissions).unwrap();
-    }
+    common::stub_executables(bin, &["codex", "claude", "jq"]);
 }
 
 /// Regression: with `alias codex='CODEX_HOME="$PWD/.codex" codex'`, every
@@ -405,21 +398,6 @@ fn test_watch_requiring_a_receiver_exits_when_the_port_is_taken() {
     drop(taken);
 }
 
-/// A fake af receiver that answers every connection, for `af doctor`.
-#[cfg(unix)]
-fn always_af_receiver() -> String {
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let endpoint = format!("http://{}/v1/logs", listener.local_addr().unwrap());
-    std::thread::spawn(move || {
-        for mut stream in listener.incoming().flatten() {
-            let mut request = [0_u8; 4096];
-            let _ = stream.read(&mut request);
-            let _ = stream.write_all(AF_RECEIVER_OK.as_bytes());
-        }
-    });
-    endpoint
-}
-
 /// The symptom behind "Claude Code connects only sometimes": a process
 /// started before setup fires hooks but exports no token telemetry.
 /// `af doctor` must name the session and the remedy.
@@ -458,7 +436,7 @@ fn test_doctor_flags_sessions_with_hooks_but_no_token_telemetry() {
         .env("AF_STATE_DIR", &state)
         .env("HOME", &home)
         .env_remove("CODEX_HOME")
-        .args(["doctor", "--endpoint", &always_af_receiver()])
+        .args(["doctor", "--endpoint", &always_ok_receiver()])
         .assert()
         .code(1)
         .stdout(predicate::str::contains(
@@ -479,7 +457,7 @@ fn test_doctor_reports_installed_runtime_versions_below_the_floors() {
         .env("AF_STATE_DIR", dir.path().join("state"))
         .env("HOME", &home)
         .env_remove("CODEX_HOME")
-        .args(["doctor", "--endpoint", &always_af_receiver()])
+        .args(["doctor", "--endpoint", &always_ok_receiver()])
         .assert()
         .code(1)
         .stdout(predicate::str::contains("! runtime"))
@@ -497,7 +475,7 @@ fn test_doctor_reports_a_missing_runtime_with_one_remedy() {
         .env("AF_STATE_DIR", dir.path().join("state"))
         .env("HOME", &home)
         .env_remove("CODEX_HOME")
-        .args(["doctor", "--endpoint", &always_af_receiver()])
+        .args(["doctor", "--endpoint", &always_ok_receiver()])
         .assert()
         .code(1)
         .stdout(predicate::str::contains("! runtime"))
@@ -517,7 +495,7 @@ fn test_doctor_passes_on_a_healthy_empty_install() {
         .env("AF_STATE_DIR", dir.path().join("state"))
         .env("HOME", &home)
         .env_remove("CODEX_HOME")
-        .args(["doctor", "--endpoint", &always_af_receiver()])
+        .args(["doctor", "--endpoint", &always_ok_receiver()])
         .assert()
         .success()
         .stdout(predicate::str::contains("No problems found"));
@@ -539,4 +517,22 @@ fn af_report_makes_the_state_dir_private() {
         .success();
     let mode = std::fs::metadata(&state).unwrap().permissions().mode() & 0o777;
     assert_eq!(mode, 0o700);
+}
+
+#[test]
+fn watch_refuses_addresses_beyond_loopback() {
+    for flags in [
+        ["--otlp-addr", "0.0.0.0:4318"],
+        ["--debug-addr", "192.168.1.10:9414"],
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let mut cmd = Command::cargo_bin("af").unwrap();
+        cmd.env("AF_STATE_DIR", dir.path())
+            .args(["watch", "--debug", "--no-sidecars"])
+            .args(flags)
+            .timeout(std::time::Duration::from_secs(20))
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains("loopback"));
+    }
 }

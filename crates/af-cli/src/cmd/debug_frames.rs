@@ -426,7 +426,7 @@ pub fn watchdog_entries(sample: &ProcessSample, tree: &SessionTree) -> Vec<Value
 /// Bytes of a rejected line carried in its frame.
 ///
 /// A reject frame exists so a developer can see *what* failed to parse; the
-/// full text is on disk in `rejected/` for anyone who needs it. Without a
+/// full text is kept nowhere (the store records only metadata). Without a
 /// cap the frame is as large as the line, and a rejected line has no size
 /// limit by definition — a multi-megabyte transcript blob appended by a
 /// misconfigured collector would be copied into the ring, held for the ring

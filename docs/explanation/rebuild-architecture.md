@@ -26,10 +26,12 @@ flowchart LR
     end
 
     Spool[(JSONL spool)]
+    Receiver[OTLP receiver in af watch<br/>held in memory until the flush]
 
     subgraph SQLite[SQLite state.db]
         Raw[(raw_events<br/>source of truth)]
         Offsets[(ingest_offsets)]
+        Rejects[(rejects<br/>metadata only)]
         Estimates[(impact_estimates<br/>derived)]
         Joins[(impact_joins<br/>derived)]
     end
@@ -39,10 +41,13 @@ flowchart LR
     Readers[CLI report / statusline / debug console]
 
     Hooks --> Spool
-    OTLP --> Spool
     Sampler --> Spool
     Framework --> Spool
+    OTLP -->|POST /v1/logs| Receiver
+    Receiver -->|normalized facts, one commit per flush| Raw
+    Receiver -->|refused records| Rejects
     Spool -->|ingest new complete lines| Raw
+    Spool -->|malformed lines| Rejects
     Spool -->|advance cursor| Offsets
     Raw -->|pending llm_call facts| Sidecar
     Sidecar --> Estimates
@@ -51,6 +56,16 @@ flowchart LR
     Core --> Joins
     Joins --> Readers
 ```
+
+There are two transports. File-based collectors (the Claude Code hook, the
+CodeCarbon sampler, the experimental OpenCode collector) append JSONL to
+`$AF_STATE_DIR/spool/<collector>.<session>.jsonl`. OTLP telemetry (Claude
+Code and Codex token usage and LLM calls) is posted to the receiver inside
+`af watch`, which normalizes it and writes it straight into `raw_events`; it
+never touches the spool. Within `af watch` the loop owns the one database
+connection, so the receiver hands its facts to that loop through a bounded
+queue rather than writing anything itself; when the queue is full it answers
+with a retryable `503`.
 
 ## The three operations people often confuse
 
@@ -61,6 +76,13 @@ Ingestion moves newly appended, complete JSONL lines from the spool into
 next pass should only consume appended bytes.
 
 Ingest does **not** calculate environmental impact.
+
+A line that does not parse, or an OTLP record the receiver refuses, becomes a
+row in the `rejects` table: when, the source, the reason, the attribute
+names, and the size in bytes. The content itself is not kept anywhere,
+because a rejected batch can carry tool arguments, command output, or
+account identifiers. The table keeps the newest 1,000 rows (`REJECT_RING` in
+`crates/af-store/src/rejects.rs`).
 
 ### Rebuild derived views
 
@@ -148,37 +170,76 @@ sequenceDiagram
 The important consequence is that report latency scales with the outstanding
 estimation backlog and with all retained sessions that are rebuilt.
 
+`af report` reads only the spool and the store. Telemetry that a running
+`af watch` has received but not yet flushed is still in that process's memory,
+so a report can lag the receiver by up to one flush interval (see below).
+
 ## What `af watch` does today
 
-The resident tracker runs a debounced pass when the spool changes, with a
-periodic tick as a fallback.
+The resident tracker wakes on received telemetry, on a spool change, or on
+its next deadline, and writes in batches: everything it has to write since
+the last flush goes into the store in one transaction.
 
 ```mermaid
 flowchart TD
-    Wake[Filesystem event or periodic tick]
-    Ingest[Scan and ingest changed spool files]
-    Dirty[Collect touched session IDs]
-    Supervise[Supervise one shared machine sampler]
-    Load[Load each touched session once]
-    Prepare[Correlate and apportion each session once]
-    Join[Build and store joins from PreparedSession]
+    Wake[Received telemetry, filesystem event,<br/>or next deadline]
+    Hold[Hold received telemetry and estimates in memory]
+    Due{Flush due?}
+    Supervise[Supervise the shared machine sampler]
+    Flush[One transaction: received facts and rejects,<br/>completed estimates, spool ingest, due rebuilds]
+    Dirty[Mark touched sessions dirty]
+    Rebuild[Load, correlate and apportion each due session once,<br/>then store its joins]
     Publish[Reuse prepared state for report,<br/>health, and allocation publication]
     Estimate[Estimator worker processes pending calls]
-    Ready[Mark affected sessions dirty when estimates arrive]
-    Wait[Wait for next wake]
+    Wait[Sleep until the next deadline]
 
-    Wake --> Ingest
-    Ingest --> Dirty
-    Dirty --> Supervise
-    Supervise --> Load
-    Load --> Prepare
-    Prepare --> Join
-    Join --> Publish
+    Wake --> Hold
+    Hold --> Due
+    Due -->|no| Supervise
+    Supervise --> Wait
+    Due -->|interval elapsed, or a new session or spool file| Flush
+    Flush --> Dirty
+    Dirty --> Rebuild
+    Rebuild --> Publish
     Publish --> Wait
     Dirty -. enqueue pending calls .-> Estimate
-    Estimate --> Ready
-    Ready --> Load
+    Estimate -. results held for the next flush .-> Hold
 ```
+
+### Why writes are batched
+
+Every SQLite commit in WAL mode writes whole pages twice, once to the WAL and
+again when it is checkpointed into the database. For a process that stays
+resident all day, disk wear follows the number of commits, not the volume of
+telemetry: sampler windows land every few seconds and Claude Code exports
+every two, and at a 10-second flush a day of work measured about 600 MiB of
+physical writes. So `af watch` commits once per flush:
+
+- the flush interval is 60 seconds (`DEFAULT_BATCH_INTERVAL_MS` in
+  `crates/af-cli/src/cmd/watch.rs`; the hidden `--batch-interval-ms` flag
+  changes it, and tests pass 0);
+- something new is written at once: a session or spool file this watch has
+  not seen yet, or a burst of 5,000 received events, so a new session's
+  sampler and first rebuild are not delayed;
+- a session that gained new facts (LLM calls, spans, metadata) is rebuilt at
+  most once per interval; one that only gained energy samples waits six
+  intervals (`SAMPLE_REBUILD_FACTOR`);
+- the full-directory spool reconciliation runs every 30 seconds
+  (`RECONCILE`), but it too waits for a flush;
+- a clean stop (`Ctrl-C`, or `SIGTERM` from a service stop or restart)
+  stores what the receiver had queued, runs a final ingest pass, and rebuilds
+  every dirty session before exiting.
+
+The trade-off is staleness and a bounded loss window. The status line and the
+debug console show numbers up to one interval old (sample-only energy up to
+six), and `af report`, which ingests the spool itself, lacks the OTLP
+telemetry the watch has not flushed yet. Received OTLP telemetry not yet flushed exists only in
+memory, and the receiver has already answered the exporter with success, so a
+crash or `kill -9` loses up to one interval of it. Spool data is not at risk
+the same way: its lines stay on disk and its cursor advances only in the
+commit that stored them, so the next start re-ingests them. If the store
+refuses a flush (locked, disk full), the received facts are kept in memory and
+retried, up to 50,000 events.
 
 The resident path is deliberately scoped and non-blocking:
 
@@ -188,7 +249,7 @@ The resident path is deliberately scoped and non-blocking:
 - correlation and energy apportionment are computed once into a prepared
   session and reused for join storage and debug publication;
 - remote estimation runs in a worker, so slow model-impact estimation does not
-  block new spool ingestion;
+  block ingestion or the receiver;
 - completed estimates schedule another rebuild only for the affected sessions.
 
 `af report` and `af replay` still use the complete-store pipeline because they
@@ -225,9 +286,10 @@ methodology independently.
 
 | Data | Deleted by normal report/watch? | Deleted by replay? | Reconstructable from raw facts alone? |
 |---|---:|---:|---:|
-| JSONL spool | No | No | Original collector transport |
+| JSONL spool | No | No | Original transport for hooks, the sampler, and OpenCode (OTLP telemetry is not spooled) |
 | `raw_events` | No | No | Source of truth |
 | `ingest_offsets` | No | No | Operational cursor, not an impact result |
+| `rejects` | Trimmed to the newest 1,000 | No | No: metadata only, the rejected content is never kept |
 | `impact_joins` | Overwritten by key | Yes | Yes |
 | `impact_estimates` | Existing rows retained; missing rows added | Yes | Only with the estimator and its methodology/data available |
 
@@ -239,7 +301,8 @@ itself. Replay therefore refuses before deletion unless `--force` is explicit.
 
 Think of the system as a small event-sourced application:
 
-- the spool is the transport log;
+- the spool is the transport log for file-based collectors, and the OTLP
+  receiver is a second, in-memory transport into the same ledger;
 - `raw_events` is the durable fact ledger;
 - `impact_estimates` is a methodology-dependent enrichment cache;
 - `impact_joins` is a materialized read model;
