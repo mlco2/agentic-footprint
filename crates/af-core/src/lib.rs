@@ -11,6 +11,7 @@
 mod attribution;
 mod correlate;
 mod estimate;
+mod interval;
 mod join;
 mod replay;
 
@@ -22,12 +23,12 @@ pub use correlate::{
     correlate, parse_ts, rfc3339_ms, SessionTree, Span, SpanId, BOOTSTRAP_TOOL_NAME,
 };
 pub use estimate::{
-    estimate_events, estimate_pending, estimate_pending_limit, estimator_methodology,
-    EstimationOutcome, EstimationRegion,
+    compute_estimates, estimate_events, estimate_pending, estimate_pending_limit,
+    estimator_methodology, ComputedEstimates, EstimationOutcome, EstimationRegion,
 };
 pub use join::{
-    build_joins, fetch_zone_factors, stale_zone_estimates, sum_criteria, CriterionSum, ImpactJoin,
-    Zone, ZoneFactors,
+    build_joins, fetch_zone_factors, session_unit_key, stale_zone_estimates, sum_criteria,
+    CriterionSum, ImpactJoin, Zone, ZoneFactors,
 };
 pub use replay::{
     rebuild_derived, rebuild_derived_stored, rebuild_prepared_stored, PreparedSession,

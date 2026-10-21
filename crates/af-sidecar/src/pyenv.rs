@@ -64,6 +64,40 @@ fn venv_dir(state_dir: &Path) -> PathBuf {
     state_dir.join("venv")
 }
 
+/// What changes when the managed runtime does: the modification times of
+/// the venv, its `pyvenv.cfg`, its interpreter and its `site-packages`
+/// directories (an install or removal adds or drops entries there). Equal
+/// fingerprints mean [`doctor`] would answer the same, without starting
+/// Python to ask.
+pub fn environment_fingerprint(state_dir: &Path) -> Vec<(PathBuf, Option<std::time::SystemTime>)> {
+    let venv = venv_dir(state_dir);
+    let mut paths = vec![
+        venv.clone(),
+        venv.join("pyvenv.cfg"),
+        venv_interpreter(&venv),
+    ];
+    #[cfg(windows)]
+    paths.push(venv.join("Lib").join("site-packages"));
+    #[cfg(unix)]
+    if let Ok(entries) = std::fs::read_dir(venv.join("lib")) {
+        let mut found: Vec<PathBuf> = entries
+            .filter_map(|entry| entry.ok())
+            .map(|entry| entry.path().join("site-packages"))
+            .collect();
+        found.sort();
+        paths.extend(found);
+    }
+    paths
+        .into_iter()
+        .map(|path| {
+            let modified = std::fs::metadata(&path)
+                .and_then(|meta| meta.modified())
+                .ok();
+            (path, modified)
+        })
+        .collect()
+}
+
 /// The venv's interpreter path: `bin/python` on unix, `Scripts\python.exe`
 /// on Windows. The single source of truth for the layout — provisioning,
 /// resolution, and doctor messages all go through here.
@@ -423,6 +457,27 @@ pub fn runtime_status(state_dir: &Path) -> std::result::Result<RuntimeVersions, 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn the_fingerprint_moves_when_packages_change() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let empty = environment_fingerprint(dir.path());
+        let site = dir.path().join("venv/lib/python3.12/site-packages");
+        std::fs::create_dir_all(&site).expect("site-packages");
+        let created = environment_fingerprint(dir.path());
+        assert_ne!(created, empty);
+        assert_eq!(
+            environment_fingerprint(dir.path()),
+            created,
+            "stable while unchanged"
+        );
+
+        // Directory mtimes have coarse resolution on some filesystems.
+        std::thread::sleep(std::time::Duration::from_millis(1100));
+        std::fs::create_dir(site.join("newpkg")).expect("install");
+        assert_ne!(environment_fingerprint(dir.path()), created);
+    }
 
     #[test]
     fn requirements_pin_the_given_versions_and_keep_psutil_open() {

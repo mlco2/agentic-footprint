@@ -1010,3 +1010,131 @@ def test_real_codecarbon_run_emits_valid_energy_samples(tmp_path):
 def test_a_session_id_starting_with_a_dash_parses_as_one_argument():
     args = parse_args(["--session=--a"])
     assert args.session == "--a"
+
+
+# --------------------------------------------------------------------------
+# bounded state over a long run
+# --------------------------------------------------------------------------
+
+
+class TaskKeepingTracker(FakeTracker):
+    """Keeps a `_tasks` history exactly as codecarbon 3.3.1 does:
+    `start_task()` adds an entry, `stop_task()` only marks it inactive."""
+
+    class _Task:
+        def __init__(self):
+            self.is_active = True
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self._tasks = {}
+
+    def start_task(self, task_name=None):
+        self._tasks[task_name] = self._Task()
+
+    def stop_task(self, task_name=None):
+        self._tasks[task_name].is_active = False
+        return super().stop_task(task_name)
+
+
+def test_a_long_run_keeps_no_finished_window_in_the_tracker(tmp_path):
+    tracker = TaskKeepingTracker(hardware=[FakeCPU(), FakeRAM()])
+    sampler, clock = make_sampler(tmp_path, tracker)
+    sampler.start()
+    for _ in range(500):
+        clock.advance(5)
+        sampler.tick()
+
+    # Only the window open right now may be held; every closed one was
+    # handed back to us by `stop_task()` and is no longer the tracker's.
+    assert len(tracker._tasks) == 1
+    assert len(events_of(sampler.spool_path, "energy_sample")) == 500
+
+
+class WindowAwareProcs(FakeProcs):
+    def __init__(self):
+        super().__init__()
+        self.windows = 0
+
+    def new_window(self):
+        self.windows += 1
+
+
+def test_the_inspector_is_told_when_a_window_samples(tmp_path):
+    procs = WindowAwareProcs()
+    procs.set(100, 1.0, 1024)
+    sampler, clock = make_sampler(tmp_path, FakeTracker(), procs=procs)
+    sampler.start()
+    sampler.apply_op({"op": "watch", "span_id": "s1", "pids": [100]})
+    assert procs.windows == 1, "the baseline must read a fresh process table"
+    for _ in range(3):
+        clock.advance(5)
+        sampler.tick()
+    assert procs.windows == 4
+
+
+def _spawn_tree():
+    """A root that starts one sleeping child; returns (root, child_pid)."""
+    script = (
+        "import subprocess, sys, time;"
+        "c = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)']);"
+        "print(c.pid, flush=True); time.sleep(60)"
+    )
+    root = subprocess.Popen([sys.executable, "-c", script], stdout=subprocess.PIPE, text=True)
+    child = int(root.stdout.readline())
+    return root, child
+
+
+def test_the_psutil_inspector_lists_the_process_table_once_per_window(monkeypatch):
+    psutil = pytest.importorskip("psutil")
+    from af_sampler.__main__ import _make_psutil_inspector
+
+    listings = []
+    real_iter = psutil.process_iter
+
+    def counting_iter(*args, **kwargs):
+        listings.append(1)
+        return real_iter(*args, **kwargs)
+
+    monkeypatch.setattr(psutil, "process_iter", counting_iter)
+    root, child = _spawn_tree()
+    try:
+        inspect = _make_psutil_inspector()
+        inspect.new_window()
+        whole = inspect(root.pid)
+        only_child = inspect(child)
+        again = inspect(root.pid)
+        assert len(listings) == 1, "one process-table listing serves every root in a window"
+        assert whole[2] and only_child[2]
+        assert again == whole, "a pid read twice in one window reads the same"
+        # The root's tree includes its child.
+        assert whole[1] > only_child[1]
+
+        inspect.new_window()
+        inspect(root.pid)
+        assert len(listings) == 2
+    finally:
+        root.kill()
+        os.kill(child, 9)
+        root.wait()
+
+
+def test_event_ids_are_ulids_in_emission_order(tmp_path):
+    # Time-ordered ids land next to each other in the store's unique index
+    # instead of on a random page each: fewer pages written per commit.
+    tracker = FakeTracker(hardware=[FakeCPU(), FakeRAM()])
+    sampler, clock = make_sampler(tmp_path, tracker)
+    sampler.start()
+    for _ in range(5):
+        clock.advance(5)
+        sampler.tick()
+    sampler.finish()
+
+    ids = [event["event_id"] for event in read_events(sampler.spool_path)]
+    crockford = set("0123456789ABCDEFGHJKMNPQRSTVWXYZ")
+    for event_id in ids:
+        assert len(event_id) == 26 and set(event_id) <= crockford, event_id
+    # The first ten characters are the millisecond timestamp.
+    stamps = [event_id[:10] for event_id in ids]
+    assert stamps == sorted(stamps) and len(set(stamps)) >= 5
+    assert len(set(ids)) == len(ids)

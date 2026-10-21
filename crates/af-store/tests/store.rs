@@ -871,3 +871,94 @@ fn writes_inside_one_transaction_land_together_or_not_at_all() {
     assert_eq!(store.events_for_session("s").expect("read").len(), 1);
     assert_eq!(store.get_offset("cc-hooks", "s").expect("offset"), 42);
 }
+
+#[test]
+fn a_transaction_inside_a_transaction_rolls_back_only_itself() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let mut store = Store::open(&dir.path().join("state.db")).expect("open");
+
+    store
+        .in_transaction(|store| -> Result<(), af_store::Error> {
+            store.insert_events(&[llm_call_envelope("evt-nest-000000001", "s")])?;
+            let inner: Result<(), af_store::Error> = store.in_transaction(|store| {
+                store.set_offset("cc-hooks", "s", 42)?;
+                Err(af_store::Error::Sqlite(rusqlite::Error::InvalidQuery))
+            });
+            assert!(inner.is_err());
+            store.in_transaction(|store| store.set_offset("cc-hooks", "t", 7))
+        })
+        .expect("outer commit");
+
+    assert_eq!(store.events_for_session("s").expect("read").len(), 1);
+    assert_eq!(store.get_offset("cc-hooks", "s").expect("offset"), 0);
+    assert_eq!(store.get_offset("cc-hooks", "t").expect("offset"), 7);
+}
+
+#[test]
+fn pending_among_answers_the_queue_predicate_for_named_calls_only() {
+    let mut store = Store::open(Path::new(":memory:")).expect("open in-memory store");
+    let events: Vec<Envelope> = ["evt-new", "evt-ok-old", "evt-unknown-old", "evt-other"]
+        .iter()
+        .map(|id| llm_call_envelope(id, "session-1"))
+        .collect();
+    store.insert_events(&events).expect("insert events");
+    for row in [
+        estimate("evt-ok-old", "ecologits-0.11.1", "ok"),
+        estimate("evt-unknown-old", "ecologits-0.11.1", "unknown_model"),
+    ] {
+        store.upsert_estimate(&row).expect("upsert estimate");
+    }
+    let asked = [
+        "evt-new".to_string(),
+        "evt-ok-old".to_string(),
+        "evt-unknown-old".to_string(),
+        "evt-not-stored".to_string(),
+    ];
+
+    let pending = store
+        .llm_calls_pending_among(&asked, Some("ecologits-0.11.2"))
+        .expect("pending among");
+    let ids: Vec<&str> = pending
+        .iter()
+        .map(|event| event.event_id.as_str())
+        .collect();
+    // `evt-other` is pending too, but was not asked about.
+    assert_eq!(ids, ["evt-new", "evt-unknown-old"]);
+
+    let pending = store
+        .llm_calls_pending_among(&asked, None)
+        .expect("pending among");
+    let ids: Vec<&str> = pending
+        .iter()
+        .map(|event| event.event_id.as_str())
+        .collect();
+    assert_eq!(ids, ["evt-new"]);
+
+    // The whole queue, as ids, in queue order.
+    assert_eq!(
+        store
+            .llm_call_ids_to_estimate(Some("ecologits-0.11.2"))
+            .expect("queue ids"),
+        ["evt-new", "evt-other", "evt-unknown-old"]
+    );
+}
+
+#[test]
+fn a_join_is_read_by_its_key_alone() {
+    let mut store = Store::open(Path::new(":memory:")).expect("open");
+    store
+        .upsert_joins(&[
+            (
+                "session:s".to_string(),
+                serde_json::json!({"unit": {"level": "session", "session_id": "s"}}),
+            ),
+            (
+                "tool_call:s:a".to_string(),
+                serde_json::json!({"unit": {"level": "tool_call", "session_id": "s"}}),
+            ),
+        ])
+        .expect("upsert");
+    let found = store.join_by_key("session:s").expect("read");
+    assert_eq!(found.expect("present")["unit"]["level"], "session");
+    assert!(store.join_by_key("session:other").expect("read").is_none());
+}

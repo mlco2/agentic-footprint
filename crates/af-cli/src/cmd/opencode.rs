@@ -3,7 +3,7 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::thread;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use af_events::{
     ActionSpan, AgentApp, Attribution, Collector, Envelope, ExecutionLocus, LlmCall, Payload,
@@ -21,6 +21,14 @@ const CURSOR_VERSION: u8 = 1;
 const RECONNECT_INITIAL: Duration = Duration::from_millis(250);
 const RECONNECT_MAX: Duration = Duration::from_secs(10);
 const RECONNECT_JITTER: f64 = 0.2;
+/// The cursor is checkpointed at most this often, or every
+/// [`CHECKPOINT_EVENTS`] durable events, and when the stream ends. A
+/// checkpoint fsyncs the spool, then replaces the cursor: the cursor never
+/// names a sequence whose output is not on disk. A crash between
+/// checkpoints replays from the last one, which is idempotent — every
+/// envelope carries a stable event id the store deduplicates on.
+const CHECKPOINT_INTERVAL: Duration = Duration::from_secs(1);
+const CHECKPOINT_EVENTS: usize = 64;
 
 #[derive(Debug, Clone, clap::Args)]
 pub struct Args {
@@ -237,12 +245,40 @@ struct CursorTarget<'a> {
 }
 
 fn collect_reader<R: BufRead>(
+    reader: R,
+    normalizer: &mut Normalizer,
+    spool: &Path,
+    session_id: &str,
+    latest: &mut u64,
+    cursor: Option<CursorTarget<'_>>,
+) -> Result<()> {
+    let mut checkpoint = Checkpoint::new(*latest);
+    let result = read_frames(
+        reader,
+        normalizer,
+        spool,
+        session_id,
+        latest,
+        cursor,
+        &mut checkpoint,
+    );
+    // Whatever was processed before the stream ended — or broke — is in the
+    // spool; say so, so a reconnect does not replay it.
+    let saved = match cursor {
+        Some(target) => checkpoint.save(target, spool, session_id, *latest, &normalizer.state),
+        None => Ok(()),
+    };
+    result.and(saved)
+}
+
+fn read_frames<R: BufRead>(
     mut reader: R,
     normalizer: &mut Normalizer,
     spool: &Path,
     session_id: &str,
     latest: &mut u64,
     cursor: Option<CursorTarget<'_>>,
+    checkpoint: &mut Checkpoint,
 ) -> Result<()> {
     let mut data = Vec::new();
     let mut line = String::new();
@@ -253,7 +289,7 @@ fn collect_reader<R: BufRead>(
             .context("read OpenCode SSE stream")?;
         if read == 0 {
             if !data.is_empty() {
-                *latest = process_frame(&data, normalizer, spool, session_id, *latest, cursor)?;
+                *latest = process_frame(&data, normalizer, spool, session_id, *latest)?;
             }
             return Ok(());
         }
@@ -261,8 +297,13 @@ fn collect_reader<R: BufRead>(
         let line = line.trim_end_matches(['\r', '\n']);
         if line.is_empty() {
             if !data.is_empty() {
-                *latest = process_frame(&data, normalizer, spool, session_id, *latest, cursor)?;
+                *latest = process_frame(&data, normalizer, spool, session_id, *latest)?;
                 data.clear();
+                if let Some(target) = cursor {
+                    if checkpoint.due(*latest) {
+                        checkpoint.save(target, spool, session_id, *latest, &normalizer.state)?;
+                    }
+                }
             }
         } else if !line.starts_with(':') {
             if let Some(value) = line.strip_prefix("data:") {
@@ -272,13 +313,64 @@ fn collect_reader<R: BufRead>(
     }
 }
 
+/// When the cursor was last saved, and at which sequence. See
+/// [`CHECKPOINT_INTERVAL`].
+struct Checkpoint {
+    saved: u64,
+    at: Instant,
+    events: usize,
+}
+
+impl Checkpoint {
+    fn new(saved: u64) -> Self {
+        Checkpoint {
+            saved,
+            at: Instant::now(),
+            events: 0,
+        }
+    }
+
+    fn due(&mut self, latest: u64) -> bool {
+        if latest == self.saved {
+            return false;
+        }
+        self.events += 1;
+        self.events >= CHECKPOINT_EVENTS || self.at.elapsed() >= CHECKPOINT_INTERVAL
+    }
+
+    fn save(
+        &mut self,
+        target: CursorTarget<'_>,
+        spool: &Path,
+        session_id: &str,
+        latest: u64,
+        state: &NormalizerState,
+    ) -> Result<()> {
+        if latest == self.saved {
+            return Ok(());
+        }
+        match File::open(spool) {
+            Ok(file) => file
+                .sync_all()
+                .with_context(|| format!("sync spool {}", spool.display()))?,
+            // Nothing was ever written: nothing to make durable.
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(error).with_context(|| format!("open spool {}", spool.display()))
+            }
+        }
+        save_cursor(target.path, target.server, session_id, latest, state)?;
+        *self = Checkpoint::new(latest);
+        Ok(())
+    }
+}
+
 fn process_frame(
     data: &[String],
     normalizer: &mut Normalizer,
     spool: &Path,
     session_id: &str,
     latest: u64,
-    cursor: Option<CursorTarget<'_>>,
 ) -> Result<u64> {
     let event: SourceEvent = match serde_json::from_str(&data.join("\n")) {
         Ok(event) => event,
@@ -287,7 +379,7 @@ fn process_frame(
             return Ok(latest);
         }
     };
-    process_event(event, normalizer, spool, session_id, latest, cursor)
+    process_event(event, normalizer, spool, session_id, latest)
 }
 
 fn process_event(
@@ -296,7 +388,6 @@ fn process_event(
     spool: &Path,
     session_id: &str,
     latest: u64,
-    cursor: Option<CursorTarget<'_>>,
 ) -> Result<u64> {
     let sequence = match durable_sequence(&event, session_id) {
         DurableSequence::OtherSession => return Ok(latest),
@@ -340,23 +431,7 @@ fn process_event(
         return Err(error);
     }
 
-    if let Some(sequence) = sequence {
-        if let Some(target) = cursor {
-            if let Err(error) = save_cursor(
-                target.path,
-                target.server,
-                session_id,
-                sequence,
-                &normalizer.state,
-            ) {
-                normalizer.state = state_before;
-                return Err(error);
-            }
-        }
-        Ok(sequence)
-    } else {
-        Ok(latest)
-    }
+    Ok(sequence.unwrap_or(latest))
 }
 
 enum DurableSequence {
@@ -657,6 +732,9 @@ fn load_cursor(path: &Path, server: &str, session_id: &str) -> Result<Option<Cur
     Ok(Some(cursor))
 }
 
+#[cfg(test)]
+static CURSOR_SAVES: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
 fn save_cursor(
     path: &Path,
     server: &str,
@@ -664,6 +742,8 @@ fn save_cursor(
     after: u64,
     normalizer: &NormalizerState,
 ) -> Result<()> {
+    #[cfg(test)]
+    CURSOR_SAVES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let parent = path.parent().context("OpenCode cursor has no parent")?;
     fs::create_dir_all(parent)
         .with_context(|| format!("create cursor directory {}", parent.display()))?;
@@ -951,37 +1031,79 @@ mod tests {
     }
 
     #[test]
-    fn cursor_is_written_after_spool_append() {
+    fn the_cursor_never_names_a_sequence_whose_output_was_not_written() {
         let dir = tempfile::tempdir().unwrap();
+        // A directory where the spool file should be: every append fails.
         let spool = dir.path().join("spool");
         fs::create_dir(&spool).unwrap();
         let cursor = dir.path().join("cursor.json");
-        let started: SourceEvent = serde_json::from_str(
-            r#"{"id":"evt_1234567890123456","type":"session.next.step.started","durable":{"aggregateID":"ses","seq":1},"data":{"timestamp":1,"sessionID":"ses","assistantMessageID":"msg","model":{"providerID":"p","id":"m"}}}"#,
-        )
-        .unwrap();
+        let frames = r#"data: {"id":"evt_1234567890123456","type":"session.next.step.started","durable":{"aggregateID":"ses","seq":1},"data":{"timestamp":1,"sessionID":"ses","assistantMessageID":"msg","model":{"providerID":"p","id":"m"}}}
+
+data: {"id":"evt_abcdefghijklmnop","type":"session.next.step.ended","durable":{"aggregateID":"ses","seq":2},"data":{"timestamp":2,"sessionID":"ses","assistantMessageID":"msg","tokens":{"input":1,"output":1}}}
+
+"#;
         let mut normalizer = Normalizer::new(None, NormalizerState::default());
-        process_event(started, &mut normalizer, &spool, "ses", 0, None).unwrap();
-        fs::create_dir_all(&spool).unwrap();
-        let ended: SourceEvent = serde_json::from_str(
-            r#"{"id":"evt_abcdefghijklmnop","type":"session.next.step.ended","durable":{"aggregateID":"ses","seq":2},"data":{"timestamp":2,"sessionID":"ses","assistantMessageID":"msg","tokens":{"input":1,"output":1}}}"#,
-        )
-        .unwrap();
-        let error = process_event(
-            ended,
+        let mut latest = 0;
+        let error = collect_reader(
+            BufReader::new(Cursor::new(frames)),
             &mut normalizer,
             &spool,
             "ses",
-            1,
+            &mut latest,
             Some(CursorTarget {
                 path: &cursor,
                 server: "http://server",
             }),
         )
         .unwrap_err();
-        assert!(error.to_string().contains("open spool"));
-        assert!(!cursor.exists());
-        assert_eq!(normalizer.state.steps.len(), 1);
+        assert!(error.to_string().contains("spool"), "{error:#}");
+        assert_eq!(latest, 1, "the failed event is not consumed");
+        assert_eq!(
+            normalizer.state.steps.len(),
+            1,
+            "its state change is rolled back"
+        );
+        if let Some(saved) = load_cursor(&cursor, "http://server", "ses").unwrap() {
+            assert!(saved.after <= 1);
+        }
+    }
+
+    #[test]
+    fn a_long_stream_checkpoints_its_cursor_in_batches() {
+        let dir = tempfile::tempdir().unwrap();
+        let spool = spool_path(dir.path(), "ses");
+        let cursor = cursor_path(dir.path(), "http://server", "ses");
+        let mut frames = String::new();
+        for seq in 1..=500u64 {
+            frames.push_str(&format!(
+                "data: {{\"id\":\"evt_started_{seq:06}\",\"type\":\"session.next.step.started\",\"durable\":{{\"aggregateID\":\"ses\",\"seq\":{seq}}},\"data\":{{\"timestamp\":{seq},\"sessionID\":\"ses\",\"assistantMessageID\":\"msg{seq}\",\"model\":{{\"providerID\":\"p\",\"id\":\"m\"}}}}}}\n\n"
+            ));
+        }
+        let before = CURSOR_SAVES.load(std::sync::atomic::Ordering::Relaxed);
+        let mut normalizer = Normalizer::new(None, NormalizerState::default());
+        let mut latest = 0;
+        collect_reader(
+            BufReader::new(Cursor::new(frames)),
+            &mut normalizer,
+            &spool,
+            "ses",
+            &mut latest,
+            Some(CursorTarget {
+                path: &cursor,
+                server: "http://server",
+            }),
+        )
+        .unwrap();
+        let saves = CURSOR_SAVES.load(std::sync::atomic::Ordering::Relaxed) - before;
+        assert_eq!(latest, 500);
+        // Tests run in parallel and share the counter, so bound it loosely:
+        // per event would be 500.
+        assert!(saves <= 20, "{saves} saves for 500 events");
+        let saved = load_cursor(&cursor, "http://server", "ses")
+            .unwrap()
+            .unwrap();
+        assert_eq!(saved.after, 500, "the end of the stream is checkpointed");
+        assert_eq!(saved.normalizer.steps.len(), 500);
     }
 
     #[test]

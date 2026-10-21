@@ -24,6 +24,19 @@
   // paradigms. `forSession` falls back to the unlabeled report on servers
   // that predate multi-session (and on the mock).
   const report = $derived(reportStore.forSession(sessionStore.selectedId));
+
+  // Only the report on screen is fetched: the picked session while this tab
+  // is mounted and the page is visible, nothing otherwise.
+  let visible = $state(typeof document === "undefined" || document.visibilityState !== "hidden");
+  $effect(() => {
+    const onVisibility = () => (visible = document.visibilityState !== "hidden");
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => document.removeEventListener("visibilitychange", onVisibility);
+  });
+  $effect(() => {
+    reportStore.focus(visible ? sessionStore.selectedId : null);
+    return () => reportStore.focus(null);
+  });
   const session = $derived(sessionStore.data);
 
   const cards = $derived.by(() => selectImpactCards(report));

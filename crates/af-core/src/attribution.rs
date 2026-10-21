@@ -35,6 +35,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use af_events::{EnergyKind, EnergySample, ProcessDelta, ProcessSample};
 
 use crate::correlate::{parse_ts, SessionTree, Span, SpanId, BOOTSTRAP_TOOL_NAME};
+use crate::interval::IntervalIndex;
 
 /// Policy id recorded on derived records that used cpu-time weighting.
 pub const POLICY_L2_CPU_TIME: &str = "l2_cpu_time/v1";
@@ -438,6 +439,16 @@ fn run(
         .collect();
     let mut degenerate_seen: HashSet<&str> = HashSet::new();
 
+    // Each energy window only looks at what can overlap it. The lists stay
+    // in their original order (the index returns ascending positions), so
+    // every sum below accumulates in the order it always did.
+    let window_index = IntervalIndex::new(windows.iter().map(|w| (w.t_start, w.t_end)));
+    let span_index =
+        |spans: &[&Span]| IntervalIndex::new(spans.iter().map(|s| (s.t_start, s.t_end)));
+    let attributable_index = span_index(&attributable);
+    let remote_index = span_index(&remote);
+    let degenerate_index = span_index(&degenerate);
+
     for (sample_index, sample) in samples.iter().enumerate() {
         let (Some(t0), Some(t1)) = (parse_ts(&sample.t_start), parse_ts(&sample.t_end)) else {
             out.skipped_events += 1;
@@ -475,7 +486,11 @@ fn run(
         let window_ms = (t1 - t0) as f64;
         this.denominator_cpu_ms = window_ms;
 
-        for span in &remote {
+        for span in remote_index
+            .candidates(t0, t1)
+            .into_iter()
+            .map(|i| remote[i])
+        {
             if span.overlaps(t0, t1) {
                 remote_seen.insert(span.span_id.as_str());
                 // Remote spans appear in the trace so the developer can see
@@ -496,19 +511,26 @@ fn run(
                 });
             }
         }
-        for span in &degenerate {
+        for span in degenerate_index
+            .candidates(t0, t1)
+            .into_iter()
+            .map(|i| degenerate[i])
+        {
             if span.overlaps(t0, t1) {
                 degenerate_seen.insert(span.span_id.as_str());
             }
         }
 
-        let active: Vec<&Span> = attributable
-            .iter()
-            .copied()
+        let active: Vec<&Span> = attributable_index
+            .candidates(t0, t1)
+            .into_iter()
+            .map(|i| attributable[i])
             .filter(|s| s.overlaps(t0, t1))
             .collect();
-        let covering: Vec<&ProcWindow> = windows
-            .iter()
+        let covering: Vec<&ProcWindow> = window_index
+            .candidates(t0, t1)
+            .into_iter()
+            .map(|i| &windows[i])
             .filter(|w| overlap_ms(w.t_start, w.t_end, t0, t1) > 0.0)
             .collect();
         // The sampler covered this window and listed nothing. Distinct from

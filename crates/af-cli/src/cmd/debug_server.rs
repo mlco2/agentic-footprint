@@ -235,6 +235,15 @@ impl DebugState {
         }
     }
 
+    /// How many frames of `event` the ring holds.
+    #[cfg(test)]
+    pub(crate) fn frames_of(&self, event: &str) -> usize {
+        self.frames
+            .iter()
+            .filter(|frame| frame.event == event)
+            .count()
+    }
+
     /// Appends a frame to the log and pushes it to every live connection.
     pub fn publish(&mut self, event: &'static str, data: Value, at_ms: i64) {
         let seq = self.next_seq;

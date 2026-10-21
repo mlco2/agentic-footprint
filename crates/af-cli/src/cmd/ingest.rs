@@ -196,11 +196,28 @@ fn ingest_files_in(
     metrics.spool_files_total = files.len();
 
     for file in &files {
-        metrics.spool_bytes_total += file.path.metadata().map(|m| m.len()).unwrap_or(0);
+        let len = file.path.metadata().map(|m| m.len()).ok();
+        metrics.spool_bytes_total += len.unwrap_or(0);
         let offset_started = Instant::now();
         let offset = store.get_offset(&file.collector, &file.session_id)?;
         metrics.offset_duration += offset_started.elapsed();
         metrics.offset_reads += 1;
+
+        // Exactly as long as what was consumed: nothing was appended, and a
+        // read from there would return nothing. A full reconciliation sees
+        // every historical file, so this is most of them. (Shorter means
+        // truncated, longer means appended: both are read below.)
+        if len == Some(offset) {
+            metrics.empty_insert_batches += 1;
+            metrics.unchanged_offset_writes_skipped += 1;
+            file_states.push(IngestFileState {
+                collector: file.collector.clone(),
+                session_id: file.session_id.clone(),
+                path: file.path.clone(),
+                offset,
+            });
+            continue;
+        }
 
         let tail_started = Instant::now();
         let result = tail(file, offset)?;
@@ -309,27 +326,33 @@ mod tests {
         dir
     }
 
-    /// Commits recorded in a WAL file: each commit's last frame carries the
-    /// database size after the commit (non-zero), every other frame zero.
-    fn wal_commits(db: &Path) -> usize {
-        let mut wal = db.as_os_str().to_owned();
-        wal.push("-wal");
-        let Ok(bytes) = fs::read(&wal) else {
-            return 0;
-        };
-        if bytes.len() < 32 {
-            return 0;
-        }
-        let page_size = u32::from_be_bytes(bytes[8..12].try_into().unwrap()) as usize;
-        let mut commits = 0;
-        let mut at = 32;
-        while at + 24 + page_size <= bytes.len() {
-            if u32::from_be_bytes(bytes[at + 4..at + 8].try_into().unwrap()) != 0 {
-                commits += 1;
-            }
-            at += 24 + page_size;
-        }
-        commits
+    #[test]
+    fn a_reconcile_opens_only_files_that_grew() {
+        let dir = fixture(4, 3);
+        let mut store = Store::open(&dir.path().join("state.db")).expect("open");
+        let first = ingest(&mut store, dir.path()).expect("first pass");
+        assert_eq!(first.metrics.files_opened, 4);
+
+        let second = ingest(&mut store, dir.path()).expect("second pass");
+        assert_eq!(
+            second.metrics.files_opened, 0,
+            "nothing appended, nothing opened"
+        );
+        assert_eq!(
+            second.file_states.len(),
+            4,
+            "every file is still accounted for"
+        );
+
+        let path = dir
+            .path()
+            .join("spool")
+            .join(af_spool::spool_file_name("bench", "session-2"));
+        let mut file = OpenOptions::new().append(true).open(path).expect("open");
+        writeln!(file, "{}", event_line("event-2-late", "session-2")).expect("append");
+        let third = ingest(&mut store, dir.path()).expect("third pass");
+        assert_eq!(third.metrics.files_opened, 1);
+        assert_eq!(third.ingested, 1);
     }
 
     #[test]
@@ -337,11 +360,11 @@ mod tests {
         let dir = fixture(3, 5);
         let db = dir.path().join("state.db");
         let mut store = Store::open(&db).expect("open");
-        let before = wal_commits(&db);
+        let before = crate::cmd::test_support::wal_commits(&db);
         let summary = ingest(&mut store, dir.path()).expect("ingest");
         assert_eq!(summary.ingested, 15);
         assert_eq!(
-            wal_commits(&db) - before,
+            crate::cmd::test_support::wal_commits(&db) - before,
             1,
             "events and offsets commit together"
         );

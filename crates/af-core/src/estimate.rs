@@ -119,10 +119,10 @@ pub fn estimator_methodology(sidecar: &mut Sidecar) -> Option<String> {
         .map(|version| format!("ecologits-{version}"))
 }
 
-/// Estimates the supplied pending events in order. The caller may query and
-/// retain their session ids before processing, which is how the resident
-/// worker reports exactly which joins became dirty without copying envelopes
-/// through a channel.
+/// Estimates the supplied pending events in order and writes the rows in
+/// one transaction. The caller may query and retain their session ids
+/// before processing, which is how a caller reports exactly which joins
+/// became dirty. Rows computed before a sidecar failure are still written.
 pub fn estimate_events(
     store: &mut Store,
     sidecar: &mut Sidecar,
@@ -130,7 +130,39 @@ pub fn estimate_events(
     events: &[Envelope],
     current_methodology: Option<&str>,
 ) -> Result<EstimationOutcome> {
-    let mut outcome = EstimationOutcome::default();
+    let computed = compute_estimates(sidecar, region, events, current_methodology);
+    store.in_transaction(|store| -> af_store::Result<()> {
+        for row in &computed.rows {
+            store.upsert_estimate(row)?;
+        }
+        Ok(())
+    })?;
+    match computed.error {
+        Some(error) => Err(error),
+        None => Ok(computed.outcome),
+    }
+}
+
+/// What [`compute_estimates`] produced: one row per event it got to, and
+/// the error that stopped it early, if one did.
+#[derive(Debug, Default)]
+pub struct ComputedEstimates {
+    pub rows: Vec<ImpactEstimate>,
+    pub outcome: EstimationOutcome,
+    pub error: Option<anyhow::Error>,
+}
+
+/// Asks the sidecar about each event, in order, without touching a store.
+/// The resident estimator runs this on its own thread and hands the rows
+/// to the loop that owns the database, so estimates land in that loop's
+/// batched commit rather than one commit per call.
+pub fn compute_estimates(
+    sidecar: &mut Sidecar,
+    region: &EstimationRegion,
+    events: &[Envelope],
+    current_methodology: Option<&str>,
+) -> ComputedEstimates {
+    let mut computed = ComputedEstimates::default();
 
     for envelope in events {
         let Payload::LlmCall(call) = &envelope.payload else {
@@ -146,12 +178,12 @@ pub fn estimate_events(
             // from — calling it with a fabricated `0` would silently
             // manufacture a plausible-looking zero-impact "ok" estimate.
             // Record the gap honestly instead.
-            outcome.missing_usage += 1;
-            store.upsert_estimate(&ImpactEstimate {
+            computed.outcome.missing_usage += 1;
+            computed.rows.push(ImpactEstimate {
                 event_id: envelope.event_id.clone(),
                 methodology_version: "none".to_string(),
                 json: stamp_region(json!({"status": "missing_usage"}), region),
-            })?;
+            });
             continue;
         };
 
@@ -165,25 +197,32 @@ pub fn estimate_events(
             request["request_latency"] = json!(duration_ms as f64 / 1000.0);
         }
 
-        let response = sidecar
+        let response = match sidecar
             .request(&request)
-            .with_context(|| format!("estimate request for event {}", envelope.event_id))?;
+            .with_context(|| format!("estimate request for event {}", envelope.event_id))
+        {
+            Ok(response) => response,
+            Err(error) => {
+                computed.error = Some(error);
+                return computed;
+            }
+        };
 
         match response.get("status").and_then(Value::as_str) {
-            Some("ok") => outcome.estimated += 1,
-            Some("unknown_model") => outcome.unknown_model += 1,
-            Some("missing_zone") => outcome.missing_zone += 1,
-            _ => outcome.errors += 1,
+            Some("ok") => computed.outcome.estimated += 1,
+            Some("unknown_model") => computed.outcome.unknown_model += 1,
+            Some("missing_zone") => computed.outcome.missing_zone += 1,
+            _ => computed.outcome.errors += 1,
         }
 
-        store.upsert_estimate(&ImpactEstimate {
+        computed.rows.push(ImpactEstimate {
             event_id: envelope.event_id.clone(),
             methodology_version: methodology_version(&response, current_methodology),
             json: stamp_region(response, region),
-        })?;
+        });
     }
 
-    Ok(outcome)
+    computed
 }
 
 fn estimate_request(

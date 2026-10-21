@@ -26,6 +26,13 @@ export class ReportStore {
   private desiredVersions = new Map<string, number>();
   private storedVersions = new Map<string, number>();
   private sessionOrder: string[] = [];
+  /** The one session whose invalidations are fetched: `undefined` until a
+   * view says what it shows (then every notified session is kept fresh,
+   * the original behaviour); `null` while nothing is shown. The server
+   * notifies on every rebuild of every session, and a full report is the
+   * whole history of a session's estimates — fetching each one for a tab
+   * nobody has open was most of what the console transferred. */
+  private focused: string | null | undefined = undefined;
   private readonly fetchImpl: typeof fetch;
 
   constructor(fetchImpl: typeof fetch = boundFetch) {
@@ -60,10 +67,21 @@ export class ReportStore {
     this.levels = { ...this.levels, [report.level]: report };
   }
 
+  /** Says which session is in view (`null`: none), and fetches it if a
+   * notification arrived for it while it was not. */
+  focus(sessionId: string | null): void {
+    this.focused = sessionId;
+    if (sessionId !== null && this.desiredVersions.has(sessionId)) this.startRefresh(sessionId);
+  }
+
   private invalidate(sessionId: string, version: number): void {
     const desired = Math.max(this.desiredVersions.get(sessionId) ?? -1, version);
     this.desiredVersions.set(sessionId, desired);
     this.trackSession(sessionId);
+    if (this.focused === undefined || this.focused === sessionId) this.startRefresh(sessionId);
+  }
+
+  private startRefresh(sessionId: string): void {
     if (!this.refreshInflight.has(sessionId)) {
       const refresh = this.refreshSession(sessionId).finally(() => this.refreshInflight.delete(sessionId));
       this.refreshInflight.set(sessionId, refresh);
@@ -71,7 +89,7 @@ export class ReportStore {
   }
 
   private async refreshSession(sessionId: string): Promise<void> {
-    while (this.desiredVersions.has(sessionId)) {
+    while (this.desiredVersions.has(sessionId) && (this.focused === undefined || this.focused === sessionId)) {
       const desired = this.desiredVersions.get(sessionId) ?? -1;
       try {
         const encoded = encodeURIComponent(sessionId);

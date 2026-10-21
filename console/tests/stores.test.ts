@@ -134,6 +134,47 @@ describe("ReportStore — replace-on-arrival and requested-vs-payload level keyi
   });
 });
 
+describe("ReportStore — invalidations are fetched on demand", () => {
+  const notice = (sessionId: string, version: number) => ({ level: "session" as const, session_id: sessionId, report_version: version });
+  const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+  it("fetches only the session in view, and a stale one once it comes into view", async () => {
+    const fetchImpl = vi.fn(async (url: string) => {
+      const sessionId = new URL(url, "http://x").searchParams.get("session_id") ?? "";
+      return fakeJsonResponse({ ...report("session"), session_id: sessionId, report_version: 9 });
+    });
+    const store = new ReportStore(fetchImpl as unknown as typeof fetch);
+    store.focus("a");
+
+    store.set(notice("b", 1));
+    await flush();
+    expect(fetchImpl, "a session nobody is looking at is not fetched").not.toHaveBeenCalled();
+
+    store.set(notice("a", 2));
+    await flush();
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(store.forSession("a")?.session_id).toBe("a");
+
+    store.focus("b");
+    await flush();
+    expect(fetchImpl, "b was stale and is now in view").toHaveBeenCalledTimes(2);
+    expect(store.forSession("b")?.session_id).toBe("b");
+
+    store.focus(null);
+    store.set(notice("b", 10));
+    await flush();
+    expect(fetchImpl, "nothing in view (tab closed, page hidden)").toHaveBeenCalledTimes(2);
+  });
+
+  it("without a focus it keeps every notified session fresh, as before", async () => {
+    const fetchImpl = vi.fn(async () => fakeJsonResponse({ ...report("session"), session_id: "a", report_version: 3 }));
+    const store = new ReportStore(fetchImpl as unknown as typeof fetch);
+    store.set(notice("a", 3));
+    await flush();
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+});
+
 // ---------------------------------------------------------------------------
 // HealthStore
 // ---------------------------------------------------------------------------

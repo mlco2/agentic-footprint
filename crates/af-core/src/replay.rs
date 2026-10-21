@@ -44,6 +44,9 @@ pub struct RebuildOutcome {
     pub estimation: Option<EstimationOutcome>,
     /// `llm_call` events still without an estimate when the pass finished.
     /// Non-zero after a degraded pass; that is the honest headline number.
+    /// Always 0 from [`rebuild_prepared_stored`]: the resident watch's
+    /// estimator keeps its own queue, and counting the backlog there meant
+    /// scanning every stored call on every rebuild.
     pub pending_llm_calls: usize,
     /// Derived rows deleted before recomputing (`af replay`).
     pub wiped: bool,
@@ -193,7 +196,7 @@ pub fn rebuild_prepared_stored(
     remote_region: &EstimationRegion,
     sessions: &BTreeMap<String, PreparedSession<'_>>,
 ) -> Result<RebuildOutcome> {
-    let pending_llm_calls = store.count_llm_calls_without_estimate()? as usize;
+    let pending_llm_calls = 0;
     let mut joins = 0usize;
     let mut batch: Vec<(String, serde_json::Value)> = Vec::new();
     let mut notes = Vec::new();

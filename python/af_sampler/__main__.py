@@ -54,7 +54,6 @@ import re
 import sys
 import threading
 import time
-import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -345,6 +344,7 @@ class Sampler:
 
         self._add_session(session_id)
         watch = _Watch(session_id, span_id, pids)
+        self._new_inspection()
         # Baseline immediately, not at the next window boundary: the tree
         # may already have a long CPU history (a re-used shell, the agent
         # process itself), and none of it belongs to this span.
@@ -403,6 +403,7 @@ class Sampler:
             except Exception as exc:  # noqa: BLE001
                 problem = f"stop_task failed: {exc}"
             else:
+                _forget_finished_task(self._tracker, name)
                 if data is None:
                     problem = "stop_task returned no data"
         self._window_measured = False
@@ -484,7 +485,14 @@ class Sampler:
                 {"t_start": _iso(t_start), "t_end": _iso(t_end), "components": sliced},
             )
 
+    def _new_inspection(self) -> None:
+        """Let an inspector that caches per window know a new one began."""
+        new_window = getattr(self._inspect, "new_window", None)
+        if new_window is not None:
+            new_window()
+
     def _collect_process_samples(self):
+        self._new_inspection()
         now = self._clock()
         processes_by_session = {session_id: [] for session_id in self._outputs}
         cpu_by_session = {session_id: 0 for session_id in self._outputs}
@@ -549,7 +557,7 @@ class Sampler:
     def _emit(self, session_id: str, event_type: str, payload: dict) -> None:
         event = {
             "schema_version": SCHEMA_VERSION,
-            "event_id": str(uuid.uuid4()),
+            "event_id": ulid(self._clock()),
             "type": event_type,
             "ts": _iso(self._clock()),
             "collector": {"name": COLLECTOR_NAME, "version": COLLECTOR_VERSION},
@@ -569,6 +577,35 @@ class Sampler:
         os.write(output[1], line)
 
 
+def _forget_finished_task(tracker, name: str) -> None:
+    """Drop a stopped window from the tracker's task history.
+
+    codecarbon keeps every task it ever started in `_tasks` — `stop_task()`
+    only marks it inactive — so a sampler alive for a day would hold one
+    entry per window (thousands, megabytes). The window's reading was just
+    returned to us, and nothing else in codecarbon reads a finished task
+    except its output handlers, of which this tracker has none. Only an
+    inactive entry is removed: an active one is still being measured."""
+    tasks = getattr(tracker, "_tasks", None)
+    if not isinstance(tasks, dict):
+        return
+    task = tasks.get(name)
+    if task is not None and getattr(task, "is_active", True) is False:
+        del tasks[name]
+
+
+_CROCKFORD = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
+
+
+def ulid(epoch_seconds: float) -> str:
+    """A ULID: 48 bits of milliseconds, then 80 random bits, in Crockford
+    base32 (26 characters). The schema allows ULIDs or UUIDs; a ULID sorts
+    by time, so the store's unique index on `event_id` receives this
+    sampler's rows at its right edge instead of on a random page each."""
+    value = (int(epoch_seconds * 1000) & ((1 << 48) - 1)) << 80 | int.from_bytes(os.urandom(10), "big")
+    return "".join(_CROCKFORD[(value >> shift) & 31] for shift in range(125, -1, -5))
+
+
 def _stderr_log(message: str) -> None:
     print(message, file=sys.stderr, flush=True)
 
@@ -584,15 +621,81 @@ def sanitize_id(value: str) -> str:
     return cleaned
 
 
-def _make_psutil_inspector():
+class _PsutilInspector:
     """pid -> (cpu_seconds_total, rss_bytes, alive) summed over the pid's
-    whole process tree (the root plus every descendant)."""
-    import psutil
+    whole process tree (the root plus every descendant).
 
-    def inspect(pid: int):
+    One window reads the process table once, however many roots it
+    samples: `new_window()` drops the previous window's table and readings,
+    the first inspection lists every process's parent, and each member's
+    CPU time and RSS are read once (in one `oneshot()`) and reused by every
+    tree that contains it. Nothing outlives the window, so a process that
+    started since is seen by the next one.
+    """
+
+    def __init__(self) -> None:
+        import psutil
+
+        self._psutil = psutil
+        self._children = None
+        self._readings: dict = {}
+
+    def new_window(self) -> None:
+        self._children = None
+        self._readings = {}
+
+    def _child_map(self) -> dict:
+        if self._children is None:
+            children: dict = {}
+            for proc in self._psutil.process_iter(["ppid"]):
+                ppid = proc.info.get("ppid")
+                if ppid is not None:
+                    children.setdefault(ppid, []).append(proc.pid)
+            self._children = children
+        return self._children
+
+    def _read(self, proc):
+        """(cpu_seconds, rss_bytes) for one member, or None if it is gone."""
+        if proc.pid in self._readings:
+            return self._readings[proc.pid]
+        psutil = self._psutil
+        try:
+            with proc.oneshot():
+                times = proc.cpu_times()
+                reading = (times.user + times.system, proc.memory_info().rss)
+        except (psutil.Error, OSError):
+            # A child that exited between listing and reading it: skip.
+            reading = None
+        self._readings[proc.pid] = reading
+        return reading
+
+    def _members(self, root):
+        """The root and its descendants. As in psutil's `children()`, a
+        process older than the root is a reused pid, not a descendant."""
+        psutil = self._psutil
+        root_ctime = root.create_time()
+        children = self._child_map()
+        members, seen, stack = [root], {root.pid}, [root.pid]
+        while stack:
+            for child_pid in children.get(stack.pop(), ()):
+                if child_pid in seen:
+                    continue
+                seen.add(child_pid)
+                try:
+                    child = psutil.Process(child_pid)
+                    if child.create_time() < root_ctime:
+                        continue
+                except (psutil.Error, OSError):
+                    continue
+                members.append(child)
+                stack.append(child_pid)
+        return members
+
+    def __call__(self, pid: int):
+        psutil = self._psutil
         try:
             root = psutil.Process(pid)
-            members = [root] + root.children(recursive=True)
+            members = self._members(root)
         except (psutil.Error, OSError):
             return (0.0, 0, False)
 
@@ -600,17 +703,17 @@ def _make_psutil_inspector():
         rss_bytes = 0
         alive = False
         for member in members:
-            try:
-                times = member.cpu_times()
-                cpu_seconds += times.user + times.system
-                rss_bytes += member.memory_info().rss
-                alive = True
-            except (psutil.Error, OSError):
-                # A child that exited between listing and reading it: skip.
+            reading = self._read(member)
+            if reading is None:
                 continue
+            cpu_seconds += reading[0]
+            rss_bytes += reading[1]
+            alive = True
         return (cpu_seconds, rss_bytes, alive)
 
-    return inspect
+
+def _make_psutil_inspector():
+    return _PsutilInspector()
 
 
 def _make_tracker_factory(interval: float, country_iso_code: str):

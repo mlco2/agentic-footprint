@@ -321,7 +321,9 @@ impl Store {
     /// Each commit writes whole pages to the WAL (and again at checkpoint),
     /// so the number of commits, not the bytes of new data, is what a
     /// resident writer's disk wear follows. The store's own multi-row
-    /// writes use savepoints, so they nest inside this.
+    /// writes use savepoints, so they nest inside this. So does this: called
+    /// inside another transaction it is a savepoint, and its failure rolls
+    /// back only its own writes.
     pub fn in_transaction<T, E>(
         &mut self,
         body: impl FnOnce(&mut Store) -> std::result::Result<T, E>,
@@ -329,18 +331,34 @@ impl Store {
     where
         E: From<Error>,
     {
+        let (begin, commit, rollback) = if self.0.is_autocommit() {
+            ("BEGIN IMMEDIATE", "COMMIT", "ROLLBACK")
+        } else {
+            (
+                "SAVEPOINT af_nested",
+                "RELEASE af_nested",
+                "ROLLBACK TO af_nested; RELEASE af_nested",
+            )
+        };
         self.0
-            .execute_batch("BEGIN IMMEDIATE")
+            .execute_batch(begin)
             .map_err(|err| E::from(Error::from(err)))?;
         match body(self) {
-            Ok(value) => {
-                self.0
-                    .execute_batch("COMMIT")
-                    .map_err(|err| E::from(Error::from(err)))?;
-                Ok(value)
-            }
+            Ok(value) => match self.0.execute_batch(commit) {
+                Ok(()) => Ok(value),
+                Err(err) => {
+                    // A failed COMMIT may leave the transaction open (SQLite
+                    // says "may or may not" for FULL, IOERR, BUSY, NOMEM).
+                    // Left open, every later call would nest inside it as a
+                    // savepoint and report success while nothing commits.
+                    if !self.0.is_autocommit() {
+                        let _ = self.0.execute_batch(rollback);
+                    }
+                    Err(E::from(Error::from(err)))
+                }
+            },
             Err(err) => {
-                let _ = self.0.execute_batch("ROLLBACK");
+                let _ = self.0.execute_batch(rollback);
                 Err(err)
             }
         }
@@ -541,5 +559,33 @@ mod tests {
             .query_row("PRAGMA synchronous", [], |row| row.get(0))
             .expect("read synchronous");
         assert_eq!(synchronous, 1, "WAL + NORMAL (1), not FULL (2)");
+    }
+
+    /// A COMMIT that fails can leave its transaction open. Every later
+    /// `in_transaction` would then nest inside it as a savepoint, "succeed",
+    /// and never reach the disk.
+    #[test]
+    fn a_failed_commit_leaves_no_transaction_open() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut store = Store::open(&dir.path().join("state.db")).expect("open");
+        // A deferred foreign key is checked at COMMIT, and a violation fails
+        // the COMMIT while keeping the transaction active.
+        store
+            .0
+            .execute_batch(
+                "PRAGMA foreign_keys = ON;
+                 CREATE TABLE parent (id INTEGER PRIMARY KEY);
+                 CREATE TABLE child (parent INTEGER REFERENCES parent(id) DEFERRABLE INITIALLY DEFERRED);",
+            )
+            .expect("schema");
+        let failed: Result<()> = store.in_transaction(|store| {
+            store.0.execute("INSERT INTO child VALUES (42)", [])?;
+            Ok(())
+        });
+        assert!(failed.is_err(), "the COMMIT must fail");
+        assert!(
+            store.0.is_autocommit(),
+            "the failed transaction is still open"
+        );
     }
 }

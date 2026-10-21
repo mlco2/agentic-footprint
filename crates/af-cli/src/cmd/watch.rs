@@ -25,14 +25,15 @@
 //!
 //! ## Shutdown
 //!
-//! `SIGINT`/`SIGTERM` set a flag the loop checks every [`POLL`]. Shutdown
+//! `SIGINT`/`SIGTERM` set a flag the loop checks at least every
+//! [`IDLE_POLL`]. Shutdown
 //! is graceful and ordered: `shutdown` op to every sampler (so its last
 //! window reaches the spool), then a final ingest pass to pick that window
 //! up, then the servers, then exit 0. A killed sampler would lose the
 //! window in flight — that is the difference between a clean stop and a
 //! coverage gap.
 
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashSet, VecDeque};
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -61,10 +62,21 @@ use super::estimator_worker::Worker as EstimatorWorker;
 use super::ingest::{ingest, ingest_paths, IngestFileState, IngestSummary};
 use super::{now_ms, sidecar_script};
 
-/// How often the loop wakes to check the shutdown flag. Also the ceiling on
-/// how long a `SIGTERM` waits before anything happens.
-const POLL: Duration = Duration::from_millis(200);
+/// The longest the loop sleeps: how often an idle loop wakes to check the
+/// shutdown flag, and so the ceiling on how long a `SIGTERM` waits before
+/// anything happens. Received telemetry wakes it at once; every other
+/// deadline (debounce, flush, supervision, reconciliation) is slept until,
+/// not polled for — see [`loop_wait`].
+const IDLE_POLL: Duration = Duration::from_secs(1);
 /// Quiet period after the last fs event before a pass runs.
+/// How often the resident watch writes. Each flush is one commit, and a
+/// commit rewrites whole pages twice (WAL, then checkpoint), so this, not
+/// the volume of telemetry, is what the SSD wear follows: at 10 s a day of
+/// work measured about 600 MiB physical. Once a minute trades that for
+/// numbers up to a minute old in the status line and console, and up to a
+/// minute of received telemetry held in memory (written on a clean stop).
+pub const DEFAULT_BATCH_INTERVAL_MS: u64 = 60_000;
+
 const DEBOUNCE: Duration = Duration::from_millis(300);
 /// Maximum time between passes with no fs events at all.
 const TICK: Duration = Duration::from_secs(2);
@@ -100,23 +112,23 @@ pub(crate) const SAMPLER_SCRIPT: &str = "af_sampler/__main__.py";
 /// only knowable once a call has been estimated. Until then, say so.
 const METHODOLOGY_VERSION: &str = "unknown until the first estimate";
 
-/// How long a `af python doctor` result is reused before it is recomputed.
+/// The longest a `af python doctor` result is reused while the managed
+/// runtime looks unchanged.
 ///
-/// `doctor` forks the managed venv's interpreter to ask what it can import,
-/// which is the better part of a second, and the health payload it feeds is
-/// republished on **every** pass — at least once per [`TICK`]. A resident
-/// `af watch` therefore spent most of its wall time forking Python to
-/// re-answer a question whose answer changes only when someone runs `af
-/// python setup`. A minute is far shorter than that and far longer than a
-/// pass.
-const PYTHON_HEALTH_TTL: Duration = Duration::from_secs(60);
+/// `doctor` forks the managed venv's interpreter to import ecologits,
+/// codecarbon and psutil (~90 ms of CPU, ~40 MiB peak) to answer a question
+/// whose answer changes only when someone runs `af python setup`. So the
+/// result is kept until the runtime's fingerprint
+/// ([`af_sidecar::environment_fingerprint`]) moves, and recomputed at most
+/// hourly otherwise, for changes no modification time records.
+const PYTHON_HEALTH_TTL: Duration = Duration::from_secs(3600);
 const SAMPLER_READY_TIMEOUT: Duration = Duration::from_secs(15);
 
 /// How many event ids the "already said this" memories keep.
 ///
-/// [`Watch::published_allocs`] and [`Watch::reported_events`] are dedup
-/// sets, and an unbounded dedup set in a process designed to stay resident
-/// for a working day is a leak with a nice name: one entry per event ever
+/// [`Watch::reported_events`] is a dedup set, and an unbounded dedup set in
+/// a process designed to stay resident for a working day is a leak with a
+/// nice name: one entry per event ever
 /// ingested, held until the process exits. The horizon is twice the debug
 /// ring's capacity, so anything a console could still be looking at is
 /// still deduplicated; an id evicted past it could in principle be
@@ -337,6 +349,7 @@ pub fn run(state_dir: &Path, args: WatchArgs) -> Result<()> {
     if let Err(err) = watch.pass(&mut store, PassKind::FullReconcile) {
         eprintln!("af watch: startup pass failed: {err:#}");
     }
+    watch.request_estimates();
     if let Err(err) = watch.rebuild_due(&mut store) {
         eprintln!("af watch: startup rebuild failed: {err:#}");
     }
@@ -351,14 +364,38 @@ pub fn run(state_dir: &Path, args: WatchArgs) -> Result<()> {
     let mut pending_inbox = Inbox::default();
     let mut flush = FlushClock::default();
     while !term.load(Ordering::Relaxed) {
-        let estimated_sessions = watch.take_estimator_completion(&store);
+        watch.take_estimator_completion(&store);
         let mut inbox = std::mem::take(&mut pending_inbox);
-        match inbox_rx.recv_timeout(POLL) {
+        // Writes wait for the flush clock, so a write's deadline is never
+        // earlier than the next flush.
+        let now = Instant::now();
+        let flush_at = flush.next(watch.batch_interval).unwrap_or(now);
+        let writable = |at: Instant| Some(at.max(flush_at));
+        let wait = loop_wait(
+            now,
+            [
+                pending_since.and_then(|at| writable(at + DEBOUNCE)),
+                (!inbox.is_empty() || watch.has_estimates_to_store()).then_some(flush_at),
+                watch
+                    .dirty
+                    .next_due(now, watch.batch_interval)
+                    .and_then(|at| {
+                        if watch.dirty.has_first_time() {
+                            Some(at)
+                        } else {
+                            writable(at)
+                        }
+                    }),
+                watch.has_supervision().then_some(last_pass + TICK),
+                writable(last_reconcile + RECONCILE),
+            ],
+        );
+        match inbox_rx.recv_timeout(wait) {
             Ok(item) => inbox.push(item),
             Err(mpsc::RecvTimeoutError::Timeout) => {}
             // No receiver (`--no-otlp`, or the bind failed): keep the
             // loop's cadence instead of spinning.
-            Err(mpsc::RecvTimeoutError::Disconnected) => std::thread::sleep(POLL),
+            Err(mpsc::RecvTimeoutError::Disconnected) => std::thread::sleep(wait),
         }
         while let Ok(item) = inbox_rx.try_recv() {
             inbox.push(item);
@@ -372,35 +409,24 @@ pub fn run(state_dir: &Path, args: WatchArgs) -> Result<()> {
             || watch.has_unknown_spool_file(&dirty_paths)
             || inbox.facts.len() >= MAX_BATCHED_FACTS;
         let flush_due = flush.due(now, watch.batch_interval, something_new);
-        if !inbox.is_empty() {
-            if flush_due {
-                flush.flushed(now);
-                if let Err((err, back)) = watch.absorb_inbox(&mut store, inbox) {
-                    eprintln!("af watch: storing received telemetry failed: {err:#}; will retry");
-                    pending_inbox = back.capped(MAX_PENDING_FACTS);
-                }
-            } else {
-                pending_inbox = inbox;
-            }
-        }
         if term.load(Ordering::Relaxed) {
+            pending_inbox = inbox;
             break;
         }
 
         let debounced = pending_since
             .map(|at| at.elapsed() >= DEBOUNCE)
             .unwrap_or(false);
-        let reconcile_due = force_reconcile || last_reconcile.elapsed() >= RECONCILE;
-        let pass_kind = if !estimated_sessions.is_empty() {
-            Some(PassKind::EstimatesReady(estimated_sessions))
-        } else if reconcile_due {
+        // Everything that writes waits for the flush, reconciliation too: a
+        // write pass is one commit, and the commit count is the wear.
+        let reconcile_due = flush_due && (force_reconcile || last_reconcile.elapsed() >= RECONCILE);
+        let pass_kind = if reconcile_due {
             dirty_paths.clear();
             force_reconcile = false;
             pending_since = None;
             last_reconcile = Instant::now();
             Some(PassKind::FullReconcile)
         } else if debounced && flush_due {
-            flush.flushed(now);
             pending_since = None;
             Some(PassKind::Dirty(std::mem::take(&mut dirty_paths)))
         } else if last_pass.elapsed() >= TICK {
@@ -408,19 +434,29 @@ pub fn run(state_dir: &Path, args: WatchArgs) -> Result<()> {
         } else {
             None
         };
-        if let Some(pass_kind) = pass_kind {
+        let absorb = flush_due && !inbox.is_empty();
+        let ingest_pass = matches!(
+            pass_kind,
+            Some(PassKind::FullReconcile | PassKind::Dirty(_))
+        );
+        let rebuild = watch.dirty.due(now, watch.batch_interval, flush_due);
+        if pass_kind.is_some() {
             last_pass = Instant::now();
-            if let Err(err) = watch.pass(&mut store, pass_kind) {
-                // A failed pass is not a failed watch: the next one may
-                // well succeed (a half-written file, a locked db), and
-                // exiting would take the OTLP receiver down with it.
-                eprintln!("af watch: pass failed: {err:#}");
-                force_reconcile = true;
+        }
+        if !(absorb || ingest_pass || rebuild || (flush_due && watch.has_estimates_to_store())) {
+            pending_inbox = inbox;
+            if let Some(PassKind::Supervise) = pass_kind {
+                watch.supervise(&BTreeSet::new());
             }
+            continue;
         }
-        if let Err(err) = watch.rebuild_due(&mut store) {
-            eprintln!("af watch: rebuild failed: {err:#}");
+        if flush_due {
+            flush.flushed(now);
         }
+
+        let outcome = watch.write_flush(&mut store, inbox, absorb, flush_due, pass_kind);
+        pending_inbox = outcome.unwritten;
+        force_reconcile |= outcome.reconcile;
     }
 
     eprintln!("af watch: shutting down");
@@ -445,6 +481,11 @@ pub fn run(state_dir: &Path, args: WatchArgs) -> Result<()> {
     if let Err(err) = watch.pass(&mut store, PassKind::FullReconcile) {
         eprintln!("af watch: final ingest pass failed: {err:#}");
     }
+    watch.take_estimator_completion(&store);
+    match watch.store_estimates(&mut store) {
+        Ok(()) => watch.estimates_stored(),
+        Err(err) => eprintln!("af watch: storing the last estimates failed: {err:#}"),
+    }
     if let Err(err) = watch.rebuild_all_dirty(&mut store) {
         eprintln!("af watch: final rebuild failed: {err:#}");
     }
@@ -452,6 +493,22 @@ pub fn run(state_dir: &Path, args: WatchArgs) -> Result<()> {
     drop(debug_server);
     Ok(())
 }
+
+/// How long the loop may sleep: until the earliest of `deadlines`, never
+/// longer than [`IDLE_POLL`] and never shorter than [`MIN_WAIT`] — a
+/// deadline the loop cannot act on yet must not turn into a spin.
+fn loop_wait(now: Instant, deadlines: impl IntoIterator<Item = Option<Instant>>) -> Duration {
+    deadlines
+        .into_iter()
+        .flatten()
+        .map(|at| at.saturating_duration_since(now))
+        .min()
+        .unwrap_or(IDLE_POLL)
+        .clamp(MIN_WAIT, IDLE_POLL)
+}
+
+/// The shortest sleep [`loop_wait`] returns.
+const MIN_WAIT: Duration = Duration::from_millis(20);
 
 enum FsNotice {
     Paths(Vec<PathBuf>),
@@ -497,7 +554,6 @@ fn spawn_watcher(
 enum PassKind {
     FullReconcile,
     Dirty(BTreeSet<PathBuf>),
-    EstimatesReady(BTreeSet<String>),
     Supervise,
 }
 
@@ -670,6 +726,21 @@ impl FlushClock {
     fn flushed(&mut self, now: Instant) {
         self.last = Some(now);
     }
+
+    /// When the next flush is due; `None` before the first, which is due
+    /// at once.
+    fn next(&self, interval: Duration) -> Option<Instant> {
+        self.last.map(|at| at + interval)
+    }
+}
+
+/// What a [`Watch::write_flush`] left for the loop.
+struct FlushOutcome {
+    /// Received telemetry still to write: refused by the store, or rolled
+    /// back with a failed commit.
+    unwritten: Inbox,
+    /// A pass or the commit failed; reconcile the spool on the next flush.
+    reconcile: bool,
 }
 
 /// Received events held for one flush before it is forced early, so a burst
@@ -677,7 +748,7 @@ impl FlushClock {
 const MAX_BATCHED_FACTS: usize = 5_000;
 
 /// What the receiver sent since the last loop iteration.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 struct Inbox {
     facts: Vec<Envelope>,
     rejects: Vec<af_otlp::Reject>,
@@ -744,6 +815,39 @@ impl DirtySessions {
         }
     }
 
+    /// Whether a rebuild is due now. Interval-based staleness waits for a
+    /// flush (`flushing`), so the rebuild shares that flush's commit; a
+    /// session never rebuilt does not wait.
+    fn due(&self, now: Instant, interval: Duration, flushing: bool) -> bool {
+        let waited = |needed: Duration| {
+            self.last_rebuild
+                .is_none_or(|at| now.saturating_duration_since(at) >= needed)
+        };
+        self.has_first_time()
+            || (flushing
+                && ((!self.facts.is_empty() && waited(interval))
+                    || (!self.samples.is_empty() && waited(interval * SAMPLE_REBUILD_FACTOR))))
+    }
+
+    /// When the earliest rebuild becomes due by its interval, if anything
+    /// is dirty: at once for a session never rebuilt.
+    fn next_due(&self, now: Instant, interval: Duration) -> Option<Instant> {
+        if self.has_first_time() {
+            return Some(now);
+        }
+        let after = |wait: Duration| self.last_rebuild.map_or(now, |at| at + wait);
+        let facts = (!self.facts.is_empty()).then(|| after(interval));
+        let samples = (!self.samples.is_empty()).then(|| after(interval * SAMPLE_REBUILD_FACTOR));
+        facts.into_iter().chain(samples).min()
+    }
+
+    fn has_first_time(&self) -> bool {
+        self.facts
+            .iter()
+            .chain(&self.samples)
+            .any(|session| !self.rebuilt.contains(session))
+    }
+
     fn take_due(&mut self, now: Instant, interval: Duration) -> Option<BTreeSet<String>> {
         let waited = |needed: Duration| {
             self.last_rebuild
@@ -799,12 +903,19 @@ struct Watch {
     /// answer can only change when a *new* `session_meta` is ingested — so
     /// that, and nothing else, invalidates it.
     zone: Option<Zone>,
-    /// The last `af python doctor` result and when it was taken. See
-    /// [`PYTHON_HEALTH_TTL`].
-    python_health: Option<(Instant, Vec<Value>)>,
-    /// Traces already published, so a re-run of the pipeline over the same
-    /// session does not re-emit them.
-    published_allocs: BoundedSet,
+    /// The last `af python doctor` result, when it was taken, and the
+    /// runtime fingerprint it was taken against. See [`PYTHON_HEALTH_TTL`].
+    python_health: Option<PythonHealth>,
+    /// Allocation traces already published, per session, so a re-run of
+    /// the pipeline over the same session does not re-emit them. Per
+    /// session and released when the session retires: a refresh walks the
+    /// whole session, and a shared bounded set evicted, once a session
+    /// outgrew it, exactly the ids the walk was about to look up — so every
+    /// refresh re-published the entire history.
+    published_allocs: BTreeMap<String, HashSet<String>>,
+    /// Health rows of retired sessions, folded into per-collector totals so
+    /// old activity stays visible without one row per session ever seen.
+    retired_collectors: BTreeMap<String, RetiredCollector>,
     /// Decisions already emitted, keyed by the `event_id` they refer to.
     reported_events: BoundedSet,
     /// The most recent rejects, for the health payload — see
@@ -843,6 +954,12 @@ struct Watch {
     /// Sessions waiting for a derived-view rebuild — see [`DirtySessions`].
     dirty: DirtySessions,
     batch_interval: Duration,
+    /// Estimates the worker finished, waiting for the next flush.
+    estimates: Vec<af_store::ImpactEstimate>,
+    /// Their sessions, rebuilt once the rows are stored.
+    estimated_sessions: BTreeSet<String>,
+    /// `llm_call`s stored by the flush in progress, for the estimator.
+    calls_to_estimate: Vec<String>,
 }
 
 struct LoadedSession {
@@ -925,7 +1042,8 @@ impl Watch {
             sessions: BTreeMap::new(),
             zone: None,
             python_health: None,
-            published_allocs: BoundedSet::new(DEDUP_HORIZON),
+            published_allocs: BTreeMap::new(),
+            retired_collectors: BTreeMap::new(),
             reported_events: BoundedSet::new(DEDUP_HORIZON),
             rejects: VecDeque::new(),
             rejects_dropped: 0,
@@ -937,6 +1055,9 @@ impl Watch {
             otlp,
             dirty: DirtySessions::default(),
             batch_interval: args.batch_interval,
+            estimates: Vec::new(),
+            estimated_sessions: BTreeSet::new(),
+            calls_to_estimate: Vec::new(),
         }
     }
 
@@ -946,15 +1067,94 @@ impl Watch {
             self.supervise(&BTreeSet::new());
             return Ok(());
         }
-        if let PassKind::EstimatesReady(sessions) = kind {
-            return self.rebuild_sessions(store, &sessions, true);
-        }
         let summary = match kind {
             PassKind::FullReconcile => ingest(store, &self.state_dir)?,
             PassKind::Dirty(paths) => ingest_paths(store, &self.state_dir, &paths)?,
-            PassKind::EstimatesReady(_) | PassKind::Supervise => unreachable!(),
+            PassKind::Supervise => unreachable!(),
         };
         self.after_ingest(store, summary)
+    }
+
+    /// One flush, one commit: received telemetry (when `absorb`), the
+    /// estimator's finished rows (when `flushing`), a spool pass, and the
+    /// rebuilds those make due. Each step's failure is its own and is
+    /// logged; only a failed commit loses the lot, and then the telemetry
+    /// and estimates are kept for a retry and the rebuilt sessions marked
+    /// dirty again.
+    fn write_flush(
+        &mut self,
+        store: &mut Store,
+        mut inbox: Inbox,
+        absorb: bool,
+        flushing: bool,
+        pass_kind: Option<PassKind>,
+    ) -> FlushOutcome {
+        let retry = absorb.then(|| inbox.clone());
+        let mut rebuilt = BTreeSet::new();
+        let mut absorbed = false;
+        let mut estimates_written = false;
+        let mut reconcile = false;
+        let committed = store.in_transaction(|store| -> Result<()> {
+            if absorb {
+                match self.absorb_inbox(store, std::mem::take(&mut inbox)) {
+                    Ok(()) => absorbed = true,
+                    Err((err, back)) => {
+                        eprintln!(
+                            "af watch: storing received telemetry failed: {err:#}; will retry"
+                        );
+                        inbox = back;
+                    }
+                }
+            }
+            if flushing {
+                match self.store_estimates(store) {
+                    Ok(()) => estimates_written = true,
+                    Err(err) => {
+                        eprintln!("af watch: storing estimates failed: {err:#}; will retry")
+                    }
+                }
+            }
+            if let Some(pass_kind) = pass_kind {
+                if let Err(err) = self.pass(store, pass_kind) {
+                    // A failed pass is not a failed watch: the next one may
+                    // well succeed (a half-written file, a locked db), and
+                    // exiting would take the OTLP receiver down with it.
+                    eprintln!("af watch: pass failed: {err:#}");
+                    reconcile = true;
+                }
+            }
+            match self.rebuild_due(store) {
+                Ok(sessions) => rebuilt = sessions,
+                Err(err) => eprintln!("af watch: rebuild failed: {err:#}"),
+            }
+            Ok(())
+        });
+        match committed {
+            Ok(()) => {
+                if estimates_written {
+                    self.estimates_stored();
+                }
+                self.request_estimates();
+                FlushOutcome {
+                    unwritten: if absorbed {
+                        Inbox::default()
+                    } else {
+                        inbox.capped(MAX_PENDING_FACTS)
+                    },
+                    reconcile,
+                }
+            }
+            Err(err) => {
+                eprintln!("af watch: writing this flush failed: {err:#}; will retry");
+                self.dirty.mark(&rebuilt, &rebuilt);
+                // Rolled back: they are asked for again once re-ingested.
+                self.calls_to_estimate.clear();
+                FlushOutcome {
+                    unwritten: retry.unwrap_or(inbox).capped(MAX_PENDING_FACTS),
+                    reconcile: true,
+                }
+            }
+        }
     }
 
     /// Stores what the receiver sent and runs the same post-ingest steps a
@@ -1032,7 +1232,9 @@ impl Watch {
             }
             // The only input to zone resolution that a pass can change.
             zone_may_have_changed |= matches!(event.payload, Payload::SessionMeta(_));
-            if !self.reported_events.insert(&event.event_id) {
+            // Decisions and fact frames are for someone watching; headless,
+            // they would be built only to be dropped.
+            if !self.diagnostics() || !self.reported_events.insert(&event.event_id) {
                 continue;
             }
             self.decide(&ingest_decision(event));
@@ -1103,9 +1305,16 @@ impl Watch {
                 resolved
             }
         };
-        if let Some(estimator) = &self.estimator {
-            estimator.request(&zone.id, &zone.source, &self.remote_region);
-        }
+        // Told once the write commits ([`Watch::request_estimates`]): the
+        // worker reads through its own connection, which cannot see these
+        // events until then.
+        self.calls_to_estimate.extend(
+            summary
+                .events
+                .iter()
+                .filter(|event| matches!(event.payload, Payload::LlmCall(_)))
+                .map(|event| event.event_id.clone()),
+        );
 
         // Ordinarily: only the sessions that just produced events. Their
         // inputs are the only ones that changed, and rebuilding the rest
@@ -1144,6 +1353,12 @@ impl Watch {
         Ok(())
     }
 
+    /// Whether periodic supervision has anything to look after: a session
+    /// to retire, a sampler to reap or respawn.
+    fn has_supervision(&self) -> bool {
+        !self.sessions.is_empty() || self.sampler.is_some()
+    }
+
     /// Whether `facts` name a session this watch has not seen yet.
     fn has_new_session(&self, facts: &[Envelope]) -> bool {
         facts
@@ -1160,25 +1375,28 @@ impl Watch {
     }
 
     /// Rebuilds whatever [`DirtySessions`] says is due. Called once per loop.
-    fn rebuild_due(&mut self, store: &mut Store) -> Result<()> {
+    /// Returns the sessions it rebuilt, so a flush whose commit fails can
+    /// mark them dirty again.
+    fn rebuild_due(&mut self, store: &mut Store) -> Result<BTreeSet<String>> {
         match self.dirty.take_due(Instant::now(), self.batch_interval) {
-            Some(sessions) => self.rebuild_sessions(store, &sessions, false),
-            None => Ok(()),
+            Some(sessions) => {
+                if let Err(err) = self.rebuild_sessions(store, &sessions) {
+                    self.dirty.mark(&sessions, &sessions);
+                    return Err(err);
+                }
+                Ok(sessions)
+            }
+            None => Ok(BTreeSet::new()),
         }
     }
 
     /// Rebuilds every still-dirty session, for shutdown.
     fn rebuild_all_dirty(&mut self, store: &mut Store) -> Result<()> {
         let sessions = self.dirty.take_all();
-        self.rebuild_sessions(store, &sessions, false)
+        self.rebuild_sessions(store, &sessions)
     }
 
-    fn rebuild_sessions(
-        &mut self,
-        store: &mut Store,
-        touched: &BTreeSet<String>,
-        estimates_ready: bool,
-    ) -> Result<()> {
+    fn rebuild_sessions(&mut self, store: &mut Store, touched: &BTreeSet<String>) -> Result<()> {
         if touched.is_empty() {
             return Ok(());
         }
@@ -1216,41 +1434,82 @@ impl Watch {
                 .iter()
                 .map(|(session_id, loaded)| (session_id.as_str(), loaded.events.as_slice())),
         );
-        if estimates_ready && self.debug {
-            eprintln!(
-                "af watch: estimator completed; rebuilt {} session(s), {} call(s) still pending",
-                touched.len(),
-                outcome.pending_llm_calls
-            );
-        }
         Ok(())
     }
 
-    fn take_estimator_completion(&mut self, store: &Store) -> BTreeSet<String> {
+    /// Collects what the estimator finished: its rows wait for the next
+    /// flush ([`Watch::store_estimates`]); a zone it resolved makes every
+    /// session's local half stale.
+    fn take_estimator_completion(&mut self, store: &Store) {
         let Some(estimator) = &self.estimator else {
-            return BTreeSet::new();
+            return;
         };
         let Some(completion) = estimator.take_completion() else {
-            return BTreeSet::new();
+            return;
         };
-        let zone_changed = completion.zone.is_some();
-        if let Some(zone) = completion.zone {
-            self.zone = Some(zone);
-        }
         if let Some(error) = completion.error {
             eprintln!("af watch: estimator worker degraded ({error})");
         }
-        let mut sessions = completion.sessions;
-        if zone_changed {
-            sessions.extend(
-                store
-                    .session_summaries()
-                    .unwrap_or_default()
-                    .into_iter()
-                    .map(|summary| summary.session_id),
+        if self.debug && !completion.rows.is_empty() {
+            eprintln!(
+                "af watch: estimator completed {} call(s), {} still pending",
+                completion.rows.len(),
+                completion.pending
             );
         }
-        sessions
+        self.estimates.extend(completion.rows);
+        self.estimated_sessions.extend(completion.sessions);
+        if let Some(zone) = completion.zone {
+            self.zone = Some(zone);
+            let all: BTreeSet<String> = store
+                .session_summaries()
+                .unwrap_or_default()
+                .into_iter()
+                .map(|summary| summary.session_id)
+                .collect();
+            self.dirty.mark(&all, &all);
+        }
+    }
+
+    /// Hands the estimator the calls stored since the last commit, under
+    /// the zone this watch resolved. Called after a commit.
+    fn request_estimates(&mut self) {
+        let calls = std::mem::take(&mut self.calls_to_estimate);
+        let (Some(estimator), Some(zone)) = (&self.estimator, &self.zone) else {
+            return;
+        };
+        estimator.request(&zone.id, &zone.source, &self.remote_region, calls);
+    }
+
+    fn has_estimates_to_store(&self) -> bool {
+        !self.estimates.is_empty()
+    }
+
+    /// Writes the estimator's finished rows and marks their sessions for a
+    /// rebuild. The rows are kept until [`Watch::estimates_stored`]: the
+    /// enclosing commit may still fail.
+    fn store_estimates(&mut self, store: &mut Store) -> Result<()> {
+        if self.estimates.is_empty() {
+            return Ok(());
+        }
+        store.in_transaction(|store| -> Result<()> {
+            for row in &self.estimates {
+                store.upsert_estimate(row)?;
+            }
+            Ok(())
+        })?;
+        let sessions = self.estimated_sessions.clone();
+        self.dirty.mark(&sessions, &sessions);
+        Ok(())
+    }
+
+    /// The flush that wrote [`Watch::store_estimates`]'s rows committed.
+    fn estimates_stored(&mut self) {
+        if let Some(estimator) = &self.estimator {
+            estimator.stored(self.estimates.iter().map(|row| row.event_id.clone()));
+        }
+        self.estimates.clear();
+        self.estimated_sessions.clear();
     }
 
     fn update_spool_state(&mut self, summary: &IngestSummary) {
@@ -1334,12 +1593,21 @@ impl Watch {
         loaded: &LoadedSession,
         zone: &af_core::Zone,
     ) -> Result<()> {
+        self.send_watch_op(session_id, &loaded.tree);
+        if !self.diagnostics() {
+            return Ok(());
+        }
         let root_pid = loaded.tree.root_pids.first().copied();
         for trace in &loaded.traces {
             let Some(sample_event_id) = loaded.sample_ids.get(trace.sample_index) else {
                 continue;
             };
-            if !self.published_allocs.insert(sample_event_id) {
+            if !self
+                .published_allocs
+                .entry(session_id.to_string())
+                .or_default()
+                .insert(sample_event_id.clone())
+            {
                 continue;
             }
             self.decide(&attr_decision(trace));
@@ -1365,7 +1633,6 @@ impl Watch {
             );
         }
 
-        self.send_watch_op(session_id, &loaded.tree);
         self.publish_session(&loaded.events, &loaded.apportionment, zone, session_id);
         self.publish_report(store, &loaded.events, session_id);
         Ok(())
@@ -1478,12 +1745,42 @@ impl Watch {
                 );
             }
             self.sessions.remove(&session);
+            self.forget_session(&session);
         }
         if self.sessions.is_empty() {
             if let Some(sampler) = self.sampler.as_mut() {
                 let _ = sampler.sidecar.send(&json!({"op": "shutdown"}));
             }
             self.sampler = None;
+        }
+    }
+
+    /// Releases what this watch kept about a retired session: its
+    /// published-trace memory, its spool position, its reject counts, and
+    /// its health rows, which are folded into per-collector totals. A later
+    /// event for it starts over as a new session would.
+    fn forget_session(&mut self, session: &str) {
+        self.published_allocs.remove(session);
+        self.dirty.rebuilt.remove(session);
+        self.spool_state.retain(|(_, id), _| id != session);
+        let suffix = format!(":{session}");
+        self.rejects_by_collector
+            .retain(|key, _| !key.ends_with(&suffix));
+        let retired: Vec<String> = self
+            .health_rows
+            .keys()
+            .filter(|key| key.ends_with(&suffix))
+            .cloned()
+            .collect();
+        for key in retired {
+            let Some(row) = self.health_rows.remove(&key) else {
+                continue;
+            };
+            let name = row["name"].as_str().unwrap_or_default().to_string();
+            let totals = self.retired_collectors.entry(name).or_default();
+            totals.sessions += 1;
+            totals.events += row["events"].as_u64().unwrap_or(0);
+            totals.rejected += row["rejected"].as_u64().unwrap_or(0);
         }
     }
 
@@ -1889,8 +2186,21 @@ impl Watch {
             .map(|(_, counters)| counters.logs_dropped() + counters.bodies_quarantined())
             .unwrap_or(0);
 
+        let retired: Vec<Value> = self
+            .retired_collectors
+            .iter()
+            .map(|(name, totals)| {
+                json!({
+                    "name": name,
+                    "sessions": totals.sessions,
+                    "events": totals.events,
+                    "rejected": totals.rejected,
+                })
+            })
+            .collect();
         let payload = json!({
             "collectors": collectors,
+            "retired_collectors": retired,
             "otlp_receiver": self.otlp_health(),
             // The window, plus what it does not show. A truncated list that
             // did not say it was truncated would under-report a spool that
@@ -1939,9 +2249,10 @@ impl Watch {
     /// `af_sidecar::doctor` output, rendered the same way. Only how often
     /// the fork behind it happens has changed.
     fn python_health(&mut self) -> Vec<Value> {
-        if let Some((taken_at, findings)) = &self.python_health {
-            if taken_at.elapsed() < PYTHON_HEALTH_TTL {
-                return findings.clone();
+        let fingerprint = af_sidecar::environment_fingerprint(&self.state_dir);
+        if let Some(cached) = &self.python_health {
+            if cached.taken_at.elapsed() < PYTHON_HEALTH_TTL && cached.fingerprint == fingerprint {
+                return cached.findings.clone();
             }
         }
         let findings = doctor(&self.state_dir);
@@ -1962,7 +2273,11 @@ impl Watch {
                 })
                 .collect()
         };
-        self.python_health = Some((Instant::now(), rendered.clone()));
+        self.python_health = Some(PythonHealth {
+            taken_at: Instant::now(),
+            fingerprint,
+            findings: rendered.clone(),
+        });
         rendered
     }
 
@@ -2017,6 +2332,13 @@ impl Watch {
 
     /// Emits one decision on both surfaces it has: the `--debug` stderr
     /// stream and the SSE `decision` frame.
+    /// Whether anyone can see diagnostics: the stderr decision stream
+    /// (`--debug`) or the `/debug` server. Headless, frames and decisions
+    /// are not built at all.
+    fn diagnostics(&self) -> bool {
+        self.debug || self.debug_state.is_some()
+    }
+
     fn decide(&mut self, decision: &Decision) {
         if self.debug {
             eprintln!("{}", decision.stderr_line());
@@ -2051,6 +2373,21 @@ impl Watch {
             self.sampler = None;
         }
     }
+}
+
+/// A cached `af python doctor` answer, rendered for the health payload.
+struct PythonHealth {
+    taken_at: Instant,
+    fingerprint: Vec<(PathBuf, Option<std::time::SystemTime>)>,
+    findings: Vec<Value>,
+}
+
+/// What retired sessions' health rows added up to, per collector.
+#[derive(Debug, Default)]
+struct RetiredCollector {
+    sessions: u64,
+    events: u64,
+    rejected: u64,
 }
 
 /// One collector's contribution to a session, as the health payload's
@@ -2253,6 +2590,272 @@ mod tests {
             .expect("open db")
             .execute_batch(&format!("ALTER TABLE {from} RENAME TO {to}"))
             .expect("rename");
+    }
+
+    /// A session of `samples` five-second energy windows, each with its
+    /// process sample, under one bootstrap span.
+    fn long_session(samples: usize) -> Vec<Envelope> {
+        let ts = |seconds: usize| {
+            af_core::rfc3339_ms(1_785_326_400_000 + seconds as i64 * 1000).expect("ts")
+        };
+        let mut boot = af_events::fixtures::action_span("boot", &ts(0), &ts(1));
+        boot.tool_name = af_core::BOOTSTRAP_TOOL_NAME.to_string();
+        boot.pids = Some(vec![42]);
+        let mut events = vec![af_events::fixtures::envelope(
+            "evt-boot-0000000001",
+            "s",
+            &ts(0),
+            Payload::ActionSpan(boot),
+        )];
+        for i in 0..samples {
+            let (t0, t1) = (ts(i * 5), ts(i * 5 + 5));
+            events.push(af_events::fixtures::envelope(
+                &format!("evt-energy-{i:010}"),
+                "s",
+                &t1,
+                Payload::EnergySample(af_events::fixtures::energy_sample(&t0, &t1, 1.0)),
+            ));
+            events.push(af_events::fixtures::envelope(
+                &format!("evt-procs-{i:010}"),
+                "s",
+                &t1,
+                Payload::ProcessSample(af_events::fixtures::process_sample(
+                    &t0,
+                    &t1,
+                    &[(42, 100, None)],
+                )),
+            ));
+        }
+        events
+    }
+
+    #[test]
+    fn a_refresh_publishes_only_traces_not_published_before_however_long_the_session() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let store = Store::open(&dir.path().join("state.db")).expect("open");
+        let debug = Arc::new(Mutex::new(DebugState::with_limits(100_000, 16)));
+        let mut watch = Watch::new(dir.path(), &quiet_args(), Some(Arc::clone(&debug)), None);
+        // Longer than the old shared dedup horizon, which made every refresh
+        // of such a session re-publish all of it.
+        let loaded = LoadedSession::load(long_session(DEDUP_HORIZON + 1));
+        let zone = Zone::unresolved("FRA", "test");
+
+        watch
+            .refresh_session(&store, "s", &loaded, &zone)
+            .expect("first refresh");
+        let first = debug.lock().expect("lock").frames_of("alloc");
+        assert_eq!(first, DEDUP_HORIZON + 1);
+        watch
+            .refresh_session(&store, "s", &loaded, &zone)
+            .expect("second refresh");
+        assert_eq!(
+            debug.lock().expect("lock").frames_of("alloc"),
+            first,
+            "nothing new to say"
+        );
+
+        watch.forget_session("s");
+        assert!(watch.published_allocs.is_empty(), "retirement releases it");
+    }
+
+    #[test]
+    fn a_headless_refresh_keeps_no_publication_state() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let store = Store::open(&dir.path().join("state.db")).expect("open");
+        let mut watch = Watch::new(dir.path(), &quiet_args(), None, None);
+        let loaded = LoadedSession::load(long_session(10));
+        watch
+            .refresh_session(&store, "s", &loaded, &Zone::unresolved("FRA", "test"))
+            .expect("refresh");
+        assert!(watch.published_allocs.is_empty());
+    }
+
+    #[test]
+    fn python_health_is_recomputed_when_the_runtime_changes_not_on_a_timer() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut watch = Watch::new(dir.path(), &quiet_args(), None, None);
+        let missing = watch.python_health();
+        assert!(missing[0]["value"]
+            .as_str()
+            .unwrap_or("")
+            .contains("missing"));
+        let taken = watch.python_health.as_ref().expect("cached").taken_at;
+        watch.python_health();
+        assert_eq!(
+            watch.python_health.as_ref().expect("cached").taken_at,
+            taken,
+            "reused"
+        );
+
+        std::fs::create_dir_all(dir.path().join("venv")).expect("venv appears");
+        let changed = watch.python_health();
+        assert_ne!(changed, missing, "a new runtime is asked about again");
+    }
+
+    #[test]
+    fn a_retired_session_leaves_totals_not_rows() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let debug = Arc::new(Mutex::new(DebugState::default()));
+        let mut watch = Watch::new(dir.path(), &quiet_args(), Some(debug), None);
+        let events = long_session(3);
+        watch.publish_health([("s", events.as_slice())]);
+        assert_eq!(watch.health_rows.len(), 1);
+
+        watch.forget_session("s");
+        assert!(watch.health_rows.is_empty());
+        let totals = &watch.retired_collectors["test-collector"];
+        assert_eq!((totals.sessions, totals.events), (1, events.len() as u64));
+    }
+
+    #[test]
+    fn a_flush_writes_telemetry_estimates_and_rebuilds_in_one_commit() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let db = dir.path().join("state.db");
+        let mut store = Store::open(&db).expect("open");
+        let mut watch = Watch::new(dir.path(), &quiet_args(), None, None);
+        let fact = one_fact();
+        watch.estimates.push(af_store::ImpactEstimate {
+            event_id: fact.event_id.clone(),
+            methodology_version: "test".to_string(),
+            json: json!({"status": "ok"}),
+        });
+        watch.estimated_sessions.insert(fact.session_id.clone());
+
+        let before = crate::cmd::test_support::wal_commits(&db);
+        let outcome = watch.write_flush(
+            &mut store,
+            Inbox {
+                facts: vec![fact.clone()],
+                rejects: vec![reject()],
+            },
+            true,
+            true,
+            None,
+        );
+
+        assert!(outcome.unwritten.is_empty() && !outcome.reconcile);
+        assert_eq!(crate::cmd::test_support::wal_commits(&db) - before, 1);
+        assert!(watch.estimates.is_empty(), "stored rows are let go");
+        assert!(
+            watch.dirty.rebuilt.contains(&fact.session_id),
+            "the new session was rebuilt in the same flush"
+        );
+        assert_eq!(
+            store
+                .events_for_session(&fact.session_id)
+                .expect("read")
+                .len(),
+            1
+        );
+        assert_eq!(store.recent_rejects(10).expect("rejects").len(), 1);
+    }
+
+    #[test]
+    fn estimates_wait_for_a_flush() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let db = dir.path().join("state.db");
+        let mut store = Store::open(&db).expect("open");
+        let mut watch = Watch::new(dir.path(), &quiet_args(), None, None);
+        watch.estimates.push(af_store::ImpactEstimate {
+            event_id: "evt".to_string(),
+            methodology_version: "test".to_string(),
+            json: json!({"status": "ok"}),
+        });
+
+        watch.write_flush(&mut store, Inbox::default(), false, false, None);
+        assert_eq!(
+            watch.estimates.len(),
+            1,
+            "not a flush: kept for the next one"
+        );
+    }
+
+    #[test]
+    fn estimates_the_store_refused_are_kept_though_the_flush_commits() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let db = dir.path().join("state.db");
+        drop(Store::open(&db).expect("create"));
+        rename_table(&db, "impact_estimates", "impact_estimates_away");
+        let mut store = Store::open(&db).expect("open");
+        let mut watch = Watch::new(dir.path(), &quiet_args(), None, None);
+        watch.estimates.push(af_store::ImpactEstimate {
+            event_id: "evt".to_string(),
+            methodology_version: "test".to_string(),
+            json: json!({"status": "ok"}),
+        });
+
+        watch.write_flush(&mut store, Inbox::default(), false, true, None);
+        assert_eq!(
+            watch.estimates.len(),
+            1,
+            "the worker has already let these go: dropping them loses them"
+        );
+    }
+
+    #[test]
+    fn the_loop_sleeps_until_its_next_deadline_within_bounds() {
+        let now = Instant::now();
+        assert_eq!(
+            loop_wait(now, [None, None]),
+            IDLE_POLL,
+            "idle: the poll ceiling"
+        );
+        assert_eq!(
+            loop_wait(
+                now,
+                [
+                    Some(now + Duration::from_millis(300)),
+                    Some(now + IDLE_POLL * 5)
+                ]
+            ),
+            Duration::from_millis(300)
+        );
+        assert_eq!(loop_wait(now, [Some(now)]), MIN_WAIT, "past due: no spin");
+    }
+
+    #[test]
+    fn sample_only_staleness_is_due_after_its_longer_wait() {
+        let start = Instant::now();
+        let interval = Duration::from_secs(10);
+        let mut dirty = DirtySessions::default();
+        assert_eq!(
+            dirty.next_due(start, interval),
+            None,
+            "nothing dirty, no deadline"
+        );
+        let s = BTreeSet::from(["s".to_string()]);
+        dirty.mark(&s, &s);
+        assert_eq!(
+            dirty.next_due(start, interval),
+            Some(start),
+            "never rebuilt: now"
+        );
+        dirty.take_due(start, interval).expect("due");
+        dirty.mark(&s, &BTreeSet::new());
+        assert_eq!(
+            dirty.next_due(start, interval),
+            Some(start + interval * SAMPLE_REBUILD_FACTOR)
+        );
+    }
+
+    #[test]
+    fn interval_rebuilds_wait_for_a_flush_but_new_sessions_do_not() {
+        let start = Instant::now();
+        let interval = Duration::from_secs(10);
+        let mut dirty = DirtySessions::default();
+        let s = BTreeSet::from(["s".to_string()]);
+        dirty.mark(&s, &s);
+        assert!(dirty.due(start, interval, false), "never rebuilt: at once");
+        dirty.take_due(start, interval).expect("due");
+
+        dirty.mark(&s, &s);
+        let later = start + interval;
+        assert!(!dirty.due(later, interval, false), "waits for the flush");
+        assert!(dirty.due(later, interval, true));
+
+        let t = BTreeSet::from(["t".to_string()]);
+        dirty.mark(&t, &t);
+        assert!(dirty.due(start, interval, false));
     }
 
     #[test]

@@ -110,8 +110,10 @@ enum Commands {
         /// estimator detects it.
         #[arg(long)]
         remote_region: Option<String>,
-        /// Minimum milliseconds between derived-view rebuilds (tests pass 0).
-        #[arg(long, default_value_t = 10_000, hide = true)]
+        /// Milliseconds between flushes: received telemetry, estimates and
+        /// derived-view rebuilds are written together, in one commit, this
+        /// often (tests pass 0). A new session is still written at once.
+        #[arg(long, default_value_t = cmd::watch::DEFAULT_BATCH_INTERVAL_MS, hide = true)]
         batch_interval_ms: u64,
     },
     /// Python runtime setup and diagnostics. Hidden: the installer and
@@ -301,5 +303,25 @@ fn run_report(
     ) {
         eprintln!("{}: {err:#}", mode.name());
         std::process::exit(1);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::Parser;
+
+    /// Each flush is one commit, and a commit rewrites whole pages twice
+    /// (WAL, then checkpoint): the interval is what the disk wear follows.
+    #[test]
+    fn watch_flushes_once_a_minute_by_default() {
+        let cli = Cli::try_parse_from(["af", "watch"]).expect("parse");
+        let Commands::Watch {
+            batch_interval_ms, ..
+        } = cli.command
+        else {
+            panic!("not watch");
+        };
+        assert_eq!(batch_interval_ms, 60_000);
     }
 }

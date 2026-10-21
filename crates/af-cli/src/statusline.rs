@@ -87,15 +87,13 @@ fn session_join(state_dir: Option<&Path>, input: &str) -> Option<Value> {
     // holding up the redraw.
     let db_path = state_dir?.join("state.db");
     let store = Store::open_read_only(&db_path).ok()?;
-    let joins = store.joins_for_session(session_id).ok()?;
-
-    // The session unit is identified by its own `unit.level`, not by the
-    // `session:` key prefix — `af-store` deliberately keeps the key scheme
-    // an implementation detail of the join assembler.
-    joins
-        .into_iter()
-        .map(|(_key, record)| record)
-        .find(|record| record["unit"]["level"] == "session")
+    // One row by primary key, whatever the session's size. The key scheme
+    // stays the join assembler's (`af_core::session_unit_key`), and the
+    // record must still say it is the session unit.
+    let record = store
+        .join_by_key(&af_core::session_unit_key(session_id))
+        .ok()??;
+    (record["unit"]["level"] == "session").then_some(record)
 }
 
 /// Applies the criteria sourcing rules to one session join.

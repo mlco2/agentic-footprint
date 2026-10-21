@@ -184,3 +184,42 @@ fn stale_unknown_model_is_reestimated_under_a_new_methodology() {
     let value: serde_json::Value = serde_json::from_str(&json).unwrap();
     assert_eq!(value["status"], "ok");
 }
+
+/// The resident estimator computes off the writer's connection and hands
+/// the rows back: computing is pure with respect to the store.
+#[test]
+fn compute_estimates_returns_the_rows_estimate_events_would_write() {
+    let script = fake_sidecar_path();
+    let mut sidecar = Sidecar::spawn(&python3(), script.to_str().expect("utf8 path"), &[])
+        .expect("spawn fake_sidecar.py");
+    let region = EstimationRegion::explicit("WOR", "test");
+    let events = [
+        llm_call_event("evt-a", "claude-opus-5-5"),
+        llm_call_event_with_usage("evt-b", "claude-opus-5-5", None),
+    ];
+
+    let computed =
+        af_core::compute_estimates(&mut sidecar, &region, &events, Some("ecologits-test"));
+
+    assert!(computed.error.is_none(), "{:?}", computed.error);
+    assert_eq!(computed.outcome.estimated, 1);
+    assert_eq!(computed.outcome.missing_usage, 1);
+    let rows: Vec<(&str, &str, &str)> = computed
+        .rows
+        .iter()
+        .map(|row| {
+            (
+                row.event_id.as_str(),
+                row.methodology_version.as_str(),
+                row.json["status"].as_str().unwrap_or(""),
+            )
+        })
+        .collect();
+    assert_eq!(
+        rows,
+        [
+            ("evt-a", "ecologits-test", "ok"),
+            ("evt-b", "none", "missing_usage")
+        ]
+    );
+}

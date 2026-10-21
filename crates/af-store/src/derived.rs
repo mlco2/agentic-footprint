@@ -12,7 +12,7 @@
 //! change.
 
 use af_events::Envelope;
-use rusqlite::params;
+use rusqlite::{params, OptionalExtension};
 use serde_json::Value;
 use std::collections::BTreeMap;
 
@@ -120,22 +120,42 @@ impl Store {
         let tx = self.0.savepoint()?;
         let mut changed = 0usize;
         {
-            let mut stmt = tx.prepare(
+            // The session column is set apart from the record: an UPDATE
+            // that names an indexed column rewrites its index entry even
+            // when the value is the same, and the record changes on almost
+            // every rebuild while its session never does.
+            let mut upsert = tx.prepare(
                 "INSERT INTO impact_joins (unit_key, json, session_id)
                  VALUES (?1, ?2, ?3)
-                 ON CONFLICT(unit_key) DO UPDATE SET
-                     json = excluded.json,
-                     session_id = excluded.session_id
-                 WHERE impact_joins.json IS NOT excluded.json
-                    OR impact_joins.session_id IS NOT excluded.session_id",
+                 ON CONFLICT(unit_key) DO UPDATE SET json = excluded.json
+                 WHERE impact_joins.json IS NOT excluded.json",
+            )?;
+            let mut set_session = tx.prepare(
+                "UPDATE impact_joins SET session_id = ?2
+                 WHERE unit_key = ?1 AND session_id IS NOT ?2",
             )?;
             for (unit_key, json) in joins {
                 let session = json.pointer("/unit/session_id").and_then(Value::as_str);
-                changed += stmt.execute(params![unit_key, json.to_string(), session])?;
+                let record = upsert.execute(params![unit_key, json.to_string(), session])?;
+                let column = set_session.execute(params![unit_key, session])?;
+                changed += (record + column).min(1);
             }
         }
         tx.commit()?;
         Ok(changed)
+    }
+
+    /// The stored join for one unit key, by primary key: what a reader that
+    /// shows one record (the status line, every redraw) needs, without
+    /// reading and parsing the rest of the session's records.
+    pub fn join_by_key(&self, unit_key: &str) -> Result<Option<Value>> {
+        let json: Option<String> = self
+            .0
+            .prepare_cached("SELECT json FROM impact_joins WHERE unit_key = ?1")?
+            .query_row(params![unit_key], |row| row.get(0))
+            .optional()?;
+        json.map(|json| serde_json::from_str(&json).map_err(Error::from))
+            .transpose()
     }
 
     /// Returns every stored join for `session`, as `(unit_key, record)`
@@ -220,6 +240,56 @@ impl Store {
             events.push(envelope);
         }
         Ok(events)
+    }
+
+    /// The whole queue's event ids, in queue order: what a resident
+    /// estimator starts from, without holding every pending envelope.
+    pub fn llm_call_ids_to_estimate(
+        &self,
+        current_methodology: Option<&str>,
+    ) -> Result<Vec<String>> {
+        let mut stmt = self.0.prepare(&format!(
+            "SELECT r.event_id FROM raw_events r
+             LEFT JOIN impact_estimates e ON e.event_id = r.event_id
+             WHERE {PENDING_LLM_CALL}
+             ORDER BY r.ts ASC, r.event_id ASC"
+        ))?;
+        let rows = stmt.query_map(params![current_methodology], |row| row.get::<_, String>(0))?;
+        rows.map(|row| row.map_err(Error::from)).collect()
+    }
+
+    /// Which of `event_ids` are pending under the queue's predicate, as
+    /// envelopes in `(ts, event_id)` order. Point lookups by id: the
+    /// resident estimator asks about the calls it was just handed instead
+    /// of rescanning every stored call to find them.
+    pub fn llm_calls_pending_among(
+        &self,
+        event_ids: &[String],
+        current_methodology: Option<&str>,
+    ) -> Result<Vec<Envelope>> {
+        let mut stmt = self.0.prepare_cached(&format!(
+            "SELECT r.ts, r.json FROM raw_events r
+             LEFT JOIN impact_estimates e ON e.event_id = r.event_id
+             WHERE r.event_id = ?2 AND {PENDING_LLM_CALL}"
+        ))?;
+        let mut found = Vec::new();
+        let mut seen = std::collections::BTreeSet::new();
+        for event_id in event_ids {
+            if !seen.insert(event_id.as_str()) {
+                continue;
+            }
+            let row = stmt
+                .query_row(params![current_methodology, event_id], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                })
+                .optional()?;
+            if let Some((ts, json)) = row {
+                let envelope: Envelope = serde_json::from_str(&json).map_err(Error::from)?;
+                found.push((ts, envelope));
+            }
+        }
+        found.sort_by(|(a_ts, a), (b_ts, b)| (a_ts, &a.event_id).cmp(&(b_ts, &b.event_id)));
+        Ok(found.into_iter().map(|(_, envelope)| envelope).collect())
     }
 
     /// How many `llm_call` events still have no `impact_estimates` row —

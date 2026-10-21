@@ -221,7 +221,6 @@ pub fn build_joins(
         apportionment,
         coverage_windows: &coverage_windows,
         energy_measured,
-        calls: &calls,
         estimates,
         zone,
         remote_region_id,
@@ -254,7 +253,8 @@ pub fn build_joins(
         )
     };
 
-    let session_remote = remote_estimated(&calls, estimates, remote_region_id, |_| true);
+    let all_calls: Vec<&LlmCallRef> = calls.iter().collect();
+    let session_remote = remote_estimated(&all_calls, estimates, remote_region_id);
     let mut record = record_base(
         json!({"level": "session", "session_id": session_id}),
         t_start,
@@ -283,9 +283,22 @@ pub fn build_joins(
     );
     finish(&mut record, session_local, session_remote, !energy_measured);
     out.push(ImpactJoin {
-        unit_key: format!("session:{session_id}"),
+        unit_key: session_unit_key(session_id),
         record: Value::Object(record),
     });
+
+    // Each unit's calls, looked up rather than found by scanning every call
+    // of the session once per unit; in call order, as a scan would list them.
+    let mut calls_by_tool_call: BTreeMap<&str, Vec<&LlmCallRef>> = BTreeMap::new();
+    let mut calls_by_task: BTreeMap<&str, Vec<&LlmCallRef>> = BTreeMap::new();
+    for call in &calls {
+        if let Some(id) = call.tool_call_id.as_deref() {
+            calls_by_tool_call.entry(id).or_default().push(call);
+        }
+        if let Some(id) = call.task_id.as_deref() {
+            calls_by_task.entry(id).or_default().push(call);
+        }
+    }
 
     // ---- tool_call units, one per attributable span ----------------------
     let mut by_span: BTreeMap<&str, Vec<&Span>> = BTreeMap::new();
@@ -303,16 +316,17 @@ pub fn build_joins(
         if let Some(id) = &tool_call_id {
             unit.insert("tool_call_id".into(), json!(id));
         }
-        let matcher = |call: &LlmCallRef| match (&tool_call_id, &call.tool_call_id) {
-            (Some(unit_id), Some(call_id)) => unit_id == call_id,
-            _ => false,
-        };
+        let matched = tool_call_id
+            .as_deref()
+            .and_then(|id| calls_by_tool_call.get(id))
+            .map(Vec::as_slice)
+            .unwrap_or_default();
         if let Some(join) = span_group_join(
             &ctx,
             &format!("tool_call:{session_id}:{span_id}"),
             Value::Object(unit),
             spans,
-            matcher,
+            matched,
         ) {
             out.push(join);
         }
@@ -327,13 +341,16 @@ pub fn build_joins(
     }
     for (task_id, spans) in &by_task {
         let unit = json!({"level": "task", "session_id": session_id, "task_id": task_id});
-        let matcher = |call: &LlmCallRef| call.task_id.as_deref() == Some(task_id.as_str());
+        let matched = calls_by_task
+            .get(task_id.as_str())
+            .map(Vec::as_slice)
+            .unwrap_or_default();
         if let Some(join) = span_group_join(
             &ctx,
             &format!("task:{session_id}:{task_id}"),
             unit,
             spans,
-            matcher,
+            matched,
         ) {
             out.push(join);
         }
@@ -355,7 +372,6 @@ struct JoinCtx<'a> {
     apportionment: &'a Apportionment,
     coverage_windows: &'a [(i64, i64)],
     energy_measured: bool,
-    calls: &'a [LlmCallRef],
     estimates: &'a BTreeMap<String, Value>,
     zone: &'a Zone,
     remote_region_id: Option<&'a str>,
@@ -372,7 +388,7 @@ fn span_group_join(
     unit_key: &str,
     unit: Value,
     spans: &[&Span],
-    matcher: impl Fn(&LlmCallRef) -> bool,
+    calls: &[&LlmCallRef],
 ) -> Option<ImpactJoin> {
     let t0 = spans.iter().map(|s| s.t_start).min()?;
     let t1 = spans.iter().map(|s| s.t_end).max()?;
@@ -403,13 +419,19 @@ fn span_group_join(
     finish(
         &mut record,
         local,
-        remote_estimated(ctx.calls, ctx.estimates, ctx.remote_region_id, matcher),
+        remote_estimated(calls, ctx.estimates, ctx.remote_region_id),
         !ctx.energy_measured,
     );
     Some(ImpactJoin {
         unit_key: unit_key.to_string(),
         record: Value::Object(record),
     })
+}
+
+/// The unit key of a session's own record. The key scheme belongs to this
+/// assembler; a reader that wants the session record asks for it here.
+pub fn session_unit_key(session_id: &str) -> String {
+    format!("session:{session_id}")
 }
 
 /// The fields every record carries regardless of unit level.
@@ -601,7 +623,7 @@ pub fn sum_criteria(estimates: &[&Value]) -> BTreeMap<String, CriterionSum> {
     sums
 }
 
-/// Builds `remote_estimated` over the calls `matcher` accepts: the status
+/// Builds `remote_estimated` over `calls` (a unit's calls): the status
 /// tally, the [`sum_criteria`] arithmetic, and the two guards that decide
 /// what may be published and what may be combined.
 ///
@@ -610,10 +632,9 @@ pub fn sum_criteria(estimates: &[&Value]) -> BTreeMap<String, CriterionSum> {
 /// docs); their numbers are reported unchanged, since silently re-labelling
 /// them would be worse than saying they are stale.
 fn remote_estimated(
-    calls: &[LlmCallRef],
+    calls: &[&LlmCallRef],
     estimates: &BTreeMap<String, Value>,
     remote_region_id: Option<&str>,
-    matcher: impl Fn(&LlmCallRef) -> bool,
 ) -> RemoteEstimated {
     let mut statuses: BTreeMap<String, usize> = BTreeMap::new();
     // The estimates whose numbers may be summed, in call order — status
@@ -623,7 +644,7 @@ fn remote_estimated(
     let mut stale_zone = 0usize;
     let mut complete = true;
 
-    for call in calls.iter().filter(|c| matcher(c)) {
+    for call in calls {
         count += 1;
         let estimate = estimates.get(&call.event_id);
         let status = match estimate {
@@ -860,8 +881,12 @@ fn coverage_fraction(windows: &[(i64, i64)], t0: i64, t1: i64) -> f64 {
     if t1 <= t0 {
         return 0.0;
     }
-    let covered: i64 = windows
+    // `windows` is merged: sorted, disjoint, so ends ascend too. Only the
+    // run that ends after `t0` and starts before `t1` can contribute.
+    let first = windows.partition_point(|(_, end)| *end <= t0);
+    let covered: i64 = windows[first..]
         .iter()
+        .take_while(|(start, _)| *start < t1)
         .map(|(start, end)| (t1.min(*end) - t0.max(*start)).max(0))
         .sum();
     (covered as f64 / (t1 - t0) as f64).clamp(0.0, 1.0)
