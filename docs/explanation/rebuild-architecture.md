@@ -257,6 +257,33 @@ must present or regenerate a coherent view of retained history. The optimized
 watch path changes scheduling and reuse, not the raw/derived contracts or the
 attribution result.
 
+## Why diagnostics are on demand
+
+The debug console shows per-event decisions, allocation traces and collector
+health. Building them costs work on every pass, and a background service runs
+all day with nobody looking. So the resident `af watch` builds none of it
+until a console attaches:
+
+- the background service listens on no debug TCP port. It serves the debug
+  API on `console.sock`, a socket in the state directory that only its owner
+  can open, because the API exposes session data and has no authentication;
+- `af console` attaches by holding a stream open on that socket. While no
+  stream is open, the collector builds no frames and no decisions, and does
+  not re-detect agent processes;
+- a console that attaches is told the present: the status, the list of stored
+  sessions, and the last three minutes of each active session. The store may
+  hold days of history, and replaying it would delay the first page for
+  little use. Older sessions are loaded one at a time, when asked for;
+- loading a session for a console only reads what the store holds. A
+  console's request never changes a stored result;
+- when the last console leaves, the collector discards what it had built,
+  since it would only go stale.
+
+`af watch --debug` keeps the earlier behaviour for development: a TCP debug
+port, and diagnostics built for the life of the process. The routes and
+frames are in the [debug API reference](../reference/debug-api.md), and
+[Open the debug console](../how-to/debug-console.md) shows how to use it.
+
 ## Why keep raw and derived data separate?
 
 ### Methodology upgrades

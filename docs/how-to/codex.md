@@ -76,7 +76,8 @@ configuration below. `af watch` refuses a non-loopback `--otlp-addr` or
 The installed launchd/systemd service runs without `--debug`. On macOS inspect
 `$AF_STATE_DIR/logs/`; on Linux use
 `journalctl --user -u agentic-footprint-watch.service`. Run
-`af console` to open the debug UI on the running service.
+`af console` to open the debug UI on the running service (see
+[Open the debug console](debug-console.md)).
 
 ## 2. Configure Codex
 
@@ -193,7 +194,8 @@ session. `af doctor` checks the
 receiver and flags a running `codex` process that started before its
 telemetry configuration last changed.
 
-With `af watch --debug`, open the debug console:
+With `af watch --debug`, or `af console` beside the background service, open
+the debug console:
 
 ```text
 http://127.0.0.1:9414

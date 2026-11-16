@@ -246,7 +246,8 @@ Optional location settings:
 The installed macOS/Linux background service does not enable debug mode. On macOS inspect
 `$AF_STATE_DIR/logs/watch.stderr.log`; on Linux run
 `journalctl --user -u agentic-footprint-watch.service`. For the debug console, run
-`af console`: it attaches to the running service.
+`af console`: it attaches to the running service (see
+[Open the debug console](debug-console.md)).
 
 Use `--no-sidecars` only when you intentionally want ingestion and
 attribution without CodeCarbon sampling or EcoLogits estimation.
