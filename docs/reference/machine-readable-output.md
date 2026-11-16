@@ -370,7 +370,8 @@ Each element of `processes`:
 | `not_installed` | The agent's command is not on `PATH` and it has no configuration. | Agent only. |
 | `unknown` | The process could not be inspected. | Process only. |
 
-The agent's `state` is the most actionable state among its processes, in the
+An agent with an event is `receiving`, whatever its files say. Otherwise the
+agent's `state` is the most actionable state among its processes, in the
 order `needs_restart`, `misconfigured`, `not_configured`, `waiting`. With no
 process that says one of these, it comes from the user-scope configuration
 file and `PATH`.
