@@ -1008,6 +1008,11 @@ struct Watch {
     home: Option<PathBuf>,
     /// The last detection result — see [`Watch::refresh_agents`].
     agent_facts: Vec<AgentFacts>,
+    /// What inspecting running agent processes found, by pid — kept so a
+    /// settled process is not inspected again.
+    inspections: BTreeMap<u32, agents::Inspection>,
+    /// The Claude Code session each process runs, from the hook.
+    claude_sessions: BTreeMap<u32, String>,
     /// What each agent has sent since this process started, recorded at
     /// receipt rather than at flush so the status is seconds behind the
     /// agent and not a flush interval behind it.
@@ -1134,6 +1139,8 @@ impl Watch {
             started_at,
             home: crate::paths::home_dir(),
             agent_facts: Vec::new(),
+            inspections: BTreeMap::new(),
+            claude_sessions: BTreeMap::new(),
             activity: BTreeMap::new(),
             status_dirty: true,
             last_status_at: None,
@@ -1159,7 +1166,12 @@ impl Watch {
             return;
         }
         if let Some(home) = &self.home {
-            let mut facts = agents::detect(home, &self.logs_endpoint());
+            let mut facts = agents::detect_live(
+                home,
+                &self.logs_endpoint(),
+                &mut self.inspections,
+                &self.claude_sessions,
+            );
             agents::keep_start_times(&mut facts, &self.agent_facts);
             self.agent_facts = facts;
         }
@@ -1181,6 +1193,17 @@ impl Watch {
         activity.last_event_at_ms =
             Some(activity.last_event_at_ms.map_or(at_ms, |at| at.max(at_ms)));
         self.status_dirty = true;
+    }
+
+    /// The hook's bootstrap span names the process a Claude Code session
+    /// runs in: remembered so that process's row can speak for itself.
+    fn note_session_roots(&mut self, session_id: &str, root_pids: &[i64]) {
+        for pid in root_pids.iter().filter_map(|pid| u32::try_from(*pid).ok()) {
+            if self.claude_sessions.get(&pid).map(String::as_str) != Some(session_id) {
+                self.claude_sessions.insert(pid, session_id.to_string());
+                self.status_dirty = true;
+            }
+        }
     }
 
     /// Activity from telemetry the receiver just accepted.
@@ -1205,15 +1228,26 @@ impl Watch {
     fn status_payload(&self) -> Value {
         let receiver = self.otlp_health();
         let facts_for = |agent: AgentId| {
-            self.agent_facts
+            let mut facts = self
+                .agent_facts
                 .iter()
                 .find(|facts| facts.agent == agent)
                 .cloned()
                 // No detection (no home directory): only events can speak.
                 .unwrap_or_else(|| {
                     agents::facts_from(agent, false, agents::UserConfig::Absent, None, None)
-                })
+                });
+            // A link learned since the last detection counts at once.
+            if agent == AgentId::ClaudeCode {
+                for process in facts.processes.iter_mut().flatten() {
+                    if let Some(session) = self.claude_sessions.get(&process.pid) {
+                        process.session_id = Some(session.clone());
+                    }
+                }
+            }
+            facts
         };
+        let home = self.home.as_deref().unwrap_or(Path::new(""));
         json!({
             "boot_id": self.boot_id,
             "started_at": agents::system_time_rfc3339(self.started_at),
@@ -1225,7 +1259,9 @@ impl Watch {
             },
             "agents": AgentId::all()
                 .into_iter()
-                .map(|agent| agents::agent_row(&facts_for(agent), self.activity.get(&agent)))
+                .map(|agent| {
+                    agents::agent_row_in(&facts_for(agent), self.activity.get(&agent), home)
+                })
                 .collect::<Vec<_>>(),
         })
     }
@@ -1782,6 +1818,7 @@ impl Watch {
         zone: &af_core::Zone,
     ) -> Result<()> {
         self.send_watch_op(session_id, &loaded.tree);
+        self.note_session_roots(session_id, &loaded.tree.root_pids);
         if !self.diagnostics() {
             return Ok(());
         }
@@ -2867,6 +2904,52 @@ mod tests {
             agent(&status, "codex"),
             &codex_before,
             "another agent's row"
+        );
+    }
+
+    #[test]
+    fn per_session_activity_keeps_each_sessions_latest_event() {
+        let (_dir, mut watch, _debug) = status_watch();
+        watch.note_activity("otlp-codex", "s-a", 1_000);
+        watch.note_activity("otlp-codex", "s-b", 2_000);
+        watch.note_activity("otlp-codex", "s-a", 500);
+        let activity = &watch.activity[&AgentId::Codex];
+        assert_eq!(activity.sessions["s-a"], 1_000);
+        assert_eq!(activity.sessions["s-b"], 2_000);
+        assert_eq!(activity.last_event_at_ms, Some(2_000));
+    }
+
+    #[test]
+    fn a_session_boot_pid_links_a_claude_process_to_its_session() {
+        let (_dir, mut watch, _debug) = status_watch();
+        let processes = [agents::AgentProcess {
+            pid: 42,
+            name: "claude".into(),
+            started: SystemTime::now(),
+        }];
+        watch.agent_facts = vec![agents::facts_from(
+            AgentId::ClaudeCode,
+            true,
+            agents::UserConfig::Absent,
+            None,
+            Some(&processes),
+        )];
+        watch.note_activity("cc-hooks", "c1", 3_000);
+        let before = watch.status_payload();
+        assert_eq!(
+            agent(&before, "claude-code")["processes"][0]["state"],
+            "unknown"
+        );
+
+        // The hook's bootstrap span names the Claude Code process.
+        watch.note_session_roots("c1", &[42]);
+        let status = watch.status_payload();
+        let process = &agent(&status, "claude-code")["processes"][0];
+        assert_eq!(process["session_id"], "c1");
+        assert_eq!(process["state"], "receiving");
+        assert_eq!(
+            process["last_event_at"],
+            af_core::rfc3339_ms(3_000).unwrap()
         );
     }
 

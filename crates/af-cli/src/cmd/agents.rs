@@ -664,20 +664,48 @@ pub(crate) fn facts_from(
     }
 }
 
-/// Detects every supported agent. Reads the user-scope config files,
-/// `PATH`, and one `ps`; writes nothing. No process is inspected: each is
-/// only listed.
-pub(crate) fn detect(home: &Path, logs_endpoint: &str) -> Vec<AgentFacts> {
+/// Detects every supported agent: the user-scope config files, `PATH`,
+/// one `ps`, and an inspection of the agent processes it lists. Writes
+/// nothing. `cache` holds what earlier calls found, so that a settled
+/// process is not looked at twice.
+pub(crate) fn detect_live(
+    home: &Path,
+    logs_endpoint: &str,
+    cache: &mut BTreeMap<u32, Inspection>,
+    claude_sessions: &BTreeMap<u32, String>,
+) -> Vec<AgentFacts> {
+    let processes = running_agents();
+    if let Some(processes) = &processes {
+        let wanted = pids_to_inspect(processes, cache);
+        cache.extend(inspect_processes(&wanted));
+    }
     detect_from(
         home,
         logs_endpoint,
-        running_agents().as_deref(),
-        &BTreeMap::new(),
-        &BTreeMap::new(),
+        processes.as_deref(),
+        cache,
+        claude_sessions,
     )
 }
 
-/// [`detect`] from already-gathered inputs: the process list, what
+/// Forgets processes that are gone and names those worth inspecting: any
+/// not seen yet, a Claude Code whose directory is still unknown, and every
+/// Codex — it can start another session, whose file names the new one.
+fn pids_to_inspect(processes: &[AgentProcess], cache: &mut BTreeMap<u32, Inspection>) -> Vec<u32> {
+    cache.retain(|pid, _| processes.iter().any(|process| process.pid == *pid));
+    processes
+        .iter()
+        .filter(|process| {
+            process.name == AgentId::Codex.command()
+                || cache
+                    .get(&process.pid)
+                    .is_none_or(|seen| seen.cwd.is_none())
+        })
+        .map(|process| process.pid)
+        .collect()
+}
+
+/// [`detect_live`] from already-gathered inputs: the process list, what
 /// inspecting those processes found (by pid), and the Claude Code sessions
 /// the hook tied to a pid.
 pub(crate) fn detect_from(
@@ -898,6 +926,7 @@ pub(crate) fn system_time_rfc3339(time: SystemTime) -> Option<String> {
 /// `state` is the first rule that matches, and `receiving` comes first on
 /// purpose: an event that actually arrived outranks anything the files or
 /// the process table suggest.
+#[cfg(test)]
 pub(crate) fn agent_row(facts: &AgentFacts, activity: Option<&Activity>) -> Value {
     agent_row_in(facts, activity, Path::new(""))
 }
@@ -1527,6 +1556,32 @@ mod tests {
     }
 
     // --- per-process state ---------------------------------------------------
+
+    #[test]
+    fn only_what_can_have_changed_is_inspected_again() {
+        let processes = [
+            claude_process(1, at(1)),
+            claude_process(2, at(1)),
+            codex_process(3, at(1)),
+            claude_process(4, at(1)),
+        ];
+        let known = Inspection {
+            cwd: Some(PathBuf::from("/p")),
+            ..Inspection::default()
+        };
+        let mut cache = BTreeMap::from([
+            (1, known.clone()),                   // a Claude whose directory is known: settled
+            (2, Inspection::default()),           // looked at too early: try again
+            (3, codex_in(Path::new("/p"), "s1")), // a Codex may have moved to a new session
+            (99, known.clone()),                  // gone
+        ]);
+        assert_eq!(pids_to_inspect(&processes, &mut cache), [2, 3, 4]);
+        assert!(
+            !cache.contains_key(&99),
+            "a process that is gone is forgotten"
+        );
+        assert!(cache.contains_key(&1));
+    }
 
     fn codex_process(pid: u32, started: SystemTime) -> AgentProcess {
         AgentProcess {
