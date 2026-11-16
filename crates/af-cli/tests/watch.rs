@@ -1146,3 +1146,126 @@ fn reject_counts_are_per_collector_not_the_process_wide_total() {
 
     watch.terminate();
 }
+
+/// POSTs one OTLP logs body, as an agent's exporter would.
+fn post_logs(receiver: SocketAddr, body: &[u8]) {
+    let mut stream = TcpStream::connect(receiver).expect("connect receiver");
+    stream
+        .set_read_timeout(Some(Duration::from_secs(10)))
+        .expect("set timeout");
+    write!(
+        stream,
+        "POST /v1/logs HTTP/1.1\r\nHost: {receiver}\r\nContent-Type: application/json\r\n\
+         Content-Length: {}\r\nConnection: close\r\n\r\n",
+        body.len()
+    )
+    .expect("write request head");
+    stream.write_all(body).expect("write request body");
+    let mut response = String::new();
+    let _ = stream.read_to_string(&mut response);
+    let status = response.split_whitespace().nth(1).unwrap_or("");
+    assert!(status.starts_with('2'), "POST /v1/logs answered {response}");
+}
+
+fn agent_row<'a>(status: &'a Value, id: &str) -> &'a Value {
+    status["agents"]
+        .as_array()
+        .expect("agents array")
+        .iter()
+        .find(|row| row["id"] == id)
+        .unwrap_or_else(|| panic!("no agent row {id} in {status}"))
+}
+
+/// The watcher-level status exists from the first second, says what the
+/// user's configuration promises, and only says "receiving" once something
+/// is actually received by *this* process.
+#[test]
+fn status_is_served_before_any_session_and_backlog_is_not_receiving() {
+    let dir = state_dir();
+    // Backlog: a Claude Code hook spool file written while no watcher ran.
+    append_lines(
+        &dir.path().join("spool"),
+        "cc-hooks.sess-basic.jsonl",
+        &fixture_lines(),
+    );
+
+    // A home whose Claude Code settings export to this watcher's receiver.
+    let receiver = free_addr();
+    let home = tempfile::tempdir().expect("home");
+    std::fs::create_dir_all(home.path().join(".claude")).expect("claude dir");
+    std::fs::write(
+        home.path().join(".claude/settings.json"),
+        serde_json::json!({
+            "env": {
+                "CLAUDE_CODE_ENABLE_TELEMETRY": "1",
+                "OTEL_LOGS_EXPORTER": "otlp",
+                "OTEL_EXPORTER_OTLP_ENDPOINT": format!("http://{receiver}"),
+            },
+            "hooks": {
+                "PostToolUse": [{ "hooks": [{ "type": "command", "command": "/usr/local/bin/af hook" }] }]
+            }
+        })
+        .to_string(),
+    )
+    .expect("write settings");
+
+    let watch = Watch::start_with_env(
+        dir.path(),
+        &["--no-sidecars", "--otlp-addr", &receiver.to_string()],
+        &[
+            ("HOME", home.path().display().to_string()),
+            (
+                "CODEX_HOME",
+                home.path().join(".codex").display().to_string(),
+            ),
+        ],
+    );
+
+    // Served as soon as the port is bound, with no session required.
+    let status = watch.poll_json("/debug/status", |status| status["boot_id"].is_string());
+    assert_eq!(status["boot_id"].as_str().unwrap().len(), 16);
+    assert_eq!(status["receiver"]["endpoint"], receiver.to_string());
+    let claude = agent_row(&status, "claude-code");
+    // `needs_restart` when this machine happens to be running a `claude`
+    // older than the settings file just written; `waiting` otherwise.
+    let state = claude["state"].as_str().unwrap();
+    assert!(
+        state == "waiting" || state == "needs_restart",
+        "configured and nothing received yet, got {claude}"
+    );
+    assert_eq!(claude["sessions"], 0);
+    assert_eq!(
+        claude["config_path"],
+        home.path()
+            .join(".claude/settings.json")
+            .display()
+            .to_string()
+    );
+    assert_eq!(agent_row(&status, "codex")["config_path"], Value::Null);
+
+    // The backlog is ingested (the session appears) and still does not
+    // count: nothing arrived while this watcher was running.
+    watch.poll_json("/debug/sessions", |sessions| {
+        sessions.as_array().is_some_and(|rows| !rows.is_empty())
+    });
+    let status = watch.poll_json("/debug/status", |status| status["boot_id"].is_string());
+    assert_ne!(agent_row(&status, "claude-code")["state"], "receiving");
+
+    // One real Claude Code OTLP body, received now.
+    let body = std::fs::read(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../af-otlp/tests/fixtures/otlp/logs-api-request.json"),
+    )
+    .expect("read OTLP fixture");
+    post_logs(receiver, &body);
+
+    let status = watch.poll_json("/debug/status", |status| {
+        agent_row(status, "claude-code")["state"] == "receiving"
+    });
+    let claude = agent_row(&status, "claude-code");
+    assert_eq!(claude["sessions"], 1);
+    assert!(claude["last_event_at"].is_string());
+    assert_ne!(agent_row(&status, "codex")["state"], "receiving");
+
+    watch.terminate();
+}

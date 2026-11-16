@@ -39,7 +39,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use anyhow::{bail, Context, Result};
 use serde_json::{json, Map, Value};
@@ -52,6 +52,7 @@ use af_events::{EnergySample, Envelope, Payload, ProcessSample};
 use af_sidecar::{doctor, venv_python, Severity, Sidecar};
 use af_store::Store;
 
+use super::agents::{self, AgentFacts, AgentId};
 use super::debug_frames::{
     alloc_trace, attr_decision, ingest_decision, orphan_decision, otlp_reject_frame,
     policy_schema_name, reject_frame, span_open_decision, watchdog_entries, Decision,
@@ -344,6 +345,13 @@ pub fn run(state_dir: &Path, args: WatchArgs) -> Result<()> {
     );
     watch.opaque_events = store.count_opaque_events().unwrap_or(0);
 
+    // Before the first pass, so `/debug/status` answers from the first
+    // second: the startup pass can take a while on a large store, and an
+    // empty one never publishes a session at all.
+    watch.refresh_agents();
+    watch.publish_status(Instant::now(), true);
+    let mut last_detect = Instant::now();
+
     // One pass before entering the loop: a spool that already has content
     // when `af watch` starts must not wait for the first event or tick.
     // Failure is logged and the loop entered anyway — exactly the tolerance
@@ -391,20 +399,32 @@ pub fn run(state_dir: &Path, args: WatchArgs) -> Result<()> {
             ],
         );
         match inbox_rx.recv_timeout(wait) {
-            Ok(item) => inbox.push(item),
+            Ok(item) => {
+                watch.note_inbound(&item, now_ms());
+                inbox.push(item)
+            }
             Err(mpsc::RecvTimeoutError::Timeout) => {}
             // No receiver (`--no-otlp`, or the bind failed): keep the
             // loop's cadence instead of spinning.
             Err(mpsc::RecvTimeoutError::Disconnected) => std::thread::sleep(wait),
         }
         while let Ok(item) = inbox_rx.try_recv() {
+            watch.note_inbound(&item, now_ms());
             inbox.push(item);
         }
         while let Ok(notice) = fs_rx.try_recv() {
+            if let FsNotice::Paths(paths) = &notice {
+                watch.note_spool_paths(paths, now_ms());
+            }
             absorb_notice(notice, &mut dirty_paths, &mut force_reconcile);
             pending_since = Some(Instant::now());
         }
         let now = Instant::now();
+        if now.saturating_duration_since(last_detect) >= DETECT_INTERVAL {
+            watch.refresh_agents();
+            last_detect = now;
+        }
+        watch.publish_status(now, false);
         let something_new = watch.has_new_session(&inbox.facts)
             || watch.has_unknown_spool_file(&dirty_paths)
             || inbox.facts.len() >= MAX_BATCHED_FACTS;
@@ -505,6 +525,34 @@ fn loop_wait(now: Instant, deadlines: impl IntoIterator<Item = Option<Instant>>)
         .min()
         .unwrap_or(IDLE_POLL)
         .clamp(MIN_WAIT, IDLE_POLL)
+}
+
+/// How often agent detection (two config files, `PATH`, one `ps`) is
+/// refreshed. It writes nothing, so it runs on its own clock rather than
+/// waiting for a flush the way reconciliation does.
+const DETECT_INTERVAL: Duration = Duration::from_secs(30);
+
+/// The least time between two `status` frames. Activity changes the status
+/// on every event; a console needs to learn "this agent is sending", not
+/// to be told so once per event.
+const STATUS_MIN_INTERVAL: Duration = Duration::from_secs(5);
+
+/// An identifier for this watcher process: fixed for its life, different
+/// for any other. The console compares it across reconnects to learn that
+/// the process it is talking to is not the one whose history it holds.
+///
+/// Start time and pid, mixed (splitmix64) so the result does not read as a
+/// timestamp. For a fixed pid the mix is a bijection of the start time, so
+/// a reused pid still gets a new id.
+fn boot_id(started: SystemTime, pid: u32) -> String {
+    let nanos = started
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_nanos() as u64)
+        .unwrap_or(0);
+    let mut z = nanos.wrapping_add(u64::from(pid).wrapping_mul(0x9E37_79B9_7F4A_7C15));
+    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    format!("{:016x}", z ^ (z >> 31))
 }
 
 /// The shortest sleep [`loop_wait`] returns.
@@ -951,6 +999,22 @@ struct Watch {
     estimated_sessions: BTreeSet<String>,
     /// `llm_call`s stored by the flush in progress, for the estimator.
     calls_to_estimate: Vec<String>,
+    /// See [`boot_id`].
+    boot_id: String,
+    started_at: SystemTime,
+    /// Where the agents' user-scope configuration lives. `None` when no
+    /// home directory can be found: agents are then reported from events
+    /// alone.
+    home: Option<PathBuf>,
+    /// The last detection result — see [`Watch::refresh_agents`].
+    agent_facts: Vec<AgentFacts>,
+    /// What each agent has sent since this process started, recorded at
+    /// receipt rather than at flush so the status is seconds behind the
+    /// agent and not a flush interval behind it.
+    activity: BTreeMap<AgentId, agents::Activity>,
+    /// The last status published and when, for [`Watch::publish_status`].
+    last_status: Option<Value>,
+    last_status_at: Option<Instant>,
 }
 
 struct LoadedSession {
@@ -1014,6 +1078,7 @@ impl Watch {
         debug_state: Option<Arc<Mutex<DebugState>>>,
         otlp: Option<(SocketAddr, Arc<af_otlp::Counters>)>,
     ) -> Self {
+        let started_at = SystemTime::now();
         let estimator = if args.no_sidecars {
             None
         } else {
@@ -1064,7 +1129,131 @@ impl Watch {
             estimates: Vec::new(),
             estimated_sessions: BTreeSet::new(),
             calls_to_estimate: Vec::new(),
+            boot_id: boot_id(started_at, std::process::id()),
+            started_at,
+            home: crate::paths::home_dir(),
+            agent_facts: Vec::new(),
+            activity: BTreeMap::new(),
+            last_status: None,
+            last_status_at: None,
         }
+    }
+
+    // --- watcher status (`GET /debug/status`) -------------------------------
+
+    /// The logs endpoint agents must export to for this watcher to hear
+    /// them: its own receiver, or the default when it has none.
+    fn logs_endpoint(&self) -> String {
+        match &self.otlp {
+            Some((addr, _)) => format!("http://{addr}/v1/logs"),
+            None => super::DEFAULT_LOGS_ENDPOINT.to_string(),
+        }
+    }
+
+    /// Re-reads what the machine says about each agent. Only when someone
+    /// can see it: without the debug server this is a `ps` every thirty
+    /// seconds for nobody.
+    fn refresh_agents(&mut self) {
+        if self.debug_state.is_none() {
+            return;
+        }
+        if let Some(home) = &self.home {
+            self.agent_facts = agents::detect(home, &self.logs_endpoint());
+        }
+    }
+
+    /// Records one received event for agent status. A collector that
+    /// belongs to no agent (the sampler, a generic OTLP source) is ignored.
+    fn note_activity(&mut self, collector: &str, session_id: &str, at_ms: i64) {
+        let Some(agent) = agents::agent_for_collector(collector) else {
+            return;
+        };
+        let activity = self.activity.entry(agent).or_default();
+        activity.sessions.insert(session_id.to_string());
+        activity.last_event_at_ms =
+            Some(activity.last_event_at_ms.map_or(at_ms, |at| at.max(at_ms)));
+    }
+
+    /// Activity from telemetry the receiver just accepted.
+    fn note_inbound(&mut self, item: &af_otlp::Inbound, at_ms: i64) {
+        if let af_otlp::Inbound::Facts(events) = item {
+            for event in events {
+                self.note_activity(&event.collector.name, &event.session_id, at_ms);
+            }
+        }
+    }
+
+    /// Activity from spool files that just changed: the file name carries
+    /// the collector and the session, so nothing has to be read.
+    fn note_spool_paths(&mut self, paths: &[PathBuf], at_ms: i64) {
+        for path in paths {
+            let Some(file) = path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .and_then(|name| af_spool::parse_spool_filename(name, PathBuf::new()))
+            else {
+                continue;
+            };
+            self.note_activity(&file.collector, &file.session_id, at_ms);
+        }
+    }
+
+    /// The `/debug/status` payload: this process, its receiver, and one
+    /// row per supported agent.
+    fn status_payload(&self) -> Value {
+        let receiver = self.otlp_health();
+        let facts_for = |agent: AgentId| {
+            self.agent_facts
+                .iter()
+                .find(|facts| facts.agent == agent)
+                .cloned()
+                // No detection (no home directory): only events can speak.
+                .unwrap_or_else(|| {
+                    agents::facts_from(agent, false, agents::UserConfig::Absent, None, None)
+                })
+        };
+        let started_ms = self
+            .started_at
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .map(|elapsed| elapsed.as_millis() as i64)
+            .unwrap_or(0);
+        json!({
+            "boot_id": self.boot_id,
+            "started_at": af_core::rfc3339_ms(started_ms),
+            "af_version": env!("CARGO_PKG_VERSION"),
+            "flush_interval_ms": self.batch_interval.as_millis() as u64,
+            "receiver": {
+                "endpoint": receiver["endpoint"],
+                "note": receiver.get("note").cloned().unwrap_or(Value::Null),
+            },
+            "agents": AgentId::all()
+                .into_iter()
+                .map(|agent| agents::agent_row(&facts_for(agent), self.activity.get(&agent)))
+                .collect::<Vec<_>>(),
+        })
+    }
+
+    /// Publishes the status when it differs from the last one published
+    /// and [`STATUS_MIN_INTERVAL`] has passed since (or `force`).
+    fn publish_status(&mut self, now: Instant, force: bool) {
+        let Some(state) = &self.debug_state else {
+            return;
+        };
+        let too_soon = self
+            .last_status_at
+            .is_some_and(|at| now.saturating_duration_since(at) < STATUS_MIN_INTERVAL);
+        if too_soon && !force {
+            return;
+        }
+        let payload = self.status_payload();
+        if self.last_status.as_ref() == Some(&payload) {
+            return;
+        }
+        if let Ok(mut state) = state.lock() {
+            state.set_status(payload.clone());
+        }
+        self.last_status = Some(payload);
+        self.last_status_at = Some(now);
     }
 
     /// One wake's work: ingest, supervise, rebuild, publish.
@@ -2567,6 +2756,157 @@ mod tests {
             remote_region: None,
             batch_interval: Duration::ZERO,
         }
+    }
+
+    // --- watcher status ------------------------------------------------------
+
+    fn status_watch() -> (tempfile::TempDir, Watch, Arc<Mutex<DebugState>>) {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let debug = Arc::new(Mutex::new(DebugState::default()));
+        let mut watch = Watch::new(dir.path(), &quiet_args(), Some(Arc::clone(&debug)), None);
+        // An empty home: no agent is configured, whatever this machine has.
+        watch.home = Some(dir.path().join("home"));
+        watch.refresh_agents();
+        (dir, watch, debug)
+    }
+
+    fn agent<'a>(status: &'a Value, id: &str) -> &'a Value {
+        status["agents"]
+            .as_array()
+            .expect("agents array")
+            .iter()
+            .find(|row| row["id"] == id)
+            .unwrap_or_else(|| panic!("no agent row {id} in {status}"))
+    }
+
+    #[test]
+    fn boot_id_is_16_hex_and_differs_across_processes() {
+        let t = SystemTime::UNIX_EPOCH + Duration::from_nanos(1_794_000_000_123_456_789);
+        let id = boot_id(t, 1);
+        assert_eq!(id.len(), 16);
+        assert!(id
+            .chars()
+            .all(|c| c.is_ascii_digit() || ('a'..='f').contains(&c)));
+        assert_eq!(id, boot_id(t, 1), "stable for one process");
+        assert_ne!(id, boot_id(t, 2), "another pid at the same instant");
+        assert_ne!(
+            id,
+            boot_id(t + Duration::from_nanos(1), 1),
+            "the same pid, reused later"
+        );
+    }
+
+    #[test]
+    fn status_payload_has_the_contract_fields() {
+        let (_dir, watch, _debug) = status_watch();
+        let status = watch.status_payload();
+        assert_eq!(status["boot_id"], watch.boot_id.as_str());
+        assert_eq!(status["boot_id"].as_str().unwrap().len(), 16);
+        let started = status["started_at"].as_str().expect("started_at");
+        assert!(started.ends_with('Z') && started.contains('T'), "{started}");
+        assert_eq!(status["af_version"], env!("CARGO_PKG_VERSION"));
+        assert_eq!(status["flush_interval_ms"], 0, "quiet_args flushes at once");
+        assert_eq!(status["receiver"]["endpoint"], Value::Null);
+        assert!(
+            status["receiver"]["note"].is_string(),
+            "no receiver says why"
+        );
+        let ids: Vec<&str> = status["agents"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|row| row["id"].as_str().unwrap())
+            .collect();
+        let expected: Vec<&str> = agents::AgentId::all().into_iter().map(|a| a.id()).collect();
+        assert_eq!(
+            ids, expected,
+            "one row per supported agent, in a fixed order"
+        );
+    }
+
+    #[test]
+    fn activity_from_an_unknown_collector_changes_nothing() {
+        let (_dir, mut watch, _debug) = status_watch();
+        let before = watch.status_payload();
+        for collector in [
+            "otlp-genai",
+            "otlp-http",
+            "codecarbon",
+            "codecarbon-sampler",
+            "",
+        ] {
+            watch.note_activity(collector, "s", 1_000);
+        }
+        assert_eq!(watch.status_payload(), before);
+    }
+
+    #[test]
+    fn an_event_flips_its_agent_to_receiving_and_counts_sessions() {
+        let (_dir, mut watch, _debug) = status_watch();
+        let codex_before = agent(&watch.status_payload(), "codex").clone();
+        assert_ne!(
+            agent(&watch.status_payload(), "claude-code")["state"],
+            "receiving"
+        );
+
+        watch.note_activity("otlp-cc", "s1", 1_000);
+        watch.note_activity("cc-hooks", "s1", 2_000);
+        watch.note_activity("otlp-cc", "s2", 3_000);
+        // An older receipt arriving late does not move the clock back.
+        watch.note_activity("otlp-cc", "s2", 2_500);
+
+        let status = watch.status_payload();
+        let claude = agent(&status, "claude-code");
+        assert_eq!(claude["state"], "receiving");
+        assert_eq!(claude["sessions"], 2);
+        assert_eq!(claude["last_event_at"], af_core::rfc3339_ms(3_000).unwrap());
+        assert_eq!(
+            agent(&status, "codex"),
+            &codex_before,
+            "another agent's row"
+        );
+    }
+
+    #[test]
+    fn status_is_published_at_most_every_five_seconds_and_only_on_change() {
+        let (_dir, mut watch, debug) = status_watch();
+        // A connection's channel is where every published status lands.
+        let (_replay, rx) = debug.lock().unwrap().subscribe(None);
+        let published = |rx: &std::sync::mpsc::Receiver<Vec<u8>>| rx.try_iter().count();
+        let t0 = Instant::now();
+
+        watch.publish_status(t0, true);
+        assert_eq!(published(&rx), 1, "the forced first publication");
+
+        watch.note_activity("otlp-cc", "s1", 1_000);
+        watch.publish_status(t0 + Duration::from_secs(1), false);
+        assert_eq!(published(&rx), 0, "changed, but inside the 5s floor");
+
+        watch.publish_status(t0 + Duration::from_secs(5), false);
+        assert_eq!(published(&rx), 1, "changed and the floor has passed");
+
+        watch.publish_status(t0 + Duration::from_secs(10), false);
+        watch.publish_status(t0 + Duration::from_secs(60), false);
+        assert_eq!(published(&rx), 0, "unchanged: nothing to say");
+    }
+
+    #[test]
+    fn spool_notices_count_as_activity_by_file_name() {
+        let (_dir, mut watch, _debug) = status_watch();
+        watch.note_spool_paths(
+            &[
+                PathBuf::from("/state/spool/cc-hooks.sess-1.jsonl"),
+                PathBuf::from("/state/spool/codecarbon.sess-1.jsonl"),
+                PathBuf::from("/state/spool/not-a-spool-file.txt"),
+                PathBuf::from("/state/spool"),
+            ],
+            7_000,
+        );
+        let status = watch.status_payload();
+        let claude = agent(&status, "claude-code");
+        assert_eq!(claude["state"], "receiving");
+        assert_eq!(claude["sessions"], 1);
+        assert_ne!(agent(&status, "codex")["state"], "receiving");
     }
 
     fn one_fact() -> Envelope {

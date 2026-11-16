@@ -200,7 +200,9 @@ impl AgentId {
 /// and never for an OTLP-only session.
 pub(crate) fn agent_for_collector(collector: &str) -> Option<AgentId> {
     match collector {
-        "claude-code" | "otlp-cc" => Some(AgentId::ClaudeCode),
+        // `cc-hooks` is the hook collector's name and its spool file prefix;
+        // `otlp-cc` is the OTLP normalizer's.
+        "claude-code" | "cc-hooks" | "otlp-cc" => Some(AgentId::ClaudeCode),
         "codex" => Some(AgentId::Codex),
         #[cfg(feature = "experimental-opencode")]
         "opencode" => Some(AgentId::OpenCode),
@@ -547,6 +549,8 @@ mod tests {
             Some(AgentId::ClaudeCode)
         );
         assert_eq!(agent_for_collector("otlp-cc"), Some(AgentId::ClaudeCode));
+        // The hook collector's own name, which is also its spool file prefix.
+        assert_eq!(agent_for_collector("cc-hooks"), Some(AgentId::ClaudeCode));
         assert_eq!(agent_for_collector("codex"), Some(AgentId::Codex));
         assert_eq!(agent_for_collector("otlp-codex"), Some(AgentId::Codex));
         assert_eq!(agent_for_collector("otlp-codex-tool"), Some(AgentId::Codex));

@@ -223,7 +223,7 @@ impl Default for DebugState {
 }
 
 /// What a new subscriber is written before it joins the live fan-out.
-enum Replay {
+pub(crate) enum Replay {
     /// Every frame after the client's cursor, oldest first, already on the
     /// wire. Written straight to the socket by the connection's own thread,
     /// so its size is bounded by the ring and not by any queue.
@@ -387,7 +387,7 @@ impl DebugState {
     /// §2.3 forbids. Live frames may still be dropped when a reader stalls —
     /// but that drops the whole connection with them, and the client's
     /// reconnect replays from its `Last-Event-ID`.
-    fn subscribe(&mut self, cursor: Option<i64>) -> (Replay, Receiver<Vec<u8>>) {
+    pub(crate) fn subscribe(&mut self, cursor: Option<i64>) -> (Replay, Receiver<Vec<u8>>) {
         let (tx, rx) = mpsc::sync_channel::<Vec<u8>>(self.queue_capacity);
         let replay = match cursor {
             Some(last) => {
