@@ -223,7 +223,10 @@ export class AfClient {
       if (status) {
         // Another process than the one whose history is held: that
         // history cannot be merged with the new one by sequence number.
-        if (this.bootId !== null && status.boot_id !== this.bootId) this.clearForNewBoot();
+        // That includes a first boot id arriving after a sync with a
+        // watcher that had none (an upgrade from one predating the status
+        // route): whatever is held came from some other process.
+        if (status.boot_id !== this.bootId && (this.bootId !== null || this.synced)) this.clearForNewBoot();
         this.bootId = status.boot_id;
         this.statusStoreRef.set(status);
         this.heartbeatArmed = true;

@@ -1035,6 +1035,32 @@ describe("AfClient — reconnect, boot id and heartbeat", () => {
     h.client.dispose();
   });
 
+  it("a watcher with a boot id replacing one that had none clears state too (upgrade from a pre-status watcher)", async () => {
+    const h = makeHarness();
+    const fact = actionSpanFact("spn_a", "evt_a", 0, 100);
+    h.setStatus("404");
+    h.setSnapshot(emptySnapshot(5, { events: [fact] }));
+    await h.client.start();
+    h.esInstances[0].emitOpen();
+    h.esInstances[0].emit("decision", { kind: "attr", text: "old process", ts: "2026-07-25T00:00:00.000Z" }, 6);
+    h.client.tick();
+    expect(h.client.bootId).toBeNull();
+    expect(h.eventStore.decisions).toHaveLength(1);
+
+    // The old watcher is replaced by one that reports a status. Its
+    // sequence numbers start over and it re-serves the same event id.
+    h.setStatus({ bootId: "boot-2" });
+    h.setSnapshot(emptySnapshot(0, { events: [fact] }));
+    h.esInstances[0].emitError();
+    await vi.advanceTimersByTimeAsync(500);
+
+    expect(h.client.bootId).toBe("boot-2");
+    expect(h.esInstances[1].url, "a fresh sync, not a resume from the old cursor").toBe("/debug/stream?from=0");
+    expect(h.eventStore.decisions, "the old process's decision log is gone").toHaveLength(0);
+    expect(h.eventStore.totalSeen, "cleared, then the same event id ingested again: the dedup set was reset").toBe(1);
+    h.client.dispose();
+  });
+
   it("a status frame carrying a different boot_id re-syncs too", async () => {
     const h = makeHarness();
     await h.client.start();

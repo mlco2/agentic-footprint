@@ -621,7 +621,19 @@ fn claude_config_from(scopes: &[PathBuf], logs_endpoint: &str) -> (UserConfig, O
             "" | "0" | "false" | "no" | "off"
         )
     };
-    let config = if let Some(wrong) = wrong_endpoint {
+    // Likewise for the protocol: this receiver takes http/json only, and
+    // the logs-specific variable has the last word.
+    let wrong_protocol = env
+        .get("OTEL_EXPORTER_OTLP_LOGS_PROTOCOL")
+        .or_else(|| env.get("OTEL_EXPORTER_OTLP_PROTOCOL"))
+        .filter(|(protocol, _)| protocol != "http/json")
+        .map(|(protocol, from)| {
+            misconfigured(
+                from,
+                format!("exports logs as {protocol}; this receiver takes http/json"),
+            )
+        });
+    let config = if let Some(wrong) = wrong_endpoint.or(wrong_protocol) {
         wrong
     } else {
         match (
@@ -1881,6 +1893,54 @@ mod tests {
             panic!("expected misconfigured, got {config:?}");
         };
         assert!(detail.contains("http://elsewhere:4318/v1/logs"), "{detail}");
+    }
+
+    #[test]
+    fn logs_specific_overrides_of_a_good_base_config_are_misconfigured() {
+        // The base settings export here; one logs-specific variable sends
+        // the logs — the only signal this receiver takes — somewhere else,
+        // or in a form it cannot read.
+        for (key, value, expected) in [
+            (
+                "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT",
+                "http://collector.internal:4318/v1/logs",
+                "collector.internal",
+            ),
+            ("OTEL_EXPORTER_OTLP_LOGS_PROTOCOL", "grpc", "grpc"),
+            (
+                "OTEL_EXPORTER_OTLP_PROTOCOL",
+                "http/protobuf",
+                "http/protobuf",
+            ),
+            ("OTEL_LOGS_EXPORTER", "console", "console"),
+        ] {
+            let (_dir, home, project) = claude_scopes_fixture(Some(&claude_settings(
+                "http://127.0.0.1:4318",
+                Some(GOOD_HOOK),
+            )));
+            let local = project.join(".claude/settings.local.json");
+            std::fs::write(&local, json!({ "env": { key: value } }).to_string()).unwrap();
+            let (config, _) = claude_config_for(&home, Some(&project), ENDPOINT);
+            let UserConfig::Misconfigured { path, detail } = config else {
+                panic!("{key}={value}: expected misconfigured, got {config:?}");
+            };
+            assert_eq!(path, local, "{key}");
+            assert!(detail.contains(expected), "{key}: {detail}");
+        }
+        // The logs-specific protocol has the last word over the general one.
+        let (_dir, home, project) = claude_scopes_fixture(Some(&claude_settings(
+            "http://127.0.0.1:4318",
+            Some(GOOD_HOOK),
+        )));
+        std::fs::write(
+            project.join(".claude/settings.local.json"),
+            r#"{"env":{"OTEL_EXPORTER_OTLP_PROTOCOL":"grpc","OTEL_EXPORTER_OTLP_LOGS_PROTOCOL":"http/json"}}"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            claude_config_for(&home, Some(&project), ENDPOINT).0,
+            UserConfig::Configured { .. }
+        ));
     }
 
     #[test]
