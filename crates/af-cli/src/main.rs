@@ -126,6 +126,12 @@ enum Commands {
         /// was not there to see. 0: everything (tests and fixture replays).
         #[arg(long, default_value_t = cmd::debug_server::SNAPSHOT_WINDOW_MS as u64, hide = true)]
         console_window_ms: u64,
+        /// Run as the per-user service with this state directory: the
+        /// Windows scheduled task passes it (a task cannot set
+        /// `AF_STATE_DIR`), and `af watch` then gives up its console window
+        /// and writes to `logs/watch.log` there.
+        #[arg(long, hide = true, value_name = "STATE_DIR")]
+        as_service: Option<std::path::PathBuf>,
     },
     /// Python runtime setup and diagnostics. Hidden: the installer and
     /// `af self update` drive it, and `af doctor` reports its health.
@@ -237,8 +243,21 @@ fn main() {
             remote_region,
             batch_interval_ms,
             console_window_ms,
+            as_service,
         } => {
-            let state_dir = paths::state_dir();
+            let state_dir = match as_service {
+                Some(dir) => {
+                    // Before anything else runs or prints. Every later
+                    // lookup of the state directory must find this one.
+                    std::env::set_var("AF_STATE_DIR", &dir);
+                    if let Err(err) = cmd::service::enter_background(&dir) {
+                        eprintln!("af watch: {err:#}");
+                        std::process::exit(1);
+                    }
+                    dir
+                }
+                None => paths::state_dir(),
+            };
             let args = cmd::watch::WatchArgs {
                 debug,
                 no_sidecars,

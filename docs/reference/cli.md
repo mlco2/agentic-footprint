@@ -5,9 +5,9 @@ The release binary is named `af`.
 | Command | Purpose |
 |---|---|
 | `af setup` | Check or start the receiver, then detect and configure supported coding agents. |
-| `af service install` | Install, start, and verify the macOS/Linux per-user receiver. |
-| `af service start` | Restart an installed macOS/Linux receiver. |
-| `af service status` | Check the macOS/Linux service manager and OTLP endpoint. |
+| `af service install` | Install, start, and verify the per-user receiver (launchd, systemd user session, Windows Task Scheduler). |
+| `af service start` | Restart an installed receiver. |
+| `af service status` | Check the service manager and OTLP endpoint. |
 | `af report` | Ingest pending facts, update derived results, and print a report. |
 | `af replay` | Rebuild derived estimates and joins from retained raw facts. |
 | `af watch` | Run resident ingestion, sampling, estimation, and optional debugging. |
@@ -127,9 +127,10 @@ integration helpers, and resident-service logs. On macOS and Linux it is
 restricted to its owner (`0700`).
 
 The default is `~/.local/state/agentic-footprint` on macOS/Linux and
-`%LOCALAPPDATA%\agentic-footprint` on Windows. Windows runs `af watch` in the
-foreground by default; the `af service` lifecycle is currently available only
-through macOS launchd and Linux systemd user services.
+`%LOCALAPPDATA%\agentic-footprint` on Windows. The `af service` lifecycle uses macOS launchd, a Linux systemd user session
+or, on Windows, a Task Scheduler task that starts `af watch` at logon for the
+current user (no administrator rights; its output goes to `logs\watch.log`
+in the state directory).
 
 ## Output contract
 

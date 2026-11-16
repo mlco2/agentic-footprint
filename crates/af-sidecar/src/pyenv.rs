@@ -150,7 +150,25 @@ fn is_executable(path: &Path, _meta: &std::fs::Metadata) -> bool {
 pub fn isolated_python(python: &Path, workdir: &Path) -> Command {
     let mut command = Command::new(python);
     command.arg("-I").current_dir(workdir);
+    #[cfg(windows)]
+    if WINDOWLESS.load(std::sync::atomic::Ordering::Relaxed) {
+        // CREATE_NO_WINDOW: a process that has no console (the scheduled
+        // task's `af watch`) would otherwise get a new, visible one for
+        // each interpreter it starts.
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x0800_0000);
+    }
     command
+}
+
+#[cfg(windows)]
+static WINDOWLESS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// From now on, start interpreters without a console window (Windows; a
+/// no-op elsewhere). For an `af` that runs with no console of its own.
+pub fn spawn_without_windows() {
+    #[cfg(windows)]
+    WINDOWLESS.store(true, std::sync::atomic::Ordering::Relaxed);
 }
 
 /// `uv` with no configuration discovery: `uv.toml` and `[tool.uv]` are read

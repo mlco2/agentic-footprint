@@ -116,9 +116,14 @@ $env:AF_BINARY_SHA256 = '<sha256>'
 ```
 
 The installer upgrades `%LOCALAPPDATA%\Programs\agentic-footprint\af.exe`
-atomically and adds that directory to the user `PATH`. Windows runs the
-receiver in the foreground by default; start `af watch` in a persistent
-PowerShell window, then rerun `af setup` to configure agents.
+atomically and adds that directory to the user `PATH`. On Windows the
+background receiver is a scheduled task (`agentic-footprint-af-watch`) that
+starts `af watch` when you log on; `af setup` offers to register it, and
+`af service install` does it directly. It is registered for your account
+only and needs no administrator rights. This has not yet been verified on a
+standard (non-administrator) Windows account; where an organisation's policy
+forbids users from creating tasks, registration fails and `af` prints the
+`af watch` command to keep running in a PowerShell window instead.
 
 ## Wizard commands
 
@@ -136,10 +141,10 @@ af setup --endpoint http://127.0.0.1:5000/v1/logs
 The current wizard:
 
 - checks the receiver before inspecting any agent configuration;
-- on macOS and Linux, when needed, offers to install and start `af watch`
-  through the supported per-user service manager;
-- on Windows, prints the foreground `af watch` command instead of installing
-  a background task;
+- when needed, offers to install and start `af watch` through the per-user
+  service manager (launchd on macOS, a systemd user session on Linux, Task
+  Scheduler on Windows);
+- where there is none, prints the foreground `af watch` command instead;
 - verifies `POST /v1/logs` is answered by this version of the af receiver
   (the `X-Agentic-Footprint` response header) before detecting or proposing
   agent changes;

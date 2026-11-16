@@ -14,6 +14,10 @@ use super::DEFAULT_LOGS_ENDPOINT;
 
 const LABEL: &str = "dev.agentic-footprint.af-watch";
 const SYSTEMD_UNIT: &str = "agentic-footprint-watch.service";
+/// The Windows scheduled task, in the root task folder (a standard user can
+/// register a task of their own there; a subfolder may need more).
+const TASK_NAME: &str = "agentic-footprint-af-watch";
+const TASK_FILE: &str = "af-watch.task.xml";
 
 #[derive(Debug, Clone, clap::Args)]
 pub struct Args {
@@ -39,6 +43,10 @@ pub enum Action {
 enum Manager {
     Launchd,
     Systemd,
+    /// Windows Task Scheduler: a task that starts `af watch` when this
+    /// user logs on. It needs no administrator rights, because it is
+    /// registered for the current user only and runs in their session.
+    TaskScheduler,
     Unsupported,
 }
 
@@ -88,7 +96,32 @@ fn definition_path() -> Option<PathBuf> {
     match manager() {
         Manager::Launchd => launchd_plist_path().ok(),
         Manager::Systemd => systemd_config_dir().ok().map(|dir| dir.join(SYSTEMD_UNIT)),
+        Manager::TaskScheduler => {
+            crate::paths::state_dir_checked().map(|dir| task_definition_path(&dir))
+        }
         Manager::Unsupported => None,
+    }
+}
+
+/// The task definition `af` registered, kept so that the endpoint it was
+/// installed with can be read back (Task Scheduler holds its own copy).
+fn task_definition_path(state_dir: &Path) -> PathBuf {
+    state_dir.join("service").join(TASK_FILE)
+}
+
+/// A service definition as text. Task Scheduler's XML is UTF-16 with a
+/// byte-order mark; the others are UTF-8.
+fn read_definition(path: &Path) -> Option<String> {
+    let bytes = fs::read(path).ok()?;
+    match bytes.strip_prefix(&[0xFF, 0xFE]) {
+        Some(utf16) => {
+            let units: Vec<u16> = utf16
+                .chunks_exact(2)
+                .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+                .collect();
+            String::from_utf16(&units).ok()
+        }
+        None => String::from_utf8(bytes).ok(),
     }
 }
 
@@ -96,13 +129,13 @@ fn definition_path() -> Option<PathBuf> {
 /// from its definition (`--otlp-addr`), so a restart or status check
 /// verifies the address it was installed with rather than the default.
 pub(crate) fn installed_endpoint() -> Option<String> {
-    let definition = fs::read_to_string(definition_path()?).ok()?;
+    let definition = read_definition(&definition_path()?)?;
     otlp_addr_in(&definition).map(|addr| format!("http://{addr}/v1/logs"))
 }
 
 /// The address after `--otlp-addr` in a launchd plist
-/// (`<string>--otlp-addr</string><string>ADDR</string>`) or a systemd
-/// `ExecStart=` line (`--otlp-addr ADDR`).
+/// (`<string>--otlp-addr</string><string>ADDR</string>`), a systemd
+/// `ExecStart=` line or a scheduled task's `<Arguments>` (`--otlp-addr ADDR`).
 fn otlp_addr_in(definition: &str) -> Option<String> {
     let rest = definition.split("--otlp-addr").nth(1)?;
     let rest = rest.trim_start_matches("</string>").trim_start();
@@ -131,6 +164,7 @@ fn ensure_installed(state_dir: &Path, binary: &Path, endpoint: &str) -> Result<(
     let install_result = match manager {
         Manager::Launchd => install_launchd(state_dir, binary, addr),
         Manager::Systemd => install_systemd(state_dir, binary, addr),
+        Manager::TaskScheduler => install_task(state_dir, binary, addr),
         Manager::Unsupported => {
             if verify_reachable(endpoint).is_ok() {
                 println!("Resident receiver is reachable at {endpoint} (managed manually)");
@@ -165,6 +199,7 @@ fn start(manager: Manager, state_dir: &Path, endpoint: &str) -> Result<()> {
                 "restart systemd user service",
             )?;
         }
+        Manager::TaskScheduler => restart_task()?,
         Manager::Unsupported => return Err(manual_instructions(state_dir, endpoint)),
     }
     wait_until_reachable(endpoint, Duration::from_secs(10))?;
@@ -186,6 +221,12 @@ fn status(manager: Manager, state_dir: &Path, endpoint: &str) -> Result<()> {
             run_command(
                 Command::new("systemctl").args(["--user", "status", SYSTEMD_UNIT, "--no-pager"]),
                 "query systemd user service",
+            )?;
+        }
+        Manager::TaskScheduler => {
+            run_command(
+                schtasks().args(["/Query", "/TN", TASK_NAME, "/V", "/FO", "LIST"]),
+                "query the scheduled task",
             )?;
         }
         Manager::Unsupported => {
@@ -263,10 +304,186 @@ fn install_systemd(state_dir: &Path, binary: &Path, addr: SocketAddr) -> Result<
     )
 }
 
+// --- Windows Task Scheduler -------------------------------------------------
+
+fn schtasks() -> Command {
+    Command::new("schtasks")
+}
+
+/// Where the task's `af watch` writes what it would print (it has no
+/// console to print to).
+pub(crate) fn service_log_path(state_dir: &Path) -> PathBuf {
+    state_dir.join("logs").join("watch.log")
+}
+
+fn install_task(state_dir: &Path, binary: &Path, addr: SocketAddr) -> Result<()> {
+    let user = task_user(env::var("USERDOMAIN").ok(), env::var("USERNAME").ok())?;
+    let path = task_definition_path(state_dir);
+    write_if_changed(
+        &path,
+        &utf16_with_bom(&task_xml(binary, addr, state_dir, &user)?),
+    )?;
+    // /F replaces a task of the same name: installing again is an update.
+    let registered = run_command(
+        schtasks()
+            .args(["/Create", "/TN", TASK_NAME, "/F", "/XML"])
+            .arg(&path),
+        "register the scheduled task",
+    );
+    if let Err(err) = registered {
+        // Nothing is installed: do not leave a definition that says so.
+        let _ = fs::remove_file(&path);
+        return Err(err.context(
+            "Task Scheduler refused the task (an organisation's policy can forbid users \
+             from creating tasks)",
+        ));
+    }
+    restart_task()
+}
+
+/// Stop the task's `af watch` if it runs, and start it. Task Scheduler ends
+/// a task by terminating its process; the store is written so that this is
+/// safe at any point.
+fn restart_task() -> Result<()> {
+    let _ = command_succeeds(schtasks().args(["/End", "/TN", TASK_NAME]));
+    run_command(
+        schtasks().args(["/Run", "/TN", TASK_NAME]),
+        "start the scheduled task",
+    )
+}
+
+/// `DOMAIN\user`, as Task Scheduler names the current user. Without a
+/// name the task would be for "any user", which only an administrator may
+/// register: that is refused here rather than attempted.
+fn task_user(domain: Option<String>, name: Option<String>) -> Result<String> {
+    let name = name.filter(|name| !name.trim().is_empty()).context(
+        "cannot tell which user to register the scheduled task for (USERNAME is not set)",
+    )?;
+    Ok(match domain.filter(|domain| !domain.trim().is_empty()) {
+        Some(domain) => format!("{domain}\\{name}"),
+        None => name,
+    })
+}
+
+/// `path` as one argument of a Windows command line.
+fn windows_argument(path: &Path) -> Result<String> {
+    let text = path.to_string_lossy();
+    if text.contains('"') {
+        bail!("the path {text} contains a quotation mark");
+    }
+    // A backslash before the closing quote would escape it.
+    Ok(format!("\"{}\"", text.trim_end_matches('\\')))
+}
+
+/// The task: start `af watch` when `user` logs on, in their own session
+/// and with their ordinary rights, and keep it running.
+///
+/// `--as-service` carries the state directory (a task has no environment
+/// of its own to set `AF_STATE_DIR` in) and makes `af watch` give up its
+/// console window. The settings are in the order Task Scheduler itself
+/// writes them.
+fn task_xml(binary: &Path, addr: SocketAddr, state_dir: &Path, user: &str) -> Result<String> {
+    let arguments = format!(
+        "watch --require-receiver --otlp-addr {addr} --as-service {}",
+        windows_argument(state_dir)?
+    );
+    Ok(format!(
+        r#"<?xml version="1.0" encoding="UTF-16"?>
+<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+  <RegistrationInfo>
+    <Description>agentic-footprint: receives coding-agent telemetry (af watch)</Description>
+  </RegistrationInfo>
+  <Triggers>
+    <LogonTrigger>
+      <Enabled>true</Enabled>
+      <UserId>{user}</UserId>
+    </LogonTrigger>
+  </Triggers>
+  <Principals>
+    <Principal id="Author">
+      <UserId>{user}</UserId>
+      <LogonType>InteractiveToken</LogonType>
+      <RunLevel>LeastPrivilege</RunLevel>
+    </Principal>
+  </Principals>
+  <Settings>
+    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
+    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
+    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
+    <StartWhenAvailable>true</StartWhenAvailable>
+    <Enabled>true</Enabled>
+    <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>
+    <RestartOnFailure>
+      <Interval>PT1M</Interval>
+      <Count>10</Count>
+    </RestartOnFailure>
+  </Settings>
+  <Actions Context="Author">
+    <Exec>
+      <Command>{command}</Command>
+      <Arguments>{arguments}</Arguments>
+    </Exec>
+  </Actions>
+</Task>
+"#,
+        user = xml_escape(Path::new(user)),
+        command = xml_escape(binary),
+        arguments = xml_escape(Path::new(&arguments)),
+    ))
+}
+
+/// Task Scheduler reads its XML as UTF-16, little-endian, with a
+/// byte-order mark.
+fn utf16_with_bom(text: &str) -> Vec<u8> {
+    std::iter::once(0xFEFF)
+        .chain(text.encode_utf16())
+        .flat_map(u16::to_le_bytes)
+        .collect()
+}
+
+/// What `af watch --as-service` does first: on Windows, give up the console
+/// window the task was started with and write to the service log instead;
+/// the Python helpers are then started without a window of their own.
+/// Elsewhere the service manager already handles both.
+pub fn enter_background(state_dir: &Path) -> Result<()> {
+    #[cfg(windows)]
+    {
+        use std::os::windows::io::IntoRawHandle;
+        use windows_sys::Win32::System::Console::{
+            FreeConsole, SetStdHandle, STD_ERROR_HANDLE, STD_OUTPUT_HANDLE,
+        };
+
+        let log = service_log_path(state_dir);
+        if let Some(parent) = log.parent() {
+            fs::create_dir_all(parent)
+                .with_context(|| format!("create service log directory {}", parent.display()))?;
+        }
+        let file = fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&log)
+            .with_context(|| format!("open the service log {}", log.display()))?;
+        // The handle lives as long as the process: it is its output now.
+        let handle = file.into_raw_handle();
+        // SAFETY: `handle` is a valid, open file handle that is never
+        // closed; the three calls take no other pointers.
+        unsafe {
+            FreeConsole();
+            SetStdHandle(STD_OUTPUT_HANDLE, handle as _);
+            SetStdHandle(STD_ERROR_HANDLE, handle as _);
+        }
+        af_sidecar::spawn_without_windows();
+    }
+    #[cfg(not(windows))]
+    let _ = state_dir;
+    Ok(())
+}
+
 fn manager() -> Manager {
     match env::var("AF_SERVICE_MANAGER").ok().as_deref() {
         Some("launchd") => return Manager::Launchd,
         Some("systemd") => return Manager::Systemd,
+        Some("task-scheduler") => return Manager::TaskScheduler,
         Some("unsupported") => return Manager::Unsupported,
         Some(_) => return Manager::Unsupported,
         None => {}
@@ -275,6 +492,8 @@ fn manager() -> Manager {
         Manager::Launchd
     } else if cfg!(target_os = "linux") && env::var_os("XDG_RUNTIME_DIR").is_some() {
         Manager::Systemd
+    } else if cfg!(windows) {
+        Manager::TaskScheduler
     } else {
         Manager::Unsupported
     }
@@ -445,6 +664,12 @@ fn service_active(manager: Manager) -> Result<()> {
             Command::new("systemctl").args(["--user", "is-active", "--quiet", SYSTEMD_UNIT]),
             "verify systemd user service",
         ),
+        Manager::TaskScheduler => {
+            if !command_succeeds(schtasks().args(["/Query", "/TN", TASK_NAME])) {
+                bail!("the scheduled task {TASK_NAME} is not registered");
+            }
+            Ok(())
+        }
         Manager::Unsupported => bail!("no supported service manager is available"),
     }
 }
@@ -481,6 +706,9 @@ fn logs_hint(manager: Manager, state_dir: &Path) -> String {
     match manager {
         Manager::Launchd => format!("logs in {}", state_dir.join("logs").display()),
         Manager::Systemd => format!("run `journalctl --user -u {SYSTEMD_UNIT}`"),
+        Manager::TaskScheduler => {
+            format!("log in {}", service_log_path(state_dir).display())
+        }
         Manager::Unsupported => "run `af watch` in a persistent terminal".to_string(),
     }
 }
@@ -502,7 +730,7 @@ fn manual_watch_command(state_dir: &Path) -> String {
 fn manual_instructions(state_dir: &Path, endpoint: &str) -> anyhow::Error {
     anyhow!(
         "no supported per-user service manager is available. {} Supported automatic managers \
-         are macOS launchd and Linux systemd user services",
+         are macOS launchd, Linux systemd user services and Windows Task Scheduler",
         foreground_setup_instructions(state_dir, endpoint)
     )
 }
@@ -577,6 +805,57 @@ fn systemd_environment(name: &str, path: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_scheduled_task_is_for_this_user_only_and_needs_no_elevation() {
+        let binary = Path::new(r"C:\Users\Ann Lee\.local\bin\af.exe");
+        let state = Path::new(r"C:\Users\Ann Lee\AppData\Local\af\");
+        let addr = "127.0.0.1:4318".parse().unwrap();
+        let user = task_user(Some("DESK".into()), Some("ann".into())).unwrap();
+        assert_eq!(user, r"DESK\ann");
+        let xml = task_xml(binary, addr, state, &user).unwrap();
+        // Both places name the user: a logon trigger without one means
+        // "any user", which needs an administrator.
+        assert_eq!(xml.matches(r"<UserId>DESK\ann</UserId>").count(), 2);
+        assert!(xml.contains("<LogonType>InteractiveToken</LogonType>"));
+        assert!(xml.contains("<RunLevel>LeastPrivilege</RunLevel>"));
+        assert!(xml.contains(r"<Command>C:\Users\Ann Lee\.local\bin\af.exe</Command>"));
+        // The state directory is one quoted argument, with no backslash
+        // left to escape the closing quote.
+        assert!(xml.contains(
+            r"watch --require-receiver --otlp-addr 127.0.0.1:4318 --as-service &quot;C:\Users\Ann Lee\AppData\Local\af&quot;</Arguments>"
+        ));
+        assert!(!xml.contains("--debug"));
+        // No time limit: the default would stop it after three days.
+        assert!(xml.contains("<ExecutionTimeLimit>PT0S</ExecutionTimeLimit>"));
+    }
+
+    #[test]
+    fn a_task_is_never_registered_for_an_unnamed_user() {
+        assert!(task_user(Some("DESK".into()), None).is_err());
+        assert!(task_user(None, Some("  ".into())).is_err());
+        assert_eq!(task_user(None, Some("ann".into())).unwrap(), "ann");
+        assert!(windows_argument(Path::new("C:\\a\"b")).is_err());
+    }
+
+    #[test]
+    fn the_endpoint_is_read_back_from_the_utf16_task_definition() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(TASK_FILE);
+        let xml = task_xml(
+            Path::new("af.exe"),
+            "127.0.0.1:4399".parse().unwrap(),
+            Path::new(r"C:\state"),
+            "ann",
+        )
+        .unwrap();
+        let bytes = utf16_with_bom(&xml);
+        assert_eq!(&bytes[..2], &[0xFF, 0xFE]);
+        fs::write(&path, bytes).unwrap();
+        let read = read_definition(&path).unwrap();
+        assert_eq!(read, xml);
+        assert_eq!(otlp_addr_in(&read).as_deref(), Some("127.0.0.1:4399"));
+    }
 
     #[test]
     fn service_definitions_run_watch_without_debug() {

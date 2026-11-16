@@ -48,13 +48,21 @@ A call can also be `pending` for a short time, until the estimator has
 processed it. When no estimator is available (`af watch --no-sidecars`, or no
 managed Python runtime), calls stay `pending`.
 
-## The background service and `af console` are macOS and Linux only
+## `af console` is macOS and Linux only; the Windows service is new
 
-`af service` uses launchd on macOS and a systemd user session on Linux.
-`af console` needs a Unix socket. On Windows, run `af watch` in the
-foreground and keep it running; use `af watch --debug` for the debug console.
-On Linux without a systemd user session the service is unavailable too, and
-`af watch` runs in the foreground.
+`af service` uses launchd on macOS, a systemd user session on Linux and a
+Task Scheduler logon task on Windows. On Linux without a systemd user
+session the service is unavailable, and `af watch` runs in the foreground.
+
+The Windows task is new and has not yet been verified on a standard
+(non-administrator) account. A console window may appear briefly at logon
+before `af watch` gives it up. Task Scheduler stops the task by terminating
+the process, without the orderly shutdown the other platforms get. The
+service writes to `logs\watch.log` in the state directory, which is not
+rotated.
+
+`af console` needs a Unix socket, so it does not exist on Windows; stop the
+task and run `af watch --debug` there for the debug console.
 
 A state directory whose path is too long for a Unix socket (about 100 bytes)
 gets no console socket. The collector works; `af console` cannot attach to
