@@ -25,6 +25,19 @@ managed CodeCarbon/EcoLogits runtime, and runs the receiver-first setup wizard.
 macOS and Linux can install a per-user background receiver; Windows uses a
 foreground `af watch` process by default.
 
+No release has been published yet: a source checkout is the only way to
+install, and `af self update` has nothing to install until the first release.
+
+Once an agent session has run:
+
+```sh
+af report                 # per-session results
+af summary --period 7d    # tokens and estimated impacts as JSON (read-only)
+af status                 # what is installed and running, as JSON (read-only)
+af doctor                 # why an agent's data is not arriving
+af console                # debug console of the running receiver (macOS/Linux)
+```
+
 - **Documentation:** [docs/index.md](docs/index.md)
 - **Contributor onboarding:** [CONTRIBUTING.md](CONTRIBUTING.md)
 - **Unified installer and setup wizard:**
@@ -32,6 +45,10 @@ foreground `af watch` process by default.
 - **Claude Code guide:**
   [docs/how-to/claude-code.md](docs/how-to/claude-code.md)
 - **Codex guide:** [docs/how-to/codex.md](docs/how-to/codex.md)
+- **Using af from another program:**
+  [docs/how-to/integrate.md](docs/how-to/integrate.md)
+- **Known limitations:**
+  [docs/reference/known-limitations.md](docs/reference/known-limitations.md)
 - **Architecture and crate boundaries:**
   [docs/contributing/api-boundaries.md](docs/contributing/api-boundaries.md)
 - **Event schemas (Contract #1):** [schemas/v0.1/](schemas/v0.1/)

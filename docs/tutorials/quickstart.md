@@ -59,11 +59,15 @@ For a live diagnostic view:
   the receiver that is already running and stops when you press Ctrl-C;
 - with a foreground receiver, start it as `af watch --debug` instead.
 
-Open `http://127.0.0.1:9414/` in a browser.
+Open `http://127.0.0.1:9414/` in a browser. See
+[Open the debug console](../how-to/debug-console.md).
+
+For totals over a day, a week or a month as JSON, run `af summary`.
 
 ## Next steps
 
 - [Install and configure](../how-to/installation.md)
 - [Claude Code setup](../how-to/claude-code.md)
 - [Codex setup](../how-to/codex.md)
+- [Known limitations](../reference/known-limitations.md)
 - [Understand energy attribution](../explanation/energy-attribution.md)

@@ -21,6 +21,10 @@ It combines:
   [Codex](how-to/codex.md) integration guide.
 - Read [energy attribution](explanation/energy-attribution.md) to understand how
   machine joules become per-action results.
+- To read af's results from another program, see
+  [Use af from another program](how-to/integrate.md).
+- Check the [known limitations](reference/known-limitations.md) before
+  relying on a figure.
 
 ## Design principles
 
@@ -37,6 +41,7 @@ plane failures remain visible to the operator.
 
 ## Project status
 
-The first release supports Claude Code and Codex. Other integrations may exist
+Agentic Footprint is alpha software and no release has been published yet;
+it is installed from a source checkout. It supports Claude Code and Codex. Other integrations may exist
 behind experimental build features but are not part of the default binary or
 public setup contract.
