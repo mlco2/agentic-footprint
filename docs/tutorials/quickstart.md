@@ -3,14 +3,34 @@
 This tutorial installs Agentic Footprint, connects a supported coding agent,
 and opens the local debug console.
 
+## Before you start
+
+No release has been published yet, so `af` is built from a source checkout.
+You need:
+
+- `git`;
+- Rust, through [rustup](https://rustup.rs) (the checkout pins its own
+  toolchain, which rustup downloads on the first build);
+- Node.js 22 with `npm`, to build the debug console (macOS and Linux);
+- [uv](https://docs.astral.sh/uv/getting-started/installation/), which builds
+  the Python runtime the impact estimates use and brings the right Python
+  with it. Without uv, a Python 3.12 with the `venv` module is used.
+
 ## 1. Install from a checkout
 
 === "macOS / Linux"
 
     ```sh
-    git clone <repository-url>
+    git clone https://github.com/mlco2/agentic-footprint.git
     cd agentic-footprint
     ./install.sh --yes
+    ```
+
+    `af` is installed to `~/.local/bin`. If the installer says that directory
+    is not on your `PATH`, add it, then open a new terminal:
+
+    ```sh
+    echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc   # or ~/.bashrc
     ```
 
     The installer builds `af`, provisions the managed CodeCarbon and EcoLogits
@@ -20,15 +40,15 @@ and opens the local debug console.
 === "Windows 11"
 
     ```powershell
-    git clone <repository-url>
+    git clone https://github.com/mlco2/agentic-footprint.git
     cd agentic-footprint
     .\install.ps1 -Yes
-    af watch
     ```
 
-    Keep the `af watch` PowerShell window running. In another terminal, run
-    `af setup --yes`; agent configuration is not inspected until the receiver
-    responds.
+    The installer adds `af` to your user `PATH` (open a new terminal) and
+    registers a scheduled task that starts the receiver when you log on. If
+    the task cannot be registered, run `af watch` in a PowerShell window you
+    keep open, then `af setup --yes` in another.
 
 ## 2. Verify the receiver
 
@@ -39,8 +59,9 @@ af doctor
 
 `af doctor` checks the receiver, the managed CodeCarbon/EcoLogits runtime, and
 whether running agents predate their telemetry configuration, and says how to
-fix each. On macOS and Linux, `af service status` also checks the installed
-per-user service.
+fix each. `af service status` also checks the installed per-user service.
+
+To remove everything later, see [Uninstall](../how-to/uninstall.md).
 
 ## 3. Run an agent session
 

@@ -75,6 +75,7 @@ is no command yet to stop it or remove it. There is also no command to revert
 what `af setup` wrote to agent configuration files. `af setup` makes a
 timestamped backup (`<file>.bak.<timestamp>`) beside each existing file
 before changing it; restoring one is a manual step.
+[Uninstall](../how-to/uninstall.md) gives the manual steps for each system.
 
 ## Daily totals use one UTC offset
 

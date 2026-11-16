@@ -20,10 +20,13 @@ On Windows 11 PowerShell:
 .\install.ps1
 ```
 
-The installer places the native binary on the user `PATH`, provisions the
-managed CodeCarbon/EcoLogits runtime, and runs the receiver-first setup wizard.
-macOS and Linux can install a per-user background receiver; Windows uses a
-foreground `af watch` process by default.
+The installer puts the native binary in `~/.local/bin` (macOS, Linux: add
+that directory to your `PATH` if the installer says it is missing) or adds it
+to the user `PATH` (Windows), provisions the managed CodeCarbon/EcoLogits
+runtime, and runs the receiver-first setup wizard, which can install a
+per-user background receiver. The
+[quickstart](docs/tutorials/quickstart.md) lists what a source build needs,
+and [Uninstall](docs/how-to/uninstall.md) how to remove it all.
 
 No release has been published yet: a source checkout is the only way to
 install, and `af self update` has nothing to install until the first release.

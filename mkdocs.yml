@@ -69,6 +69,7 @@ nav:
       - Open the debug console: how-to/debug-console.md
       - Use af from another program: how-to/integrate.md
       - Verify releases: how-to/verify-release.md
+      - Uninstall: how-to/uninstall.md
   - Explanation:
       - Energy attribution: explanation/energy-attribution.md
       - Rebuild architecture: explanation/rebuild-architecture.md
