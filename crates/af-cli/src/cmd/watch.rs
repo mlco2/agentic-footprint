@@ -1173,6 +1173,14 @@ impl Watch {
                 &self.claude_sessions,
             );
             agents::keep_start_times(&mut facts, &self.agent_facts);
+            // A link outlives its process only until the next listing: a
+            // reused pid must not inherit a dead session.
+            self.claude_sessions.retain(|pid, _| {
+                facts
+                    .iter()
+                    .flat_map(|facts| facts.processes.iter().flatten())
+                    .any(|process| process.pid == *pid)
+            });
             self.agent_facts = facts;
         }
         self.status_dirty = true;
@@ -1241,7 +1249,7 @@ impl Watch {
             if agent == AgentId::ClaudeCode {
                 for process in facts.processes.iter_mut().flatten() {
                     if let Some(session) = self.claude_sessions.get(&process.pid) {
-                        process.session_id = Some(session.clone());
+                        process.session_ids = vec![session.clone()];
                     }
                 }
             }

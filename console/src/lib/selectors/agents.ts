@@ -78,9 +78,11 @@ const WORDING: Record<string, [AgentMark, string]> = {
   not_installed: ["○", "not installed"],
 };
 
-/** `/Users/me/x` and `/home/me/x` read as `~/x`, wherever they appear. */
+/** `/Users/me/x` and `/home/me/x` read as `~/x` — only where a path
+ * starts (the text's start, or after a space), and never for the shared
+ * directory macOS keeps beside the real homes. */
 function tilde(text: string): string {
-  return text.replace(/\/(?:Users|home)\/[^/\s]+/g, "~");
+  return text.replace(/(^|\s)\/(?:Users|home)\/(?!Shared(?:\/|$))[^/\s]+(?=\/|\s|$)/g, "$1~");
 }
 
 const NOT_EXPORTING = new Set(["needs_restart", "misconfigured", "not_configured"]);

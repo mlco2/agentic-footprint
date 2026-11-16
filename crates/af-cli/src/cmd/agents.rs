@@ -5,10 +5,11 @@
 //!
 //! Shared by `af doctor` (which prints the stale-process finding), and by
 //! `af watch`, which turns the same facts into the `agents` rows of
-//! `GET /debug/status`. Only **user-scope** files are read here
-//! (`~/.claude/settings.json`, the user Codex `config.toml`): a resident
-//! watcher has no project directory to inspect, so a project-only setup is
-//! reported as not configured until its first event arrives.
+//! `GET /debug/status`. With no process to look at, only **user-scope**
+//! files are read (`~/.claude/settings.json`, the user Codex
+//! `config.toml`). A running process is judged by what it actually loads:
+//! its working directory's project scopes for Claude Code, the home it
+//! holds open for Codex — see [`Inspection`].
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -134,8 +135,12 @@ pub(crate) struct Inspection {
     /// The Codex home the process really uses, whatever alias or variable
     /// chose it: the directory of the state files it holds open.
     pub(crate) codex_home: Option<PathBuf>,
-    /// The Codex session the process is writing, from its open rollout file.
-    pub(crate) codex_session: Option<String>,
+    /// The Codex sessions the process is writing, from its open rollout
+    /// files: one process can run several threads at once.
+    pub(crate) codex_sessions: Vec<String>,
+    /// `CLAUDE_CONFIG_DIR` from the process's environment, where that can
+    /// be read (Linux): the directory that replaces `~/.claude`.
+    pub(crate) claude_config_dir: Option<PathBuf>,
 }
 
 /// `lsof -F pfn` output: a `p<pid>` line opens a process, then pairs of
@@ -187,10 +192,14 @@ fn inspection_from(files: &[(String, PathBuf)]) -> Inspection {
                 .find(|dir| dir.file_name().is_some_and(|name| name == "sessions"))
                 .and_then(Path::parent);
             if let Some(home) = home {
-                // The rollout names the session being written: it wins
-                // over a database that only names the home.
+                // The rollout names a session being written: it wins over
+                // a database that only names the home.
                 inspection.codex_home = Some(home.to_path_buf());
-                inspection.codex_session = trailing_uuid(stem);
+                if let Some(session) = trailing_uuid(stem) {
+                    if !inspection.codex_sessions.contains(&session) {
+                        inspection.codex_sessions.push(session);
+                    }
+                }
             }
         } else if name.starts_with("state_")
             && name.ends_with(".sqlite")
@@ -216,6 +225,46 @@ fn trailing_uuid(stem: &str) -> Option<String> {
     shaped.then(|| candidate.to_string())
 }
 
+/// The longest an inspection tool may take. Detection runs on the watch
+/// loop, and nothing it learns is worth stalling ingestion for.
+const INSPECT_DEADLINE: Duration = Duration::from_secs(2);
+
+/// Runs `command` and returns its standard output, or `None` when it cannot
+/// be started or has not finished within `deadline` (it is then killed).
+/// Its exit status is the caller's to ignore: only what it printed counts.
+fn output_within(mut command: Command, deadline: Duration) -> Option<Vec<u8>> {
+    use std::io::Read;
+    use std::process::Stdio;
+    let mut child = command
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .ok()?;
+    // Read on a thread: a child that fills the pipe would otherwise never
+    // exit, and the wait below would always run to the deadline.
+    let mut stdout = child.stdout.take()?;
+    let reader = std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        let _ = stdout.read_to_end(&mut bytes);
+        bytes
+    });
+    let give_up = std::time::Instant::now() + deadline;
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => return reader.join().ok(),
+            Ok(None) if std::time::Instant::now() < give_up => {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
+        }
+    }
+}
+
 /// Inspects running processes of this user. Best effort by design: a tool
 /// that is missing, a process that is gone or one that may not be looked
 /// at simply yields no facts for it.
@@ -236,13 +285,14 @@ fn inspect_platform(pids: &[u32]) -> BTreeMap<u32, Inspection> {
         .map(u32::to_string)
         .collect::<Vec<_>>()
         .join(",");
-    let Ok(output) = Command::new("lsof")
-        .args(["-a", "-p", &list, "-F", "pfn"])
-        .output()
-    else {
+    // `-n -P -b`: no name lookups and no blocking kernel calls, so a dead
+    // network mount or a slow resolver cannot hold the listing up.
+    let mut lsof = Command::new("lsof");
+    lsof.args(["-n", "-P", "-b", "-a", "-p", &list, "-F", "pfn"]);
+    let Some(stdout) = output_within(lsof, INSPECT_DEADLINE) else {
         return BTreeMap::new();
     };
-    parse_lsof(&String::from_utf8_lossy(&output.stdout))
+    parse_lsof(&String::from_utf8_lossy(&stdout))
         .into_iter()
         .map(|(pid, files)| (pid, inspection_from(&files)))
         .collect()
@@ -265,21 +315,20 @@ fn inspect_platform(pids: &[u32]) -> BTreeMap<u32, Inspection> {
                 }));
             }
             let mut inspection = inspection_from(&files);
+            // Linux lets a user read their own processes' environment.
+            let environ = std::fs::read(root.join("environ")).unwrap_or_default();
+            let variable = |name: &str| {
+                let prefix = format!("{name}=");
+                environ
+                    .split(|byte| *byte == 0)
+                    .find_map(|entry| entry.strip_prefix(prefix.as_bytes()))
+                    .filter(|value| !value.is_empty())
+                    .map(|value| PathBuf::from(String::from_utf8_lossy(value).into_owned()))
+            };
             if inspection.codex_home.is_none() {
-                // Linux lets a user read their own processes' environment.
-                inspection.codex_home =
-                    std::fs::read(root.join("environ"))
-                        .ok()
-                        .and_then(|environ| {
-                            environ
-                                .split(|byte| *byte == 0)
-                                .find_map(|entry| entry.strip_prefix(b"CODEX_HOME="))
-                                .filter(|value| !value.is_empty())
-                                .map(|value| {
-                                    PathBuf::from(String::from_utf8_lossy(value).into_owned())
-                                })
-                        });
+                inspection.codex_home = variable("CODEX_HOME");
             }
+            inspection.claude_config_dir = variable("CLAUDE_CONFIG_DIR");
             (pid, inspection)
         })
         .collect()
@@ -396,9 +445,7 @@ pub(crate) enum UserConfig {
 /// `logs_endpoint` is the full URL, e.g. `http://127.0.0.1:4318/v1/logs`.
 pub(crate) fn inspect_user_config(agent: AgentId, home: &Path, logs_endpoint: &str) -> UserConfig {
     match agent {
-        AgentId::ClaudeCode => {
-            inspect_claude_file(&setup::claude_user_settings(home), logs_endpoint)
-        }
+        AgentId::ClaudeCode => claude_config_for(home, None, logs_endpoint).0,
         AgentId::Codex => inspect_codex_file(&setup::codex_config_path(home), logs_endpoint),
         // No config file and no OTLP path: collected per session.
         #[cfg(feature = "experimental-opencode")]
@@ -418,6 +465,7 @@ fn read_config(path: &Path) -> Result<Option<String>, UserConfig> {
     }
 }
 
+#[cfg(test)]
 fn inspect_claude_file(path: &Path, logs_endpoint: &str) -> UserConfig {
     claude_config_from(&[path.to_path_buf()], logs_endpoint).0
 }
@@ -432,7 +480,22 @@ pub(crate) fn claude_config_for(
     project: Option<&Path>,
     logs_endpoint: &str,
 ) -> (UserConfig, Option<SystemTime>) {
-    let mut scopes = vec![setup::claude_user_settings(home)];
+    claude_config_in(None, home, project, logs_endpoint)
+}
+
+/// [`claude_config_for`] for a process known to run with `config_dir` as
+/// its `CLAUDE_CONFIG_DIR`, which takes the place of `~/.claude`.
+fn claude_config_in(
+    config_dir: Option<&Path>,
+    home: &Path,
+    project: Option<&Path>,
+    logs_endpoint: &str,
+) -> (UserConfig, Option<SystemTime>) {
+    let user = match config_dir {
+        Some(dir) => dir.join("settings.json"),
+        None => setup::claude_user_settings(home),
+    };
+    let mut scopes = vec![user];
     if let Some(project) = project {
         for name in ["settings.json", "settings.local.json"] {
             let path = project.join(".claude").join(name);
@@ -475,8 +538,9 @@ fn claude_config_from(scopes: &[PathBuf], logs_endpoint: &str) -> (UserConfig, O
             }
         };
         let mut takes_part = false;
-        if settings.get("disableAllHooks").and_then(Value::as_bool) == Some(true) {
-            hooks_disabled = Some(path.clone());
+        // The last scope to set it has the last word.
+        if let Some(disabled) = settings.get("disableAllHooks").and_then(Value::as_bool) {
+            hooks_disabled = disabled.then(|| path.clone());
             takes_part = true;
         }
         for (key, value) in settings
@@ -486,7 +550,11 @@ fn claude_config_from(scopes: &[PathBuf], logs_endpoint: &str) -> (UserConfig, O
             .flatten()
         {
             if key.starts_with("OTEL_") || key == "CLAUDE_CODE_ENABLE_TELEMETRY" {
-                let value = value.as_str().unwrap_or_default().to_string();
+                // Claude Code stringifies whatever JSON value it is given.
+                let value = match value {
+                    Value::String(text) => text.clone(),
+                    other => other.to_string(),
+                };
                 env.insert(key.clone(), (value, path.clone()));
                 takes_part = true;
             }
@@ -523,25 +591,61 @@ fn claude_config_from(scopes: &[PathBuf], logs_endpoint: &str) -> (UserConfig, O
     else {
         return (UserConfig::Absent, modified);
     };
-    // What `af setup` writes: the base endpoint, without `/v1/logs`.
+    // What `af setup` writes: the base endpoint, without `/v1/logs`. The
+    // logs-specific variable, when set, is the one Claude Code obeys.
     let expected = setup::logs_base_endpoint(logs_endpoint).unwrap_or(logs_endpoint);
-    let config = match env.get("OTEL_EXPORTER_OTLP_ENDPOINT") {
-        Some((exported, from)) if exported != expected => misconfigured(
-            from,
-            format!("exports telemetry to {exported}, not to {expected}"),
-        ),
-        None => misconfigured(
+    let wrong_endpoint = match (
+        env.get("OTEL_EXPORTER_OTLP_LOGS_ENDPOINT"),
+        env.get("OTEL_EXPORTER_OTLP_ENDPOINT"),
+    ) {
+        (Some((logs, from)), _) => (logs != logs_endpoint).then(|| {
+            misconfigured(
+                from,
+                format!("exports logs to {logs}, not to {logs_endpoint}"),
+            )
+        }),
+        (None, Some((exported, from))) => (exported != expected).then(|| {
+            misconfigured(
+                from,
+                format!("exports telemetry to {exported}, not to {expected}"),
+            )
+        }),
+        (None, None) => Some(misconfigured(
             &otel_path,
             format!("sets OTEL variables but no endpoint; expected {expected}"),
-        ),
-        Some(_) => match (env.get("CLAUDE_CODE_ENABLE_TELEMETRY"), hooks_disabled) {
-            (Some((value, from)), _) if value != "1" => misconfigured(
+        )),
+    };
+    let switched_off = |value: &str| {
+        matches!(
+            value.trim().to_ascii_lowercase().as_str(),
+            "" | "0" | "false" | "no" | "off"
+        )
+    };
+    let config = if let Some(wrong) = wrong_endpoint {
+        wrong
+    } else {
+        match (
+            env.get("CLAUDE_CODE_ENABLE_TELEMETRY"),
+            env.get("OTEL_LOGS_EXPORTER"),
+            hooks_disabled,
+        ) {
+            (Some((value, from)), _, _) if switched_off(value) => misconfigured(
                 from,
                 format!(
-                    "sets CLAUDE_CODE_ENABLE_TELEMETRY to {value}, which switches telemetry off"
+                    "sets CLAUDE_CODE_ENABLE_TELEMETRY to \"{value}\", which switches telemetry off"
                 ),
             ),
-            (_, Some(from)) => misconfigured(
+            (_, Some((exporters, from)), _)
+                if !exporters
+                    .split(',')
+                    .any(|exporter| exporter.trim() == "otlp") =>
+            {
+                misconfigured(
+                    from,
+                    format!("sets OTEL_LOGS_EXPORTER to \"{exporters}\", so no logs are exported"),
+                )
+            }
+            (_, _, Some(from)) => misconfigured(
                 &from,
                 "sets disableAllHooks, so the af hook cannot run".to_string(),
             ),
@@ -550,7 +654,7 @@ fn claude_config_from(scopes: &[PathBuf], logs_endpoint: &str) -> (UserConfig, O
                 "exports telemetry but the af hook is not registered".to_string(),
             ),
             _ => UserConfig::Configured { path: otel_path },
-        },
+        }
     };
     (config, modified)
 }
@@ -606,8 +710,8 @@ pub(crate) struct ProcessFact {
     /// The file that configuration lives in — or would live in, for a
     /// Codex home that has none.
     pub(crate) config_path: Option<PathBuf>,
-    /// The session it is running, when a link exists.
-    pub(crate) session_id: Option<String>,
+    /// The sessions it is running, when a link exists.
+    pub(crate) session_ids: Vec<String>,
 }
 
 impl ProcessFact {
@@ -620,7 +724,7 @@ impl ProcessFact {
             cwd: None,
             config: None,
             config_path: None,
-            session_id: None,
+            session_ids: Vec::new(),
         }
     }
 }
@@ -764,16 +868,24 @@ fn judge_process(
     process.cwd = inspection.cwd.clone();
     let judged = match agent {
         AgentId::ClaudeCode => {
-            process.session_id = claude_sessions.get(&process.pid).cloned();
+            process.session_ids = claude_sessions
+                .get(&process.pid)
+                .cloned()
+                .into_iter()
+                .collect();
             // Without its directory the project scopes are unknown, and
             // they can switch everything off.
-            inspection
-                .cwd
-                .as_deref()
-                .map(|cwd| claude_config_for(home, Some(cwd), logs_endpoint))
+            inspection.cwd.as_deref().map(|cwd| {
+                claude_config_in(
+                    inspection.claude_config_dir.as_deref(),
+                    home,
+                    Some(cwd),
+                    logs_endpoint,
+                )
+            })
         }
         AgentId::Codex => {
-            process.session_id = inspection.codex_session.clone();
+            process.session_ids = inspection.codex_sessions.clone();
             inspection.codex_home.as_deref().map(|codex_home| {
                 process.config_path = Some(codex_home.join("config.toml"));
                 codex_config_for(codex_home, logs_endpoint)
@@ -795,12 +907,15 @@ fn judge_process(
 /// The `af setup` invocation that configures what this process loads.
 fn setup_command(agent: AgentId, process: &ProcessFact, home: &Path) -> String {
     let base = format!("af setup --agents {}", agent.id());
+    // POSIX single quotes, whenever anything a shell would interpret is in
+    // the path: the command is meant to be pasted.
     let quoted = |path: &Path| {
         let text = path.display().to_string();
-        if text.contains(' ') {
-            format!("'{text}'")
-        } else {
+        let plain = |c: char| c.is_ascii_alphanumeric() || "_./-".contains(c);
+        if text.chars().all(plain) {
             text
+        } else {
+            format!("'{}'", text.replace('\'', r"'\''"))
         }
     };
     let codex_home = process.config_path.as_deref().and_then(Path::parent);
@@ -819,36 +934,62 @@ fn setup_command(agent: AgentId, process: &ProcessFact, home: &Path) -> String {
     }
 }
 
-/// One process's state: `(state, detail, action, last event ms)`. First
-/// rule that matches; an event that arrived outranks every file.
-fn process_state(
+/// What the agent's events say beyond the sessions tied to a process.
+#[derive(Clone, Copy)]
+struct Unexplained {
+    /// The latest event from a session no listed process accounts for.
+    last_ms: Option<i64>,
+    /// Whether there are at least as many such sessions as configured
+    /// processes with no session link — only then may each of those
+    /// processes be credited with one.
+    covers_every_unlinked_process: bool,
+}
+
+/// `(state, detail, action, last event ms, session)` of one process.
+type ProcessState<'a> = (
+    &'static str,
+    Option<String>,
+    Option<String>,
+    Option<i64>,
+    Option<&'a String>,
+);
+
+/// One process's state. First rule that matches; an event that arrived
+/// outranks every file.
+fn process_state<'a>(
     agent: AgentId,
-    process: &ProcessFact,
+    process: &'a ProcessFact,
     home: &Path,
     activity: Option<&Activity>,
-    unexplained_ms: Option<i64>,
-) -> (&'static str, Option<String>, Option<String>, Option<i64>) {
+    unexplained: Unexplained,
+) -> ProcessState<'a> {
     let heard = process
-        .session_id
-        .as_ref()
-        .and_then(|session| activity?.sessions.get(session).copied());
-    if heard.is_some() {
-        return ("receiving", None, None, heard);
+        .session_ids
+        .iter()
+        .filter_map(|session| Some((activity?.sessions.get(session).copied()?, session)))
+        .max();
+    if let Some((at, session)) = heard {
+        return ("receiving", None, None, Some(at), Some(session));
     }
+    let session = process.session_ids.first();
     let Some(config) = &process.config else {
         return (
             "unknown",
             Some("cannot inspect this process".to_string()),
             None,
             None,
+            session,
         );
     };
     match config {
-        UserConfig::Misconfigured { detail, .. } => (
+        // No command: `af setup` reports these as conflicts to resolve by
+        // hand, in the file named here.
+        UserConfig::Misconfigured { path, detail } => (
             "misconfigured",
-            Some(detail.clone()),
-            Some(setup_command(agent, process, home)),
+            Some(format!("{}: {detail}", path.display())),
             None,
+            None,
+            session,
         ),
         UserConfig::Absent => (
             "not_configured",
@@ -858,22 +999,37 @@ fn process_state(
                 .map(|path| format!("{} has no telemetry configuration", path.display())),
             Some(setup_command(agent, process, home)),
             None,
+            session,
         ),
         UserConfig::Configured { .. } if process.stale => (
             "needs_restart",
             None,
             Some(format!("restart {}", agent.command())),
             None,
+            session,
         ),
-        // Configured, linked to no session, while the agent's events come
-        // from sessions no process accounts for: they may well be its own,
-        // and "nothing received" would be a claim nothing supports.
-        UserConfig::Configured { .. }
-            if process.session_id.is_none() && unexplained_ms.is_some() =>
-        {
-            ("receiving", None, None, unexplained_ms)
+        // Configured, tied to no session, while the agent's events come
+        // from sessions no process accounts for. With enough of those to
+        // go round, they may well be its own, and "nothing received" would
+        // be a claim nothing supports. With fewer, crediting every such
+        // process would hide a silent one: it stays waiting, and says why.
+        UserConfig::Configured { .. } if session.is_none() && unexplained.last_ms.is_some() => {
+            if unexplained.covers_every_unlinked_process {
+                ("receiving", None, None, unexplained.last_ms, None)
+            } else {
+                (
+                    "waiting",
+                    Some(
+                        "the agent is receiving, but that cannot be tied to this process"
+                            .to_string(),
+                    ),
+                    None,
+                    None,
+                    None,
+                )
+            }
         }
-        UserConfig::Configured { .. } => ("waiting", None, None, None),
+        UserConfig::Configured { .. } => ("waiting", None, None, None, session),
     }
 }
 
@@ -937,22 +1093,32 @@ pub(crate) fn agent_row_in(facts: &AgentFacts, activity: Option<&Activity>, home
     let last_event_at_ms = activity.and_then(|activity| activity.last_event_at_ms);
     let processes = facts.processes.as_deref().unwrap_or_default();
 
-    // The latest event from a session that no listed process accounts for.
-    let unexplained_ms = activity.and_then(|activity| {
-        activity
-            .sessions
-            .iter()
-            .filter(|(session, _)| {
-                !processes
-                    .iter()
-                    .any(|process| process.session_id.as_ref() == Some(session))
-            })
-            .map(|(_, at)| *at)
-            .max()
-    });
+    // Events from sessions that no listed process accounts for.
+    let orphans: Vec<i64> = activity
+        .into_iter()
+        .flat_map(|activity| &activity.sessions)
+        .filter(|(session, _)| {
+            !processes
+                .iter()
+                .any(|process| process.session_ids.contains(session))
+        })
+        .map(|(_, at)| *at)
+        .collect();
+    let unlinked = processes
+        .iter()
+        .filter(|process| {
+            process.session_ids.is_empty()
+                && !process.stale
+                && matches!(process.config, Some(UserConfig::Configured { .. }))
+        })
+        .count();
+    let unexplained = Unexplained {
+        last_ms: orphans.iter().copied().max(),
+        covers_every_unlinked_process: unlinked <= orphans.len(),
+    };
     let states: Vec<_> = processes
         .iter()
-        .map(|process| process_state(facts.agent, process, home, activity, unexplained_ms))
+        .map(|process| process_state(facts.agent, process, home, activity, unexplained))
         .collect();
 
     // Without an event, the most actionable thing a process says; with no
@@ -992,7 +1158,7 @@ pub(crate) fn agent_row_in(facts: &AgentFacts, activity: Option<&Activity>, home
             processes
                 .iter()
                 .zip(&states)
-                .map(|(process, (state, detail, action, heard))| {
+                .map(|(process, (state, detail, action, heard, session))| {
                     json!({
                         "pid": process.pid,
                         "started_at": system_time_rfc3339(process.started),
@@ -1005,7 +1171,7 @@ pub(crate) fn agent_row_in(facts: &AgentFacts, activity: Option<&Activity>, home
                         "state": state,
                         "detail": detail,
                         "action": action,
-                        "session_id": process.session_id,
+                        "session_id": session,
                         "last_event_at": heard.and_then(af_core::rfc3339_ms),
                     })
                 })
@@ -1069,7 +1235,8 @@ mod tests {
             Inspection {
                 cwd: Some(PathBuf::from("/p")),
                 codex_home: Some(PathBuf::from("/p/.codex")),
-                codex_session: Some("01a1e41e-e5cc-7150-8e41-13fcbc72f747".to_string()),
+                codex_sessions: vec!["01a1e41e-e5cc-7150-8e41-13fcbc72f747".to_string()],
+                claude_config_dir: None,
             }
         );
     }
@@ -1079,7 +1246,7 @@ mod tests {
         let files = [("20".to_string(), PathBuf::from("/h/.codex/state_5.sqlite"))];
         let inspection = inspection_from(&files);
         assert_eq!(inspection.codex_home, Some(PathBuf::from("/h/.codex")));
-        assert_eq!(inspection.codex_session, None);
+        assert!(inspection.codex_sessions.is_empty());
         assert_eq!(inspection.cwd, None);
     }
 
@@ -1103,7 +1270,7 @@ mod tests {
         )];
         let inspection = inspection_from(&files);
         assert_eq!(inspection.codex_home, Some(PathBuf::from("/h/.codex")));
-        assert_eq!(inspection.codex_session, None);
+        assert!(inspection.codex_sessions.is_empty());
     }
 
     #[test]
@@ -1558,6 +1725,254 @@ mod tests {
     // --- per-process state ---------------------------------------------------
 
     #[test]
+    fn a_codex_running_several_sessions_is_heard_through_any_of_them() {
+        let files = [
+            ("9".to_string(), PathBuf::from("/h/.codex/sessions/2026/rollout-2026-11-16T12-00-00-aaaaaaaa-0000-0000-0000-000000000001.jsonl")),
+            ("10".to_string(), PathBuf::from("/h/.codex/sessions/2026/rollout-2026-11-16T12-05-00-aaaaaaaa-0000-0000-0000-000000000002.jsonl")),
+        ];
+        let inspection = inspection_from(&files);
+        let (idle, busy) = (
+            "aaaaaaaa-0000-0000-0000-000000000001",
+            "aaaaaaaa-0000-0000-0000-000000000002",
+        );
+        assert_eq!(inspection.codex_sessions, [idle, busy]);
+
+        let dir = tempfile::tempdir().unwrap();
+        let processes = [codex_process(7, later())];
+        let facts = detect_from(
+            dir.path(),
+            ENDPOINT,
+            Some(&processes),
+            &BTreeMap::from([(7, inspection)]),
+            &BTreeMap::new(),
+        );
+        let row = row_of(&facts, AgentId::Codex, Some(&sessions(&[(busy, 7_000)])));
+        assert_eq!(row["processes"][0]["state"], "receiving");
+        assert_eq!(
+            row["processes"][0]["session_id"], busy,
+            "the one heard from"
+        );
+    }
+
+    #[test]
+    fn one_unexplained_session_does_not_vouch_for_several_silent_processes() {
+        let (_dir, home, _project) = claude_scopes_fixture(Some(&claude_settings(
+            "http://127.0.0.1:4318",
+            Some(GOOD_HOOK),
+        )));
+        let processes = [
+            claude_process(1, later()),
+            claude_process(2, later()),
+            claude_process(3, later()),
+        ];
+        let here = Inspection {
+            cwd: Some(home.clone()),
+            ..Inspection::default()
+        };
+        let inspections = BTreeMap::from([(1, here.clone()), (2, here.clone()), (3, here)]);
+        let facts = detect_from(
+            &home,
+            ENDPOINT,
+            Some(&processes),
+            &inspections,
+            &BTreeMap::new(),
+        );
+        let row = row_of(
+            &facts,
+            AgentId::ClaudeCode,
+            Some(&sessions(&[("orphan", 4_000)])),
+        );
+        for process in row["processes"].as_array().unwrap() {
+            assert_eq!(process["state"], "waiting", "{process}");
+            assert!(
+                process["detail"]
+                    .as_str()
+                    .unwrap()
+                    .contains("cannot be tied to this process"),
+                "it is said that the agent is receiving, without crediting this process: {process}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_command_that_outlives_its_deadline_is_abandoned() {
+        let started = std::time::Instant::now();
+        let mut slow = Command::new("sleep");
+        slow.arg("5");
+        assert_eq!(output_within(slow, Duration::from_millis(200)), None);
+        assert!(
+            started.elapsed() < Duration::from_secs(3),
+            "{:?}",
+            started.elapsed()
+        );
+
+        let mut quick = Command::new("echo");
+        quick.arg("hi");
+        assert_eq!(
+            output_within(quick, Duration::from_secs(5)),
+            Some(b"hi\n".to_vec())
+        );
+        assert_eq!(
+            output_within(
+                Command::new("/nonexistent/af-test-tool"),
+                Duration::from_secs(1)
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn claude_settings_that_export_in_other_valid_ways_are_configured() {
+        // Telemetry enabled as "true" rather than "1".
+        let (_dir, home, project) = claude_scopes_fixture(Some(&claude_settings(
+            "http://127.0.0.1:4318",
+            Some(GOOD_HOOK),
+        )));
+        let local = project.join(".claude/settings.local.json");
+        std::fs::write(&local, r#"{"env":{"CLAUDE_CODE_ENABLE_TELEMETRY":"true"}}"#).unwrap();
+        assert!(
+            matches!(
+                claude_config_for(&home, Some(&project), ENDPOINT).0,
+                UserConfig::Configured { .. }
+            ),
+            "\"true\" enables telemetry"
+        );
+        // A higher scope switching hooks back on.
+        std::fs::write(home.join(".claude/settings.local-test.json"), "{}").unwrap();
+        std::fs::write(
+            project.join(".claude/settings.json"),
+            r#"{"disableAllHooks":true}"#,
+        )
+        .unwrap();
+        std::fs::write(&local, r#"{"disableAllHooks":false}"#).unwrap();
+        assert!(
+            matches!(
+                claude_config_for(&home, Some(&project), ENDPOINT).0,
+                UserConfig::Configured { .. }
+            ),
+            "the last scope to set disableAllHooks has the last word"
+        );
+    }
+
+    #[test]
+    fn a_logs_only_endpoint_counts_and_a_wrong_one_overrides() {
+        let logs_only = json!({
+            "env": {
+                "CLAUDE_CODE_ENABLE_TELEMETRY": "1",
+                "OTEL_LOGS_EXPORTER": "otlp",
+                "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT": ENDPOINT,
+            },
+            "hooks": { "PostToolUse": [{ "hooks": [{ "type": "command", "command": GOOD_HOOK }] }] }
+        })
+        .to_string();
+        let (_dir, home, project) = claude_scopes_fixture(Some(&logs_only));
+        assert!(matches!(
+            claude_config_for(&home, None, ENDPOINT).0,
+            UserConfig::Configured { .. }
+        ));
+        // The logs-specific variable wins over the general one.
+        std::fs::write(
+            project.join(".claude/settings.json"),
+            r#"{"env":{"OTEL_EXPORTER_OTLP_LOGS_ENDPOINT":"http://elsewhere:4318/v1/logs"}}"#,
+        )
+        .unwrap();
+        let (config, _) = claude_config_for(&home, Some(&project), ENDPOINT);
+        let UserConfig::Misconfigured { detail, .. } = config else {
+            panic!("expected misconfigured, got {config:?}");
+        };
+        assert!(detail.contains("http://elsewhere:4318/v1/logs"), "{detail}");
+    }
+
+    #[test]
+    fn a_claude_config_dir_replaces_the_user_scope() {
+        let (dir, home, project) = claude_scopes_fixture(None);
+        let other = dir.path().join("claude-work");
+        std::fs::create_dir_all(&other).unwrap();
+        std::fs::write(
+            other.join("settings.json"),
+            claude_settings("http://127.0.0.1:4318", Some(GOOD_HOOK)),
+        )
+        .unwrap();
+        let processes = [claude_process(1, later())];
+        let inspect = |config_dir: Option<&Path>| {
+            let inspections = BTreeMap::from([(
+                1,
+                Inspection {
+                    cwd: Some(project.clone()),
+                    claude_config_dir: config_dir.map(Path::to_path_buf),
+                    ..Inspection::default()
+                },
+            )]);
+            let facts = detect_from(
+                &home,
+                ENDPOINT,
+                Some(&processes),
+                &inspections,
+                &BTreeMap::new(),
+            );
+            row_of(&facts, AgentId::ClaudeCode, None)["processes"][0]["state"].clone()
+        };
+        assert_eq!(inspect(None), "not_configured");
+        assert_eq!(inspect(Some(&other)), "waiting");
+    }
+
+    #[test]
+    fn a_setup_command_survives_an_awkward_directory_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("it's $HOME (x)");
+        std::fs::create_dir_all(project.join(".codex")).unwrap();
+        let processes = [codex_process(7, later())];
+        let facts = detect_from(
+            dir.path(),
+            ENDPOINT,
+            Some(&processes),
+            &BTreeMap::from([(7, codex_in(&project, "s"))]),
+            &BTreeMap::new(),
+        );
+        let row = row_of(&facts, AgentId::Codex, None);
+        let quoted = project.display().to_string().replace('\'', r"'\''");
+        assert_eq!(
+            row["processes"][0]["action"],
+            format!("af setup --agents codex --project '{quoted}'")
+        );
+    }
+
+    #[test]
+    fn a_misconfigured_process_names_the_file_and_offers_no_command_setup_cannot_honour() {
+        let (_dir, home, project) = claude_scopes_fixture(Some(&claude_settings(
+            "http://127.0.0.1:4318",
+            Some(GOOD_HOOK),
+        )));
+        let local = project.join(".claude/settings.local.json");
+        std::fs::write(&local, r#"{"env":{"CLAUDE_CODE_ENABLE_TELEMETRY":"0"}}"#).unwrap();
+        let processes = [claude_process(1, later())];
+        let inspections = BTreeMap::from([(
+            1,
+            Inspection {
+                cwd: Some(project.clone()),
+                ..Inspection::default()
+            },
+        )]);
+        let facts = detect_from(
+            &home,
+            ENDPOINT,
+            Some(&processes),
+            &inspections,
+            &BTreeMap::new(),
+        );
+        let process = &row_of(&facts, AgentId::ClaudeCode, None)["processes"][0];
+        assert_eq!(process["state"], "misconfigured");
+        assert_eq!(process["action"], Value::Null);
+        assert!(
+            process["detail"]
+                .as_str()
+                .unwrap()
+                .starts_with(&local.display().to_string()),
+            "{process}"
+        );
+    }
+
+    #[test]
     fn only_what_can_have_changed_is_inspected_again() {
         let processes = [
             claude_process(1, at(1)),
@@ -1597,7 +2012,8 @@ mod tests {
         Inspection {
             cwd: Some(project.to_path_buf()),
             codex_home: Some(project.join(".codex")),
-            codex_session: Some(session.to_string()),
+            codex_sessions: vec![session.to_string()],
+            claude_config_dir: None,
         }
     }
 

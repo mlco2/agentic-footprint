@@ -225,6 +225,15 @@ describe("per-process rows", () => {
     expect(row(agent("waiting", { processes: [proc({ cwd: null })] })).processes[0].where).toBeNull();
   });
 
+  it("only a real home at the start of a path is shortened", () => {
+    const where = (cwd: string) => row(agent("waiting", { processes: [proc({ cwd })] })).processes[0].where;
+    expect(where("/Users/Shared/p")).toBe("/Users/Shared/p");
+    expect(where("/Volumes/d/Users/x/p")).toBe("/Volumes/d/Users/x/p");
+    expect(where("/Users/dev")).toBe("~");
+    const [p] = row(agent("misconfigured", { processes: [proc({ state: "misconfigured", detail: "/home/dev/p/.claude/settings.local.json: sets X" })] })).processes;
+    expect(p.note).toBe("~/p/.claude/settings.local.json: sets X");
+  });
+
   it("says how many processes are not exporting when the agent as a whole is receiving", () => {
     const r = row(
       agent("receiving", {
