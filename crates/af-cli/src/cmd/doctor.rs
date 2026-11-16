@@ -12,13 +12,11 @@
 //! Exits 1 when anything needs attention, so scripts and the installer can
 //! act on it.
 
-use std::path::{Path, PathBuf};
-use std::process::Command;
-use std::time::{Duration, SystemTime};
+use std::path::Path;
 
 use anyhow::Result;
 
-use super::setup::{self, CodexOtel};
+use super::agents::{running_agents, stale_processes, startup_configs};
 use super::DEFAULT_LOGS_ENDPOINT;
 
 #[derive(Debug, Clone, clap::Args)]
@@ -29,21 +27,6 @@ pub struct Args {
     /// How far back to look for sessions without token telemetry.
     #[arg(long, default_value_t = 7)]
     days: u32,
-}
-
-/// A running agent process, as far as `ps` can say.
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct AgentProcess {
-    pid: u32,
-    name: String,
-    started: SystemTime,
-}
-
-/// A configuration file an agent reads once at process start.
-struct StartupConfig {
-    agent: &'static str,
-    path: PathBuf,
-    modified: SystemTime,
 }
 
 pub fn run(state_dir: &Path, args: Args) -> Result<i32> {
@@ -139,179 +122,8 @@ pub fn run(state_dir: &Path, args: Args) -> Result<i32> {
     }
 }
 
-/// The per-user files whose telemetry settings each agent reads once, at
-/// start. Only files that carry OTEL configuration count, judged the way
-/// `af setup` reads them: an unrelated edit to a file setup never touched
-/// says nothing about telemetry.
-fn startup_configs(home: &Path) -> Vec<StartupConfig> {
-    let candidates: [(&str, PathBuf, SetsOtel); 2] = [
-        (
-            "claude",
-            setup::claude_user_settings(home),
-            claude_sets_otel,
-        ),
-        ("codex", setup::codex_config_path(home), codex_sets_otel),
-    ];
-    candidates
-        .into_iter()
-        .filter_map(|(agent, path, has_otel)| {
-            let contents = std::fs::read_to_string(&path).ok()?;
-            if !has_otel(&contents) {
-                return None;
-            }
-            let modified = std::fs::metadata(&path).ok()?.modified().ok()?;
-            Some(StartupConfig {
-                agent,
-                path,
-                modified,
-            })
-        })
-        .collect()
-}
-
-/// Whether a config file's contents carry OTEL configuration.
-type SetsOtel = fn(&str) -> bool;
-
-fn claude_sets_otel(contents: &str) -> bool {
-    serde_json::from_str(contents).is_ok_and(|settings| setup::claude_settings_set_otel(&settings))
-}
-
-fn codex_sets_otel(contents: &str) -> bool {
-    setup::codex_otel_state(contents, DEFAULT_LOGS_ENDPOINT) != CodexOtel::Absent
-}
-
-fn stale_processes<'a>(
-    processes: &'a [AgentProcess],
-    configs: &'a [StartupConfig],
-) -> Vec<(&'a AgentProcess, &'a StartupConfig)> {
-    processes
-        .iter()
-        .filter_map(|process| {
-            let config = configs.iter().find(|config| config.agent == process.name)?;
-            (process.started < config.modified).then_some((process, config))
-        })
-        .collect()
-}
-
-/// Running `claude`/`codex` processes, or `None` where `ps` is unavailable.
-fn running_agents() -> Option<Vec<AgentProcess>> {
-    if !cfg!(unix) {
-        return None;
-    }
-    let output = Command::new("ps")
-        .args(["-A", "-o", "pid=,etime=,comm="])
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    let now = SystemTime::now();
-    Some(
-        String::from_utf8_lossy(&output.stdout)
-            .lines()
-            .filter_map(|line| parse_ps_line(line, now))
-            .filter(|process| process.name == "claude" || process.name == "codex")
-            .collect(),
-    )
-}
-
-fn parse_ps_line(line: &str, now: SystemTime) -> Option<AgentProcess> {
-    let mut fields = line.split_whitespace();
-    let pid = fields.next()?.parse().ok()?;
-    let elapsed = parse_etime(fields.next()?)?;
-    let command = fields.collect::<Vec<_>>().join(" ");
-    let name = command.rsplit('/').next()?.to_string();
-    Some(AgentProcess {
-        pid,
-        name,
-        started: now.checked_sub(elapsed)?,
-    })
-}
-
-/// `ps -o etime` elapsed time: `[[dd-]hh:]mm:ss`.
-fn parse_etime(value: &str) -> Option<Duration> {
-    let (days, clock) = match value.split_once('-') {
-        Some((days, clock)) => (days.parse::<u64>().ok()?, clock),
-        None => (0, value),
-    };
-    let parts: Vec<u64> = clock
-        .split(':')
-        .map(|part| part.parse().ok())
-        .collect::<Option<_>>()?;
-    let (hours, minutes, seconds) = match parts.as_slice() {
-        [minutes, seconds] => (0, *minutes, *seconds),
-        [hours, minutes, seconds] => (*hours, *minutes, *seconds),
-        _ => return None,
-    };
-    Some(Duration::from_secs(
-        ((days * 24 + hours) * 60 + minutes) * 60 + seconds,
-    ))
-}
-
 /// `days` ago, in the fixed-width millisecond UTC form the store's `ts`
 /// column holds, so the two compare as text.
 fn since_timestamp(days: u32) -> String {
     af_core::rfc3339_ms(super::now_ms() - i64::from(days) * 86_400_000).unwrap_or_default()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn etime_parses_every_ps_shape() {
-        assert_eq!(parse_etime("05:07"), Some(Duration::from_secs(307)));
-        assert_eq!(parse_etime("02:04:45"), Some(Duration::from_secs(7485)));
-        assert_eq!(
-            parse_etime("24-00:23:22"),
-            Some(Duration::from_secs(24 * 86_400 + 23 * 60 + 22))
-        );
-        assert_eq!(parse_etime("garbage"), None);
-        assert_eq!(parse_etime("1:2:3:4"), None);
-    }
-
-    #[test]
-    fn ps_lines_yield_basename_and_start_time() {
-        let now = SystemTime::UNIX_EPOCH + Duration::from_secs(1_000_000);
-        let process = parse_ps_line(" 45737 24-00:23:22 /usr/local/bin/claude", now).unwrap();
-        assert_eq!(process.pid, 45737);
-        assert_eq!(process.name, "claude");
-        assert_eq!(
-            process.started,
-            now - Duration::from_secs(24 * 86_400 + 23 * 60 + 22)
-        );
-    }
-
-    #[test]
-    fn only_processes_started_before_their_config_changed_are_stale() {
-        let at = |secs| SystemTime::UNIX_EPOCH + Duration::from_secs(secs);
-        let processes = [
-            AgentProcess {
-                pid: 1,
-                name: "claude".into(),
-                started: at(100),
-            },
-            AgentProcess {
-                pid: 2,
-                name: "claude".into(),
-                started: at(300),
-            },
-            AgentProcess {
-                pid: 3,
-                name: "codex".into(),
-                started: at(100),
-            },
-        ];
-        let configs = [StartupConfig {
-            agent: "claude",
-            path: PathBuf::from("/home/.claude/settings.json"),
-            modified: at(200),
-        }];
-        let stale: Vec<u32> = stale_processes(&processes, &configs)
-            .into_iter()
-            .map(|(process, _)| process.pid)
-            .collect();
-        // codex has no configuration on record, so nothing to compare.
-        assert_eq!(stale, [1]);
-    }
 }

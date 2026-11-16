@@ -664,7 +664,7 @@ const EXECUTABLE_SUFFIXES: &[&str] = &[""];
 #[cfg(windows)]
 const EXECUTABLE_SUFFIXES: &[&str] = &[".exe", ".cmd", ".bat"];
 
-fn command_exists(command: &str) -> bool {
+pub(crate) fn command_exists(command: &str) -> bool {
     let Some(path) = env::var_os("PATH") else {
         return false;
     };
@@ -834,7 +834,7 @@ fn merge_claude_settings(mut value: Value, command: &str, endpoint: &str) -> Res
 /// platform — so re-running setup replaces it instead of accumulating
 /// duplicates: the sh shim under the state dir or a checkout (forward or
 /// backslash paths), or the built-in `af hook` registration.
-fn is_managed_af_hook(command: &str) -> bool {
+pub(crate) fn is_managed_af_hook(command: &str) -> bool {
     let normalized = command.replace('\\', "/");
     normalized.ends_with("/integrations/claude-code/af-hook.sh")
         || normalized.ends_with("/collectors/claude-code/af-hook.sh")
@@ -862,7 +862,7 @@ fn object_entry<'a>(
         .with_context(|| format!("Claude Code settings {key} must be a JSON object"))
 }
 
-fn hook_entry_command(value: &Value) -> Option<&str> {
+pub(crate) fn hook_entry_command(value: &Value) -> Option<&str> {
     value
         .get("hooks")?
         .as_array()?

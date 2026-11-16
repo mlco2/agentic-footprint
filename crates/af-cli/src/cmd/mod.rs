@@ -1,3 +1,4 @@
+pub(crate) mod agents;
 pub mod debug_frames;
 pub mod debug_server;
 pub mod doctor;
