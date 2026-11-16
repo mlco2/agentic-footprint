@@ -10,10 +10,10 @@ description = "SQLite persistence for Agentic Footprint"
 
 [dependencies]
 af-events = { path = "../af-events" }
-rusqlite = { version = "0.32", features = ["bundled"] }
+rusqlite = { version = "0.41", features = ["bundled"] }
 serde_json = "1"
 
 [dev-dependencies]
 af-events = { path = "../af-events", features = ["test-support"] }
-rusqlite = { version = "0.32", features = ["bundled"] }
+rusqlite = { version = "0.41", features = ["bundled"] }
 tempfile = "3"
