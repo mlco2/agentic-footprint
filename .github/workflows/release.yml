@@ -4,6 +4,9 @@ on:
   push:
     tags:
       - "v*.*.*"
+  # A rehearsal: the four builds and their reproducibility checks, run by
+  # hand on any branch. Nothing is signed or published without a tag.
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -33,10 +36,10 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - name: Verify release version
-        if: runner.os != 'Windows'
+        if: runner.os != 'Windows' && github.ref_type == 'tag'
         run: scripts/check-release-version.sh "$GITHUB_REF_NAME"
       - name: Verify release version
-        if: runner.os == 'Windows'
+        if: runner.os == 'Windows' && github.ref_type == 'tag'
         shell: pwsh
         run: |
           $versionMatch = Select-String -Path Cargo.toml -Pattern '^version = "([^"\r\n]+)"' | Select-Object -First 1
@@ -90,6 +93,9 @@ jobs:
         shell: pwsh
         run: |
           $env:CARGO_TARGET_DIR = "$env:RUNNER_TEMP\repro-target"
+          # Without /Brepro the MSVC linker writes the time of the build
+          # into the executable, and no two builds are the same file.
+          $env:RUSTFLAGS = "$env:RUSTFLAGS -C link-arg=/Brepro"
           cargo build --release --locked -p af-cli --target "${{ matrix.target }}"
           Copy-Item "$env:CARGO_TARGET_DIR\${{ matrix.target }}\release\af.exe" "$env:RUNNER_TEMP\af-first.exe"
           Remove-Item -Recurse -Force $env:CARGO_TARGET_DIR
@@ -108,6 +114,7 @@ jobs:
 
   publish:
     needs: build
+    if: github.ref_type == 'tag'
     runs-on: ubuntu-24.04
     permissions:
       contents: write
