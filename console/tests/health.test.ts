@@ -97,6 +97,21 @@ function watchdogEntry(overrides: Partial<WatchdogEntry> = {}): WatchdogEntry {
 // ---------------------------------------------------------------------------
 
 describe("selectCollectorTable", () => {
+  it("gives every row a distinct key when one collector appears once per session (a keyed list throws on a duplicate)", async () => {
+    const { selectCollectorTable } = await freshEnv();
+    const health = healthFixture({
+      collectors: [
+        collectorFixture({ name: "cc-hooks", session_id: "s1" }),
+        collectorFixture({ name: "cc-hooks", session_id: "s2" }),
+        // A server predating multi-session labels neither row.
+        collectorFixture({ name: "otlp-cc" }),
+        collectorFixture({ name: "otlp-cc" }),
+      ],
+    });
+    const keys = selectCollectorTable(health, 1_000_000).map((row) => row.key);
+    expect(new Set(keys).size).toBe(4);
+  });
+
   it("clamps idle at 0 when last_seen is ahead of nowMs (end-stamped health snapshot vs. client clock)", async () => {
     const { selectCollectorTable } = await freshEnv();
     const nowMs = 1_000_000;

@@ -48,6 +48,9 @@ function dotClassForIdle(idleMs: number): DotClass {
 // ---------------------------------------------------------------------------
 
 export interface CollectorTableRow {
+  /** Unique within the table. `name` is not: the watcher reports one row
+   * per collector and session, and a keyed `{#each}` throws on a repeat. */
+  key: string;
   name: string;
   version: string;
   transport: string;
@@ -66,13 +69,16 @@ export interface CollectorTableRow {
   dotClass: DotClass;
 }
 
-function buildCollectorRow(c: CollectorHealth, nowMs: number): CollectorTableRow {
+function buildCollectorRow(c: CollectorHealth, index: number, nowMs: number): CollectorTableRow {
   const lastSeenMs = Date.parse(c.last_seen);
   // "Clamp idle at 0" (SCREENS.md §5): end-stamped events/health snapshots
   // can be marginally ahead of the client's own `nowMs` — never render a
   // negative idle.
   const idleMs = Math.max(0, nowMs - lastSeenMs);
   return {
+    // The position settles what name and session cannot: a server that
+    // predates multi-session labels no row with a session.
+    key: `${c.name}:${c.session_id ?? ""}:${index}`,
     name: c.name,
     version: c.version,
     transport: c.transport,
@@ -88,7 +94,7 @@ function buildCollectorRow(c: CollectorHealth, nowMs: number): CollectorTableRow
 
 function computeCollectorTable(health: HealthPayload | undefined, nowMs: number): CollectorTableRow[] {
   if (!health) return [];
-  return health.collectors.map((c) => buildCollectorRow(c, nowMs));
+  return health.collectors.map((c, index) => buildCollectorRow(c, index, nowMs));
 }
 
 const memoCollectorTable = memo1((health: HealthPayload | undefined, nowMs: number) => computeCollectorTable(health, nowMs));

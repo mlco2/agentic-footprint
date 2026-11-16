@@ -53,7 +53,7 @@
             <span class="col col--lastseen col--right">last seen</span>
             <span class="col col--emits">emits</span>
           </div>
-          {#each collectors as c (c.name)}
+          {#each collectors as c (c.key)}
             <div class="collector-table__row rule-table-row">
               <span class="col col--collector">
                 <span class="status-dot {c.dotClass}" aria-hidden="true"></span>
@@ -88,7 +88,8 @@
         <EmptyState label="Ingestion" message="no ingestion data yet" />
       {:else}
         <div class="ingestion-list">
-          {#each aside.ingestion as row (row.label)}
+          <!-- Keyed by position: a label repeats once per session's spool file. -->
+          {#each aside.ingestion as row, i (i)}
             <div class="ingestion-row rule-table-row">
               <span class="ingestion-row__label">{row.label}</span>
               <span class="ingestion-row__value">{row.value}</span>
