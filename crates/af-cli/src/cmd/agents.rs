@@ -922,20 +922,29 @@ fn judge_process(
     process.config = Some(config);
 }
 
+/// `path` as one word of a command meant to be pasted: as it is when
+/// nothing in it means anything to a shell, else in single quotes. POSIX
+/// shells write a quote inside them as `'\''`; PowerShell (`powershell`
+/// true), where `\` and `:` are ordinary, doubles it.
+fn shell_path(path: &Path, powershell: bool) -> String {
+    let text = path.display().to_string();
+    let ordinary = if powershell { "_./-\\:" } else { "_./-" };
+    if text
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || ordinary.contains(c))
+    {
+        text
+    } else if powershell {
+        format!("'{}'", text.replace('\'', "''"))
+    } else {
+        format!("'{}'", text.replace('\'', r"'\''"))
+    }
+}
+
 /// The `af setup` invocation that configures what this process loads.
 fn setup_command(agent: AgentId, process: &ProcessFact, home: &Path) -> String {
     let base = format!("af setup --agents {}", agent.id());
-    // POSIX single quotes, whenever anything a shell would interpret is in
-    // the path: the command is meant to be pasted.
-    let quoted = |path: &Path| {
-        let text = path.display().to_string();
-        let plain = |c: char| c.is_ascii_alphanumeric() || "_./-".contains(c);
-        if text.chars().all(plain) {
-            text
-        } else {
-            format!("'{}'", text.replace('\'', r"'\''"))
-        }
-    };
+    let quoted = |path: &Path| shell_path(path, cfg!(windows));
     let codex_home = process.config_path.as_deref().and_then(Path::parent);
     match (agent, &process.cwd, codex_home) {
         // A Codex home that is neither the default nor the project's own:
@@ -944,7 +953,11 @@ fn setup_command(agent: AgentId, process: &ProcessFact, home: &Path) -> String {
             if codex_home != home.join(".codex")
                 && cwd.as_deref().map(|cwd| cwd.join(".codex")).as_deref() != Some(codex_home) =>
         {
-            format!("CODEX_HOME={} {base}", quoted(codex_home))
+            if cfg!(windows) {
+                format!("$env:CODEX_HOME = {}; {base}", quoted(codex_home))
+            } else {
+                format!("CODEX_HOME={} {base}", quoted(codex_home))
+            }
         }
         (AgentId::Codex, _, Some(codex_home)) if codex_home == home.join(".codex") => base,
         (_, Some(cwd), _) => format!("{base} --project {}", quoted(cwd)),
@@ -1996,10 +2009,24 @@ mod tests {
             &BTreeMap::new(),
         );
         let row = row_of(&facts, AgentId::Codex, None);
-        let quoted = project.display().to_string().replace('\'', r"'\''");
         assert_eq!(
             row["processes"][0]["action"],
-            format!("af setup --agents codex --project '{quoted}'")
+            format!(
+                "af setup --agents codex --project {}",
+                shell_path(&project, cfg!(windows))
+            )
+        );
+        // Each shell's own way of writing a quote inside quotes.
+        let awkward = Path::new("it's $HOME (x)");
+        assert_eq!(shell_path(awkward, false), r"'it'\''s $HOME (x)'");
+        assert_eq!(shell_path(awkward, true), "'it''s $HOME (x)'");
+        assert_eq!(
+            shell_path(Path::new(r"C:\Users\ann\work"), true),
+            r"C:\Users\ann\work"
+        );
+        assert_eq!(
+            shell_path(Path::new("/home/ann/work"), false),
+            "/home/ann/work"
         );
     }
 
@@ -2009,7 +2036,7 @@ mod tests {
             "http://127.0.0.1:4318",
             Some(GOOD_HOOK),
         )));
-        let local = project.join(".claude/settings.local.json");
+        let local = project.join(".claude").join("settings.local.json");
         std::fs::write(&local, r#"{"env":{"CLAUDE_CODE_ENABLE_TELEMETRY":"0"}}"#).unwrap();
         let processes = [claude_process(1, later())];
         let inspections = BTreeMap::from([(
@@ -2130,11 +2157,18 @@ mod tests {
         assert_eq!(process["cwd"], project.display().to_string());
         assert_eq!(
             process["config_path"],
-            project.join(".codex/config.toml").display().to_string()
+            project
+                .join(".codex")
+                .join("config.toml")
+                .display()
+                .to_string()
         );
         assert_eq!(
             process["action"],
-            format!("af setup --agents codex --project {}", project.display())
+            format!(
+                "af setup --agents codex --project {}",
+                shell_path(&project, cfg!(windows))
+            )
         );
         assert_eq!(process["session_id"], "s9");
         assert_eq!(
@@ -2208,7 +2242,7 @@ mod tests {
             quiet["processes"][0]["action"],
             format!(
                 "af setup --agents claude-code --project {}",
-                project.display()
+                shell_path(&project, cfg!(windows))
             )
         );
         let row = row_of(

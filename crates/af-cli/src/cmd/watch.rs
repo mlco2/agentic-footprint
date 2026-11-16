@@ -3032,7 +3032,8 @@ mod tests {
         assert_ne!(id, boot_id(t, 2), "another pid at the same instant");
         assert_ne!(
             id,
-            boot_id(t + Duration::from_nanos(1), 1),
+            // Windows keeps time in steps of 100 ns.
+            boot_id(t + Duration::from_micros(1), 1),
             "the same pid, reused later"
         );
     }
