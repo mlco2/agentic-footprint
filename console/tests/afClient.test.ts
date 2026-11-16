@@ -940,22 +940,71 @@ describe("AfClient — reconnect, boot id and heartbeat", () => {
     vi.useRealTimers();
   });
 
-  it("reconnect after an error is a full bootstrap, not a resubscribe from the old cursor", async () => {
+  it("reconnect to the SAME watcher process probes its identity, then resumes from the last frame seen — nothing the server can replay is skipped", async () => {
     const h = makeHarness();
     h.setSnapshot(emptySnapshot(10));
     await h.client.start();
     h.esInstances[0].emitOpen();
     h.esInstances[0].emit("fact", actionSpanFact("spn_a", "evt_a", 0, 100), 11);
+    h.esInstances[0].emit("decision", { kind: "attr", text: "seen", ts: "2026-07-25T00:00:00.000Z" }, 12);
+    await vi.advanceTimersByTimeAsync(0);
 
+    // The head has moved on to 40 while the connection was down. Jumping
+    // there would skip every decision/reject frame in 13..40, which the
+    // snapshot does not carry and the server would have replayed.
     h.setSnapshot(emptySnapshot(40));
     h.fetchCalls.length = 0;
     h.esInstances[0].emitError();
     expect(h.esInstances[0].closed, "the failed stream is closed at once, so the browser cannot auto-reconnect it").toBe(true);
     await vi.advanceTimersByTimeAsync(500);
 
-    expect(bootstrapFetches(h.fetchCalls)).toEqual(["/debug/status", "/debug/session", "/debug/snapshot?window=180s"]);
+    expect(bootstrapFetches(h.fetchCalls), "the probe alone: same process, no new snapshot").toEqual(["/debug/status"]);
     expect(h.esInstances).toHaveLength(2);
-    expect(h.esInstances[1].url, "from the NEW snapshot's cursor").toBe("/debug/stream?from=40");
+    expect(h.esInstances[1].url).toBe("/debug/stream?from=12");
+    h.client.dispose();
+  });
+
+  it("a `reset` on that resumed stream falls back to a full re-sync from a fresh snapshot", async () => {
+    const h = makeHarness();
+    h.setSnapshot(emptySnapshot(10));
+    await h.client.start();
+    h.esInstances[0].emitOpen();
+    h.esInstances[0].emitError();
+    await vi.advanceTimersByTimeAsync(500);
+    expect(h.esInstances[1].url).toBe("/debug/stream?from=10");
+
+    h.setSnapshot(emptySnapshot(9000));
+    h.fetchCalls.length = 0;
+    h.esInstances[1].emit("reset", {});
+    await vi.advanceTimersByTimeAsync(0);
+    expect(bootstrapFetches(h.fetchCalls)).toEqual(["/debug/status", "/debug/session", "/debug/snapshot?window=180s"]);
+    expect(h.esInstances[2].url).toBe("/debug/stream?from=9000");
+    h.client.dispose();
+  });
+
+  it("reconnect to a watcher with no status route cannot know the process, so it re-syncs from a snapshot", async () => {
+    const h = makeHarness();
+    h.setStatus("404");
+    h.setSnapshot(emptySnapshot(10));
+    await h.client.start();
+    h.esInstances[0].emitOpen();
+    h.setSnapshot(emptySnapshot(40));
+    h.esInstances[0].emitError();
+    await vi.advanceTimersByTimeAsync(500);
+    expect(h.esInstances[1].url).toBe("/debug/stream?from=40");
+    h.client.dispose();
+  });
+
+  it("a watcher with no status route never pings, and is not dropped for staying quiet", async () => {
+    const h = makeHarness();
+    h.setStatus("404");
+    await h.client.start();
+    h.esInstances[0].emitOpen();
+    // A pre-status watcher is silent between flushes (a minute by default).
+    await vi.advanceTimersByTimeAsync(5 * 60_000);
+    expect(h.esInstances[0].closed).toBe(false);
+    expect(h.esInstances).toHaveLength(1);
+    expect(h.client.status).toBe("live");
     h.client.dispose();
   });
 
@@ -1004,8 +1053,9 @@ describe("AfClient — reconnect, boot id and heartbeat", () => {
     h.setSnapshot(emptySnapshot(3, { coverage_gaps: [gap] as Snapshot["coverage_gaps"] }));
     await h.client.start();
     h.esInstances[0].emitOpen();
-    h.esInstances[0].emitError();
-    await vi.advanceTimersByTimeAsync(500);
+    // A `reset` forces the snapshot (and its last 180s of gaps) to be re-read.
+    h.esInstances[0].emit("reset", {});
+    await vi.advanceTimersByTimeAsync(0);
     expect(h.esInstances).toHaveLength(2);
     expect(h.eventStore.gaps).toHaveLength(1);
     h.client.dispose();

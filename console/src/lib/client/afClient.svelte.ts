@@ -141,6 +141,13 @@ export class AfClient {
   /** When the open stream last showed any sign of life (open, a frame, a
    * ping) — the heartbeat check compares against this. */
   private lastEventAtMs = 0;
+  /** Whether the watcher behind the current attempt is known to ping — see
+   * `checkHeartbeat`. */
+  private heartbeatArmed = false;
+  /** Whether the stores hold a snapshot-based sync with the process named
+   * by `bootId`, so `lastSeq` is a cursor that process issued. Cleared by
+   * a `reset`, a new `boot_id`, and until the first full sync completes. */
+  private synced = false;
   private wakeRegistered = false;
 
   /** FIFO of frames received while `uiStore.live === false`. The SSE
@@ -192,12 +199,12 @@ export class AfClient {
   }
 
   /** The one way in: first load, every retry, a `reset`, a heartbeat
-   * timeout and a new `boot_id` all come through here, so a reconnect is
-   * always a full re-sync and never a bare resubscribe from a cursor that
-   * may belong to a watcher process that no longer exists.
+   * timeout and a new `boot_id` all come through here, so a cursor is
+   * never reused without first asking which watcher process is answering.
    *
-   * Strict order: status (the probe — which watcher is this?), session,
-   * snapshot, subscribe. A thrown fetch (network down, watcher not up) is
+   * Strict order: status (the probe — which watcher is this?), then either
+   * a resume from the last frame seen (same process, already in sync) or
+   * the full sync: session, snapshot, subscribe. A thrown fetch (network down, watcher not up) is
    * exactly as much of a "not connected" fact as an SSE `error`, so it is
    * registered the same way and retried with backoff.
    *
@@ -208,18 +215,30 @@ export class AfClient {
     const gen = ++this.connectGen;
     this.cancelReconnectTimer();
     this.closeEventSource();
+    this.heartbeatArmed = false;
     try {
       const status = await this.fetchStatus();
       if (gen !== this.connectGen) return;
+      // The same process this client is already in sync with: its cursor is
+      // still that process's cursor, so resume from it. The server replays
+      // everything after it — including the decision and reject frames a
+      // snapshot does not carry — or answers `reset` when it no longer can.
+      const sameProcess = status !== null && this.synced && status.boot_id === this.bootId;
       if (status) {
         // Another process than the one whose history is held: that
         // history cannot be merged with the new one by sequence number.
         if (this.bootId !== null && status.boot_id !== this.bootId) this.clearForNewBoot();
         this.bootId = status.boot_id;
         this.statusStoreRef.set(status);
+        this.heartbeatArmed = true;
       } else {
         this.statusStoreRef.markUnavailable();
       }
+      if (sameProcess) {
+        this.subscribe(this.lastSeq);
+        return;
+      }
+      this.synced = false;
 
       // `null` is "the watcher has no session yet", not a failure.
       const session = await this.fetchJson<SessionInfo | null>("/debug/session");
@@ -229,6 +248,7 @@ export class AfClient {
       const snapshot = await this.fetchJson<Snapshot>("/debug/snapshot?window=180s");
       if (gen !== this.connectGen) return;
       this.ingestSnapshot(snapshot);
+      this.synced = true;
 
       this.subscribe(snapshot.as_of_seq);
       void this.fetchReportAndHealthOnce();
@@ -262,6 +282,7 @@ export class AfClient {
     this.seenCount = 0;
     this.dropPauseBuffer();
     this.lastSeq = 0;
+    this.synced = false;
   }
 
   /** The real `af watch --debug` server pushes `report`/`health` frames per
@@ -432,7 +453,7 @@ export class AfClient {
    * while it slept, so the heartbeat is stale, and the watcher may have
    * been restarted meanwhile. One full re-sync covers both. */
   private handleWake(): void {
-    const healthy = this.es !== null && this.now() - this.lastEventAtMs < HEARTBEAT_TIMEOUT_MS;
+    const healthy = this.es !== null && (!this.heartbeatArmed || this.now() - this.lastEventAtMs < HEARTBEAT_TIMEOUT_MS);
     if (healthy) return;
     this.backoffMs = BACKOFF_MIN_MS;
     if (this.status === "live") this.status = "reconnecting";
@@ -441,9 +462,14 @@ export class AfClient {
 
   /** Called from the 1 Hz tick: a stream that has said nothing — no frame,
    * no `ping` — for [HEARTBEAT_TIMEOUT_MS] is treated as lost. The server
-   * pings every 15s of silence, so this is three missed in a row. */
+   * pings every 15s of silence, so this is three missed in a row.
+   *
+   * Only for a watcher known to ping (`heartbeatArmed`: it served a status,
+   * or sent a `status`/`ping` frame). One that predates the status route
+   * is legitimately silent for a whole flush interval, and timing it out
+   * would mean dropping and re-syncing a healthy connection every 45s. */
   private checkHeartbeat(): void {
-    if (this.es === null) return;
+    if (this.es === null || !this.heartbeatArmed) return;
     if (this.now() - this.lastEventAtMs < HEARTBEAT_TIMEOUT_MS) return;
     this.closeEventSource();
     this.registerFailureAndScheduleRetry();
@@ -485,6 +511,8 @@ export class AfClient {
       // like any other buffer overflow: surfaced honestly through
       // `pausedDropped`, never silently discarded.
       if (!this.uiStoreRef.live) this.dropPauseBuffer();
+      // The cursor cannot be served: only a fresh snapshot will do.
+      this.synced = false;
       void this.connect();
       return;
     }
@@ -515,6 +543,7 @@ export class AfClient {
     } catch {
       return;
     }
+    this.heartbeatArmed = true;
     const bootId = typeof data?.boot_id === "string" ? data.boot_id : null;
     if (bootId !== null && this.bootId !== null && bootId !== this.bootId) {
       void this.connect();
