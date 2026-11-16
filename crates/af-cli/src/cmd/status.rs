@@ -60,7 +60,34 @@ pub fn build(state_dir: &Path, home: Option<&Path>) -> Value {
                 debug_server::socket_is_served(&state_dir.join(debug_server::SOCKET_NAME))
             }),
         },
+        "python": python_runtime(state_dir),
         "agents": agent_rows,
+    })
+}
+
+/// The managed Python runtime the impact estimates need. Without it tokens
+/// are still recorded; there are no impact figures.
+fn python_runtime(state_dir: &Path) -> Value {
+    let Err(finding) = af_sidecar::runtime_status(state_dir) else {
+        return json!({"ready": true, "problem": Value::Null, "fix": Value::Null,
+            "provisioner": Value::Null, "uv_install_url": af_sidecar::UV_INSTALL_URL});
+    };
+    // What `af python setup` would use here; with neither, installing uv
+    // is the one step that provides everything.
+    let provisioner = af_sidecar::provisioner();
+    let fix = match provisioner {
+        Some(_) => finding.fix_hint,
+        None => format!(
+            "install uv ({}), which also provides Python, then run `af python setup`",
+            af_sidecar::UV_INSTALL_URL
+        ),
+    };
+    json!({
+        "ready": false,
+        "problem": finding.message,
+        "fix": fix,
+        "provisioner": provisioner,
+        "uv_install_url": af_sidecar::UV_INSTALL_URL,
     })
 }
 
@@ -87,6 +114,20 @@ mod tests {
                 "no socket in an empty dir"
             );
         }
+        // No runtime in an empty state directory: said, with what to do.
+        assert_eq!(status["python"]["ready"], false);
+        assert!(status["python"]["problem"]
+            .as_str()
+            .unwrap()
+            .contains("venv"));
+        assert!(status["python"]["fix"]
+            .as_str()
+            .unwrap()
+            .contains("af python setup"));
+        assert!(status["python"]["uv_install_url"]
+            .as_str()
+            .unwrap()
+            .starts_with("https://docs.astral.sh/uv"));
         let ids: Vec<&str> = status["agents"]
             .as_array()
             .unwrap()

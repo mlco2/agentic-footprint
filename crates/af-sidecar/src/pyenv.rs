@@ -323,6 +323,38 @@ fn setup_with_uv(
     Ok(())
 }
 
+/// Where uv's own install instructions live.
+pub const UV_INSTALL_URL: &str = "https://docs.astral.sh/uv/getting-started/installation/";
+
+/// What `af python setup` says when it has nothing to build the runtime
+/// with. uv is the recommendation rather than "install Python": it brings
+/// the right Python itself, so it is the one thing to install.
+pub const NO_PROVISIONER: &str = "neither uv nor a usable Python with the venv module was found on PATH; \
+     install uv (https://docs.astral.sh/uv/getting-started/installation/), which also provides Python, \
+     then run `af python setup` again";
+
+/// What `af python setup` would build the runtime with on this machine:
+/// `"uv"`, else `"python"` (a system interpreter with `venv`), else nothing.
+pub fn provisioner() -> Option<&'static str> {
+    if uv_on_path() {
+        return Some("uv");
+    }
+    let version = manifest().python.version;
+    stdlib_python_candidates(&version)
+        .iter()
+        .any(|(program, args)| {
+            Command::new(program)
+                .args(args)
+                .args(["-I", "-c", "import venv"])
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status()
+                .map(|status| status.success())
+                .unwrap_or(false)
+        })
+        .then_some("python")
+}
+
 /// System-interpreter candidates for the stdlib fallback, as
 /// `(program, leading args)` pairs — the Windows `py` launcher selects the
 /// version through an argument (`py -3.12`), not the program name.
@@ -357,7 +389,7 @@ fn setup_with_stdlib(
                 .map(|status| status.success())
                 .unwrap_or(false)
         })
-        .context("neither uv nor a usable python3 with the venv module was found on PATH")?;
+        .context(NO_PROVISIONER)?;
 
     let venv_status = Command::new(python)
         .current_dir(workdir)

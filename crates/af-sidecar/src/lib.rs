@@ -18,8 +18,8 @@ use serde_json::Value;
 
 pub use pyenv::{
     doctor, environment_fingerprint, floors, installed_versions, meets_floors, provision,
-    requirements_for, runtime_status, setup, venv_interpreter, venv_python, version_key,
-    DoctorFinding, RuntimeVersions, Severity,
+    provisioner, requirements_for, runtime_status, setup, venv_interpreter, venv_python,
+    version_key, DoctorFinding, RuntimeVersions, Severity, UV_INSTALL_URL,
 };
 
 /// Default timeout for [`Sidecar::request`]. Overridable per-instance via
