@@ -145,6 +145,8 @@ pub(crate) struct Inspection {
 
 /// `lsof -F pfn` output: a `p<pid>` line opens a process, then pairs of
 /// `f<descriptor>` and `n<name>` lines list its open files.
+// Used on macOS only (Linux reads /proc); the tests run everywhere.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 fn parse_lsof(output: &str) -> BTreeMap<u32, Vec<(String, PathBuf)>> {
     let mut by_pid: BTreeMap<u32, Vec<(String, PathBuf)>> = BTreeMap::new();
     let mut pid = None;
@@ -227,11 +229,15 @@ fn trailing_uuid(stem: &str) -> Option<String> {
 
 /// The longest an inspection tool may take. Detection runs on the watch
 /// loop, and nothing it learns is worth stalling ingestion for.
+// Used on macOS only (Linux reads /proc); the tests run everywhere.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 const INSPECT_DEADLINE: Duration = Duration::from_secs(2);
 
 /// Runs `command` and returns its standard output, or `None` when it cannot
 /// be started or has not finished within `deadline` (it is then killed).
 /// Its exit status is the caller's to ignore: only what it printed counts.
+// Used on macOS only (Linux reads /proc); the tests run everywhere.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 fn output_within(mut command: Command, deadline: Duration) -> Option<Vec<u8>> {
     use std::io::Read;
     use std::process::Stdio;
