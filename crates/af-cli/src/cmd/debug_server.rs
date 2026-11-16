@@ -2,7 +2,7 @@
 //! (`docs/contracts/debug-console/DATA-CONTRACT.md` §2).
 //!
 //! Runs inside `af watch --debug` only — it is a development-phase server,
-//! bound to loopback, no auth, no writes. Six routes:
+//! bound to loopback, no auth, no writes. Seven routes:
 //!
 //! | Route | Contract |
 //! |---|---|
@@ -12,6 +12,7 @@
 //! | `GET /debug/alloc/{sample_event_id}` | §2.4 allocation trace |
 //! | `GET /debug/report[?level=…]` | §2.6 Contract #2 |
 //! | `GET /debug/health` | §2.7 collectors, rejects, python |
+//! | `GET /debug/status` | watcher boot id, receiver, one row per agent |
 //!
 //! **Frames are the source of truth for the stream, the snapshot and the
 //! `Last-Event-ID` replay alike.** [`DebugState`] keeps one monotonically
@@ -177,6 +178,10 @@ pub struct DebugState {
     reports: std::collections::BTreeMap<String, Value>,
     pending_report_evictions: VecDeque<String>,
     health: Option<Value>,
+    /// The watcher-level status (`GET /debug/status`): boot id, receiver,
+    /// one row per agent. Replace-on-arrival like `health`, but unlike it
+    /// independent of any session, so it exists before the first pass.
+    status: Option<Value>,
     watchdog: Vec<Value>,
     /// Allocation traces by `sample_event_id`, for `GET /debug/alloc/{id}`.
     ///
@@ -226,6 +231,7 @@ impl DebugState {
             reports: std::collections::BTreeMap::new(),
             pending_report_evictions: VecDeque::new(),
             health: None,
+            status: None,
             watchdog: Vec::new(),
             allocs: std::collections::BTreeMap::new(),
             alloc_order: VecDeque::new(),
@@ -318,6 +324,31 @@ impl DebugState {
         while self.frames.len() > self.ring_capacity {
             self.frames.pop_front();
         }
+    }
+
+    /// Replaces the watcher status and tells every live connection.
+    ///
+    /// Deliberately **not** a ring frame: it takes no sequence number, is
+    /// not replayed and is not in the snapshot. A status is a current fact,
+    /// not history — every connection is handed the latest one first (see
+    /// [`DebugState::status_frame`]), which is all a replay could add.
+    pub fn set_status(&mut self, status: Value) {
+        let wire = sse_bytes("status", &status, None);
+        self.status = Some(status);
+        self.connections.retain(|tx| {
+            !matches!(
+                tx.try_send(wire.clone()),
+                Err(mpsc::TrySendError::Disconnected(_)) | Err(mpsc::TrySendError::Full(_))
+            )
+        });
+    }
+
+    /// The stored status as the frame a new connection is written first,
+    /// whatever its cursor.
+    fn status_frame(&self) -> Option<Vec<u8>> {
+        self.status
+            .as_ref()
+            .map(|status| sse_bytes("status", status, None))
     }
 
     /// Registers one SSE connection and returns what it owes the client
@@ -697,6 +728,7 @@ fn dispatch(request: Request, state: &Arc<Mutex<DebugState>>) {
             });
         }
         "/debug/health" => respond_field(request, state, |s| s.health.clone()),
+        "/debug/status" => respond_field(request, state, |s| s.status.clone()),
         "/debug/stream" => stream(request, state, &query),
         path if path.starts_with("/debug/alloc/") => {
             let id = percent_decode(path.trim_start_matches("/debug/alloc/"));
@@ -831,12 +863,17 @@ fn stream(request: Request, state: &Arc<Mutex<DebugState>>, query: &str) {
         .or_else(|| param(query, "from"))
         .and_then(|raw| parse_cursor(&raw));
 
-    let (replay, rx) = {
+    // The status frame and the subscription are taken under one lock, so a
+    // status set concurrently is either this first frame or arrives down
+    // the channel — never missed.
+    let (hello, replay, rx) = {
         let Ok(mut state) = state.lock() else {
             respond_json(request, 500, json!({"error": "state_poisoned"}));
             return;
         };
-        state.subscribe(cursor)
+        let hello = state.status_frame();
+        let (replay, rx) = state.subscribe(cursor);
+        (hello, replay, rx)
     };
 
     // The response is written by hand rather than through
@@ -866,7 +903,14 @@ fn stream(request: Request, state: &Arc<Mutex<DebugState>>, query: &str) {
     if writer.write_all(head.as_bytes()).is_err() || writer.flush().is_err() {
         return;
     }
-    // Replay first, straight off the `Vec` — however long it is, the
+    // The watcher's status leads every connection: it is how a client
+    // learns which process it is talking to before it trusts its cursor.
+    if let Some(hello) = &hello {
+        if write_chunk(&mut writer, hello).is_err() {
+            return;
+        }
+    }
+    // Replay next, straight off the `Vec` — however long it is, the
     // client gets all of it or the connection dies trying. Only then
     // does the bounded live channel take over, picking up at the frame
     // after the replayed range.
@@ -1647,5 +1691,182 @@ mod tests {
             String::from_utf8(body).unwrap(),
             json!({"error": "not_found"}).to_string()
         );
+    }
+
+    // --- /debug/status, the on-connect frame, heartbeat ----------------------
+
+    /// A test server over a caller-owned state, one thread per request so a
+    /// test can hold a stream open and still issue other requests. `done`
+    /// receives a request's path when its handler returns, which is how a
+    /// test observes that a stream's thread ended.
+    struct StatefulServer {
+        addr: SocketAddr,
+        done: Receiver<String>,
+    }
+
+    fn start_test_server_with(state: Arc<Mutex<DebugState>>) -> StatefulServer {
+        let server = Server::http("127.0.0.1:0").expect("bind ephemeral port");
+        let addr = server
+            .server_addr()
+            .to_ip()
+            .expect("bound to an IP address");
+        let (done_tx, done) = mpsc::channel();
+        std::thread::spawn(move || {
+            for request in server.incoming_requests() {
+                let state = Arc::clone(&state);
+                let done_tx = done_tx.clone();
+                std::thread::spawn(move || {
+                    let path = request.url().to_string();
+                    dispatch(request, &state);
+                    let _ = done_tx.send(path);
+                });
+            }
+        });
+        StatefulServer { addr, done }
+    }
+
+    /// One parsed SSE event off the wire.
+    #[derive(Debug)]
+    struct WireEvent {
+        event: String,
+        id: Option<String>,
+        data: Value,
+    }
+
+    fn open_stream(addr: SocketAddr, path: &str) -> TcpStream {
+        let mut stream =
+            TcpStream::connect_timeout(&addr, Duration::from_secs(2)).expect("connect");
+        stream
+            .write_all(format!("GET {path} HTTP/1.1\r\nHost: {addr}\r\n\r\n").as_bytes())
+            .expect("write request");
+        stream
+    }
+
+    /// Reads whatever the stream sends for `window`, parsed into events.
+    fn read_events(stream: &mut TcpStream, window: Duration) -> Vec<WireEvent> {
+        stream
+            .set_read_timeout(Some(Duration::from_millis(20)))
+            .expect("set read timeout");
+        let deadline = std::time::Instant::now() + window;
+        let mut raw = Vec::new();
+        let mut buf = [0u8; 8192];
+        while std::time::Instant::now() < deadline {
+            match stream.read(&mut buf) {
+                Ok(0) => break,
+                Ok(n) => raw.extend_from_slice(&buf[..n]),
+                Err(_) => {}
+            }
+        }
+        let text = String::from_utf8_lossy(&raw);
+        let mut events = Vec::new();
+        let mut event = None;
+        let mut id = None;
+        for line in text.lines() {
+            if let Some(name) = line.strip_prefix("event: ") {
+                event = Some(name.to_string());
+                id = None;
+            } else if let Some(value) = line.strip_prefix("id: ") {
+                id = Some(value.to_string());
+            } else if let Some(data) = line.strip_prefix("data: ") {
+                if let Some(event) = event.take() {
+                    events.push(WireEvent {
+                        event,
+                        id: id.take(),
+                        data: serde_json::from_str(data).expect("frame data is JSON"),
+                    });
+                }
+            }
+        }
+        events
+    }
+
+    fn shared(state: DebugState) -> Arc<Mutex<DebugState>> {
+        Arc::new(Mutex::new(state))
+    }
+
+    #[test]
+    fn status_route_serves_the_stored_payload() {
+        let state = shared(DebugState::default());
+        let server = start_test_server_with(Arc::clone(&state));
+
+        let (status, _, body) = http_get(server.addr, "/debug/status", &[]);
+        assert_eq!(status, 200);
+        assert_eq!(
+            body, b"null",
+            "before the first status there is none to serve"
+        );
+
+        let payload = json!({"boot_id": "b1", "agents": []});
+        state.lock().unwrap().set_status(payload.clone());
+        let (status, _, body) = http_get(server.addr, "/debug/status", &[]);
+        assert_eq!(status, 200);
+        assert_eq!(serde_json::from_slice::<Value>(&body).unwrap(), payload);
+    }
+
+    #[test]
+    fn status_is_the_first_frame_on_every_connection() {
+        let mut seeded = DebugState::default();
+        for i in 0..3 {
+            seeded.publish("fact", json!({"i": i}), i);
+        }
+        seeded.set_status(json!({"boot_id": "b1"}));
+        let server = start_test_server_with(shared(seeded));
+
+        // No cursor, a cursor inside the ring, and one that gets `reset`.
+        for path in [
+            "/debug/stream",
+            "/debug/stream?from=0",
+            "/debug/stream?from=999",
+        ] {
+            let mut stream = open_stream(server.addr, path);
+            let events = read_events(&mut stream, Duration::from_millis(300));
+            let first = events
+                .first()
+                .unwrap_or_else(|| panic!("{path}: no events"));
+            assert_eq!(first.event, "status", "{path}");
+            assert_eq!(first.id, None, "{path}: status is not a ring frame");
+            assert_eq!(first.data["boot_id"], "b1", "{path}");
+        }
+    }
+
+    #[test]
+    fn a_connection_gets_no_status_frame_when_none_is_stored() {
+        let mut seeded = DebugState::default();
+        seeded.publish("fact", json!({"i": 0}), 0);
+        let server = start_test_server_with(shared(seeded));
+        let mut stream = open_stream(server.addr, "/debug/stream?from=-1");
+        let events = read_events(&mut stream, Duration::from_millis(300));
+        assert_eq!(
+            events.iter().map(|e| e.event.as_str()).collect::<Vec<_>>(),
+            ["fact"]
+        );
+    }
+
+    #[test]
+    fn set_status_reaches_live_connections_but_not_the_ring() {
+        let mut state = state_with_frames();
+        let head = state.head_seq();
+        let before = snapshot(&state, 60_000);
+
+        let (_replay, rx) = state.subscribe(Some(head as i64 - 1));
+        state.set_status(json!({"boot_id": "b1"}));
+
+        let wire = String::from_utf8(rx.try_recv().expect("live status frame")).unwrap();
+        assert!(wire.starts_with("event: status\ndata: "), "{wire}");
+        assert!(!wire.contains("\nid: "), "{wire}");
+        assert_eq!(state.head_seq(), head, "status takes no sequence number");
+        assert_eq!(
+            snapshot(&state, 60_000),
+            before,
+            "status is not in the snapshot"
+        );
+        // A later replay of the whole ring carries no status frame.
+        let (replay, _rx) = state.subscribe(Some(EMPTY_CURSOR));
+        let Replay::Frames(frames) = replay else {
+            panic!("expected a replay");
+        };
+        assert!(frames
+            .iter()
+            .all(|bytes| !bytes.starts_with(b"event: status")));
     }
 }
