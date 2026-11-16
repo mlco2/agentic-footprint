@@ -312,7 +312,7 @@ It takes no options and exits 0.
 | `binary` | string or null | Path of the running `af` executable; `null` when it cannot be resolved. |
 | `state_dir` | string | The state directory in use (`AF_STATE_DIR` or the platform default). |
 | `self_update.managed` | boolean | Whether `af self update` manages this binary: `true` only when the installer placed it from a release binary. `false` for a build from a source checkout. |
-| `service.supported` | boolean | Whether `af service` can manage a background receiver here: macOS (launchd), or Linux with a systemd user session. `false` on Windows. |
+| `service.supported` | boolean | Whether `af service` can manage a background receiver here: macOS (launchd), Linux with a systemd user session, or Windows (Task Scheduler). |
 | `service.installed` | boolean | Whether the per-user service definition file exists. It does not say the service is running; `receiver.reachable` and `collector.running` do. |
 | `receiver.endpoint` | string | The OTLP logs endpoint that was checked: the installed service's, otherwise `http://127.0.0.1:4318/v1/logs`. |
 | `receiver.reachable` | boolean | Whether that endpoint answered as the receiver of this af version. |
@@ -323,6 +323,10 @@ It takes no options and exits 0.
 | `python.fix` | string or null | What to do about it, for example ``run `af python setup` ``, or to install uv first when nothing on this machine can build the runtime. `null` when ready. |
 | `python.provisioner` | string or null | What would build the runtime here: `uv`, or `python` (a system Python with the `venv` module). `null` when neither was found, and when the runtime is ready (it is not looked for then). |
 | `python.uv_install_url` | string | Where uv's install instructions are. |
+| `storage.database_bytes` | integer | Size of the store (`state.db` and its write-ahead files), in bytes. `0` when there is none. |
+| `storage.spool_bytes` | integer | Size of the files in the spool folder (what hooks wrote), in bytes. |
+| `storage.spool_files` | integer | How many files the spool folder holds. |
+| `storage.logs_bytes` | integer | Size of the service's log files, in bytes. |
 | `agents` | array | One row per supported agent (`claude-code`, `codex`), installed or not. Empty when the home directory cannot be determined. |
 
 `receiver.reachable` and `collector.running` answer different questions. An
@@ -409,6 +413,12 @@ and running, and Codex not installed. The values are invented.
     "fix": null,
     "provisioner": null,
     "uv_install_url": "https://docs.astral.sh/uv/getting-started/installation/"
+  },
+  "storage": {
+    "database_bytes": 48234496,
+    "spool_bytes": 9318400,
+    "spool_files": 212,
+    "logs_bytes": 81920
   },
   "agents": [
     {

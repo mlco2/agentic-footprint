@@ -77,6 +77,13 @@ timestamped backup (`<file>.bak.<timestamp>`) beside each existing file
 before changing it; restoring one is a manual step.
 [Uninstall](../how-to/uninstall.md) gives the manual steps for each system.
 
+## History is kept without limit
+
+`af` keeps every recorded event, and the spool files they came from. There is
+no retention, archive or compaction yet. `af status` reports what they take
+under `storage`; [Uninstall](../how-to/uninstall.md#4-keep-or-remove-the-data)
+says which files hold the history.
+
 ## Daily totals use one UTC offset
 
 `af summary` cuts local days with a single UTC offset for the whole period:

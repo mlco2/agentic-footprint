@@ -66,7 +66,38 @@ fn build_at(state_dir: &Path, home: Option<&Path>, now_ms: i64) -> Value {
             }),
         },
         "python": python_runtime(state_dir),
+        "storage": storage(state_dir),
         "agents": agent_rows,
+    })
+}
+
+/// What the recorded history takes on disk. `af` keeps all of it (there is
+/// no retention yet), so the sizes are what a person decides from. The
+/// Python runtime is not counted: it is not history, and measuring it means
+/// walking thousands of files.
+fn storage(state_dir: &Path) -> Value {
+    // The files of one directory, not its subdirectories: (bytes, count).
+    let files_in = |dir: &Path, wanted: &dyn Fn(&str) -> bool| -> (u64, u64) {
+        std::fs::read_dir(dir)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .filter(|entry| wanted(&entry.file_name().to_string_lossy()))
+            .filter_map(|entry| entry.metadata().ok())
+            .filter(|meta| meta.is_file())
+            .fold((0, 0), |(bytes, count), meta| {
+                (bytes + meta.len(), count + 1)
+            })
+    };
+    // The database and its write-ahead files.
+    let (database, _) = files_in(state_dir, &|name| name.starts_with("state.db"));
+    let (spool, spool_files) = files_in(&state_dir.join("spool"), &|_| true);
+    let (logs, _) = files_in(&state_dir.join("logs"), &|_| true);
+    json!({
+        "database_bytes": database,
+        "spool_bytes": spool,
+        "spool_files": spool_files,
+        "logs_bytes": logs,
     })
 }
 
@@ -247,5 +278,29 @@ mod tests {
         assert_ne!(codex["state"], "receiving");
         assert_eq!(codex["sessions"], 0);
         assert!(codex["last_event_at"].is_null());
+    }
+    #[test]
+    fn storage_reports_what_the_database_the_spool_and_the_logs_take() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let empty = build(dir.path(), None);
+        assert_eq!(
+            empty["storage"],
+            json!({"database_bytes": 0, "spool_bytes": 0, "spool_files": 0, "logs_bytes": 0})
+        );
+
+        std::fs::write(dir.path().join("state.db"), [0u8; 100]).unwrap();
+        std::fs::write(dir.path().join("state.db-wal"), [0u8; 20]).unwrap();
+        std::fs::create_dir_all(dir.path().join("spool")).unwrap();
+        std::fs::write(dir.path().join("spool").join("a.s1.jsonl"), [0u8; 7]).unwrap();
+        std::fs::write(dir.path().join("spool").join("a.s2.jsonl"), [0u8; 5]).unwrap();
+        std::fs::create_dir_all(dir.path().join("logs")).unwrap();
+        std::fs::write(dir.path().join("logs").join("watch.log"), [0u8; 3]).unwrap();
+        // Not the database: only its own files count.
+        std::fs::write(dir.path().join("install-receipt.json"), [0u8; 50]).unwrap();
+
+        assert_eq!(
+            storage(dir.path()),
+            json!({"database_bytes": 120, "spool_bytes": 12, "spool_files": 2, "logs_bytes": 3})
+        );
     }
 }
