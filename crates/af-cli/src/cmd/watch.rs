@@ -1012,8 +1012,9 @@ struct Watch {
     /// receipt rather than at flush so the status is seconds behind the
     /// agent and not a flush interval behind it.
     activity: BTreeMap<AgentId, agents::Activity>,
-    /// The last status published and when, for [`Watch::publish_status`].
-    last_status: Option<Value>,
+    /// Whether anything the status is built from changed since it was last
+    /// built, and when one was last sent — see [`Watch::publish_status`].
+    status_dirty: bool,
     last_status_at: Option<Instant>,
 }
 
@@ -1134,7 +1135,7 @@ impl Watch {
             home: crate::paths::home_dir(),
             agent_facts: Vec::new(),
             activity: BTreeMap::new(),
-            last_status: None,
+            status_dirty: true,
             last_status_at: None,
         }
     }
@@ -1158,8 +1159,11 @@ impl Watch {
             return;
         }
         if let Some(home) = &self.home {
-            self.agent_facts = agents::detect(home, &self.logs_endpoint());
+            let mut facts = agents::detect(home, &self.logs_endpoint());
+            agents::keep_start_times(&mut facts, &self.agent_facts);
+            self.agent_facts = facts;
         }
+        self.status_dirty = true;
     }
 
     /// Records one received event for agent status. A collector that
@@ -1172,6 +1176,7 @@ impl Watch {
         activity.sessions.insert(session_id.to_string());
         activity.last_event_at_ms =
             Some(activity.last_event_at_ms.map_or(at_ms, |at| at.max(at_ms)));
+        self.status_dirty = true;
     }
 
     /// Activity from telemetry the receiver just accepted.
@@ -1186,14 +1191,7 @@ impl Watch {
     /// Activity from spool files that just changed: the file name carries
     /// the collector and the session, so nothing has to be read.
     fn note_spool_paths(&mut self, paths: &[PathBuf], at_ms: i64) {
-        for path in paths {
-            let Some(file) = path
-                .file_name()
-                .and_then(|name| name.to_str())
-                .and_then(|name| af_spool::parse_spool_filename(name, PathBuf::new()))
-            else {
-                continue;
-            };
+        for file in paths.iter().filter_map(|path| spool_file_of(path)) {
             self.note_activity(&file.collector, &file.session_id, at_ms);
         }
     }
@@ -1212,19 +1210,14 @@ impl Watch {
                     agents::facts_from(agent, false, agents::UserConfig::Absent, None, None)
                 })
         };
-        let started_ms = self
-            .started_at
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .map(|elapsed| elapsed.as_millis() as i64)
-            .unwrap_or(0);
         json!({
             "boot_id": self.boot_id,
-            "started_at": af_core::rfc3339_ms(started_ms),
+            "started_at": agents::system_time_rfc3339(self.started_at),
             "af_version": env!("CARGO_PKG_VERSION"),
             "flush_interval_ms": self.batch_interval.as_millis() as u64,
             "receiver": {
                 "endpoint": receiver["endpoint"],
-                "note": receiver.get("note").cloned().unwrap_or(Value::Null),
+                "note": receiver["note"],
             },
             "agents": AgentId::all()
                 .into_iter()
@@ -1233,12 +1226,16 @@ impl Watch {
         })
     }
 
-    /// Publishes the status when it differs from the last one published
-    /// and [`STATUS_MIN_INTERVAL`] has passed since (or `force`).
+    /// Publishes the status when something that feeds it changed, it
+    /// differs from the one last published, and [`STATUS_MIN_INTERVAL`] has
+    /// passed since (or `force`).
     fn publish_status(&mut self, now: Instant, force: bool) {
         let Some(state) = &self.debug_state else {
             return;
         };
+        if !self.status_dirty && !force {
+            return;
+        }
         let too_soon = self
             .last_status_at
             .is_some_and(|at| now.saturating_duration_since(at) < STATUS_MIN_INTERVAL);
@@ -1246,14 +1243,13 @@ impl Watch {
             return;
         }
         let payload = self.status_payload();
-        if self.last_status.as_ref() == Some(&payload) {
-            return;
+        self.status_dirty = false;
+        if state
+            .lock()
+            .is_ok_and(|mut state| state.set_status(payload))
+        {
+            self.last_status_at = Some(now);
         }
-        if let Ok(mut state) = state.lock() {
-            state.set_status(payload.clone());
-        }
-        self.last_status = Some(payload);
-        self.last_status_at = Some(now);
     }
 
     /// One wake's work: ingest, supervise, rebuild, publish.
@@ -1559,11 +1555,7 @@ impl Watch {
             if path.extension().is_none_or(|ext| ext != "jsonl") {
                 return false;
             }
-            let Some(file) = path
-                .file_name()
-                .and_then(|name| name.to_str())
-                .and_then(|name| af_spool::parse_spool_filename(name, PathBuf::new()))
-            else {
+            let Some(file) = spool_file_of(path) else {
                 return true;
             };
             self.spool_state
@@ -2604,6 +2596,13 @@ impl CollectorStats {
             emits: BTreeSet::new(),
         }
     }
+}
+
+/// The collector and session a spool file's name stands for; `None` for a
+/// path that is not a spool file.
+fn spool_file_of(path: &Path) -> Option<af_spool::SpoolFile> {
+    let name = path.file_name()?.to_str()?;
+    af_spool::parse_spool_filename(name, PathBuf::new())
 }
 
 /// `cc-hooks.sess-1.jsonl` → `cc-hooks:sess-1`, the key the health

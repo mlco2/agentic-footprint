@@ -52,26 +52,29 @@ function staleNote(agent: AgentStatus): string | null {
     : `PIDs ${stale.join(", ")} started before their settings changed — restart them`;
 }
 
+/** Mark and wording for every state but `receiving`, whose label carries
+ * a recency. */
+const WORDING: Record<string, [AgentMark, string]> = {
+  needs_restart: ["◐", "configured, needs restart"],
+  waiting: ["◐", "configured, waiting for first event"],
+  misconfigured: ["○", "misconfigured"],
+  not_configured: ["○", "not configured"],
+  not_installed: ["○", "not installed"],
+};
+
 function view(agent: AgentStatus, nowMs: number): AgentRowView {
-  const base = { id: agent.id, name: agent.name, action: agent.action };
-  switch (agent.state) {
-    case "receiving":
-      return { ...base, mark: "●", label: recency(agent.last_event_at, nowMs), note: staleNote(agent) };
-    case "needs_restart":
-      return { ...base, mark: "◐", label: "configured, needs restart", note: staleNote(agent) };
-    case "waiting":
-      return { ...base, mark: "◐", label: "configured, waiting for first event", note: agent.detail };
-    case "misconfigured":
-      return { ...base, mark: "○", label: "misconfigured", note: agent.detail };
-    case "not_configured":
-      return { ...base, mark: "○", label: "not configured", note: agent.detail };
-    case "not_installed":
-      return { ...base, mark: "○", label: "not installed", note: agent.detail };
-    default:
-      // A state this console does not know (a newer watcher): shown as the
-      // watcher spelled it rather than dropped or guessed at.
-      return { ...base, mark: "○", label: String(agent.state), note: agent.detail };
-  }
+  const receiving = agent.state === "receiving";
+  // A state this console does not know (a newer watcher) is shown as the
+  // watcher spelled it rather than dropped or guessed at.
+  const [mark, label] = receiving ? (["●", recency(agent.last_event_at, nowMs)] as const) : (WORDING[agent.state] ?? ["○", String(agent.state)]);
+  return {
+    id: agent.id,
+    name: agent.name,
+    mark,
+    label,
+    note: receiving || agent.state === "needs_restart" ? staleNote(agent) : agent.detail,
+    action: agent.action,
+  };
 }
 
 export function selectAgentRows(status: WatcherStatus | null, nowMs: number): AgentRowView[] {

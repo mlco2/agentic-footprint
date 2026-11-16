@@ -330,13 +330,7 @@ impl DebugState {
             _ => {}
         }
 
-        let wire = sse_bytes(event, &wire_data, Some(seq));
-        self.connections.retain(|tx| {
-            !matches!(
-                tx.try_send(wire.clone()),
-                Err(mpsc::TrySendError::Disconnected(_)) | Err(mpsc::TrySendError::Full(_))
-            )
-        });
+        self.fan_out(&sse_bytes(event, &wire_data, Some(seq)));
 
         self.frames.push_back(Frame {
             seq,
@@ -355,12 +349,24 @@ impl DebugState {
     /// not replayed and is not in the snapshot. A status is a current fact,
     /// not history — every connection is handed the latest one first (see
     /// [`DebugState::status_frame`]), which is all a replay could add.
-    pub fn set_status(&mut self, status: Value) {
-        let wire = sse_bytes("status", &status, None);
+    ///
+    /// Returns whether anything was sent: a status equal to the stored one
+    /// is not news, and is not repeated.
+    pub fn set_status(&mut self, status: Value) -> bool {
+        if self.status.as_ref() == Some(&status) {
+            return false;
+        }
+        self.fan_out(&sse_bytes("status", &status, None));
         self.status = Some(status);
+        true
+    }
+
+    /// Hands one wire frame to every live connection, dropping those that
+    /// are gone or whose queue is full (a slow reader replays later).
+    fn fan_out(&mut self, wire: &[u8]) {
         self.connections.retain(|tx| {
             !matches!(
-                tx.try_send(wire.clone()),
+                tx.try_send(wire.to_vec()),
                 Err(mpsc::TrySendError::Disconnected(_)) | Err(mpsc::TrySendError::Full(_))
             )
         });

@@ -202,10 +202,10 @@ pub(crate) fn agent_for_collector(collector: &str) -> Option<AgentId> {
     match collector {
         // `cc-hooks` is the hook collector's name and its spool file prefix;
         // `otlp-cc` is the OTLP normalizer's.
-        "claude-code" | "cc-hooks" | "otlp-cc" => Some(AgentId::ClaudeCode),
+        "claude-code" | super::hook::COLLECTOR_NAME | "otlp-cc" => Some(AgentId::ClaudeCode),
         "codex" => Some(AgentId::Codex),
         #[cfg(feature = "experimental-opencode")]
-        "opencode" => Some(AgentId::OpenCode),
+        super::opencode::COLLECTOR_NAME => Some(AgentId::OpenCode),
         other if other.starts_with("otlp-codex") => Some(AgentId::Codex),
         _ => None,
     }
@@ -270,9 +270,7 @@ fn inspect_claude_file(path: &Path, logs_endpoint: &str) -> UserConfig {
         return UserConfig::Absent;
     }
     // What `af setup` writes: the base endpoint, without `/v1/logs`.
-    let expected = logs_endpoint
-        .strip_suffix("/v1/logs")
-        .unwrap_or(logs_endpoint);
+    let expected = setup::logs_base_endpoint(logs_endpoint).unwrap_or(logs_endpoint);
     let exported = settings
         .pointer("/env/OTEL_EXPORTER_OTLP_ENDPOINT")
         .and_then(Value::as_str);
@@ -397,6 +395,37 @@ pub(crate) fn detect(home: &Path, logs_endpoint: &str) -> Vec<AgentFacts> {
         .collect()
 }
 
+/// `ps` reports elapsed time in whole seconds, so the start time derived
+/// from it moves by up to a second between two listings of the same
+/// process. Carries the earlier estimate over, so that detecting twice
+/// with nothing changed yields equal facts.
+pub(crate) fn keep_start_times(new: &mut [AgentFacts], old: &[AgentFacts]) {
+    const JITTER: Duration = Duration::from_secs(2);
+    for facts in new {
+        let Some(before) = old
+            .iter()
+            .find(|old| old.agent == facts.agent)
+            .and_then(|old| old.processes.as_deref())
+        else {
+            continue;
+        };
+        for process in facts.processes.iter_mut().flatten() {
+            let same = before.iter().find(|old| {
+                old.pid == process.pid
+                    && old.stale == process.stale
+                    && old
+                        .started
+                        .duration_since(process.started)
+                        .unwrap_or_else(|earlier| earlier.duration())
+                        < JITTER
+            });
+            if let Some(same) = same {
+                process.started = same.started;
+            }
+        }
+    }
+}
+
 /// What a watcher has received from one agent since it started.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct Activity {
@@ -404,7 +433,7 @@ pub(crate) struct Activity {
     pub(crate) last_event_at_ms: Option<i64>,
 }
 
-fn system_time_rfc3339(time: SystemTime) -> Option<String> {
+pub(crate) fn system_time_rfc3339(time: SystemTime) -> Option<String> {
     let ms = time.duration_since(UNIX_EPOCH).ok()?.as_millis();
     af_core::rfc3339_ms(i64::try_from(ms).ok()?)
 }
@@ -477,6 +506,40 @@ pub(crate) fn agent_row(facts: &AgentFacts, activity: Option<&Activity>) -> Valu
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn keep_start_times_absorbs_ps_jitter_but_not_a_reused_pid() {
+        let t0 = UNIX_EPOCH + Duration::from_secs(1_000_000);
+        let facts = |processes: Vec<(u32, SystemTime)>| {
+            vec![AgentFacts {
+                agent: AgentId::ClaudeCode,
+                installed: true,
+                config: UserConfig::Absent,
+                processes: Some(
+                    processes
+                        .into_iter()
+                        .map(|(pid, started)| ProcessFact {
+                            pid,
+                            started,
+                            stale: false,
+                        })
+                        .collect(),
+                ),
+            }]
+        };
+        let old = facts(vec![(1, t0), (2, t0)]);
+        let mut new = facts(vec![
+            (1, t0 + Duration::from_millis(900)),
+            (2, t0 + Duration::from_secs(3600)),
+            (3, t0),
+        ]);
+        keep_start_times(&mut new, &old);
+        assert_eq!(
+            new,
+            facts(vec![(1, t0), (2, t0 + Duration::from_secs(3600)), (3, t0)]),
+            "pid 1 keeps its first estimate; pid 2 is another process under a reused pid"
+        );
+    }
 
     const ENDPOINT: &str = "http://127.0.0.1:4318/v1/logs";
 

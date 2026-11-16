@@ -83,8 +83,6 @@ export interface AfClientDeps {
   fetchImpl?: typeof fetch;
   createEventSource?: EventSourceFactory;
   visibility?: VisibilityLike;
-  /** Wall clock in ms, for the heartbeat. Injectable so a test can jump it. */
-  now?: () => number;
 }
 
 const SSE_EVENT_NAMES: SseEventName[] = ["fact", "decision", "alloc", "reject", "gap", "watchdog", "report", "health", "session", "reset", "status", "ping"];
@@ -123,7 +121,6 @@ export class AfClient {
   private readonly healthStoreRef: HealthStore;
   private readonly statusStoreRef: StatusStore;
   private readonly visibilityRef: VisibilityLike;
-  private readonly now: () => number;
   private readonly uiStoreRef: UiStore;
   private readonly fetchImplRef: typeof fetch;
   private readonly createEventSource: EventSourceFactory;
@@ -174,7 +171,6 @@ export class AfClient {
     this.healthStoreRef = deps.healthStore ?? defaultHealthStore;
     this.statusStoreRef = deps.statusStore ?? defaultStatusStore;
     this.visibilityRef = deps.visibility ?? browserVisibility;
-    this.now = deps.now ?? (() => Date.now());
     this.uiStoreRef = deps.uiStore ?? defaultUiStore;
     this.fetchImplRef = deps.fetchImpl ?? boundFetch;
     this.createEventSource = deps.createEventSource ?? ((url: string) => new EventSource(url) as unknown as EventSourceLike);
@@ -282,7 +278,6 @@ export class AfClient {
     this.seenCount = 0;
     this.dropPauseBuffer();
     this.lastSeq = 0;
-    this.synced = false;
   }
 
   /** The real `af watch --debug` server pushes `report`/`health` frames per
@@ -384,7 +379,7 @@ export class AfClient {
     // The heartbeat clock starts with the attempt, not with the first
     // event: a connection that is accepted and then says nothing at all is
     // as dead as one that went quiet later.
-    this.lastEventAtMs = this.now();
+    this.lastEventAtMs = Date.now();
     for (const name of SSE_EVENT_NAMES) {
       es.addEventListener(name, (ev) => {
         if (this.es === es) this.handleFrame(name, ev);
@@ -453,8 +448,7 @@ export class AfClient {
    * while it slept, so the heartbeat is stale, and the watcher may have
    * been restarted meanwhile. One full re-sync covers both. */
   private handleWake(): void {
-    const healthy = this.es !== null && (!this.heartbeatArmed || this.now() - this.lastEventAtMs < HEARTBEAT_TIMEOUT_MS);
-    if (healthy) return;
+    if (this.streamHealthy()) return;
     this.backoffMs = BACKOFF_MIN_MS;
     if (this.status === "live") this.status = "reconnecting";
     void this.connect();
@@ -469,18 +463,21 @@ export class AfClient {
    * is legitimately silent for a whole flush interval, and timing it out
    * would mean dropping and re-syncing a healthy connection every 45s. */
   private checkHeartbeat(): void {
-    if (this.es === null || !this.heartbeatArmed) return;
-    if (this.now() - this.lastEventAtMs < HEARTBEAT_TIMEOUT_MS) return;
-    this.closeEventSource();
-    this.registerFailureAndScheduleRetry();
+    if (this.es !== null && !this.streamHealthy()) this.handleError();
+  }
+
+  /** A stream exists and — for a watcher that pings — has been heard from
+   * within the heartbeat timeout. */
+  private streamHealthy(): boolean {
+    return this.es !== null && (!this.heartbeatArmed || Date.now() - this.lastEventAtMs < HEARTBEAT_TIMEOUT_MS);
   }
 
   /** The stream opened, or delivered something: the transport works. */
   private onTransportAlive(): void {
-    this.lastEventAtMs = this.now();
+    this.lastEventAtMs = Date.now();
     this.consecutiveFailures = 0;
     this.backoffMs = BACKOFF_MIN_MS;
-    if (this.status !== "live") this.status = "live";
+    this.status = "live";
   }
 
   // ---------------------------------------------------------------------

@@ -870,7 +870,7 @@ pub(crate) fn hook_entry_command(value: &Value) -> Option<&str> {
         .find_map(|hook| hook.get("command")?.as_str())
 }
 
-fn logs_base_endpoint(endpoint: &str) -> Result<&str> {
+pub(crate) fn logs_base_endpoint(endpoint: &str) -> Result<&str> {
     endpoint
         .strip_suffix("/v1/logs")
         .context("OTLP logs endpoint must end with /v1/logs")

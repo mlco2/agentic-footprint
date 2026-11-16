@@ -15,7 +15,7 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 use time::{format_description::well_known::Rfc3339, OffsetDateTime};
 
-const COLLECTOR_NAME: &str = "opencode";
+pub(super) const COLLECTOR_NAME: &str = "opencode";
 const COLLECTOR_VERSION: &str = "0.1.0";
 const CURSOR_VERSION: u8 = 1;
 const RECONNECT_INITIAL: Duration = Duration::from_millis(250);

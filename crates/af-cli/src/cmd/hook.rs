@@ -42,7 +42,7 @@ use af_events::{
 use af_otlp::sanitize_id;
 
 const SCHEMA_VERSION: &str = "0.1.0";
-const COLLECTOR_NAME: &str = "cc-hooks";
+pub(super) const COLLECTOR_NAME: &str = "cc-hooks";
 const COLLECTOR_VERSION: &str = "0.1.0";
 
 /// Entry point behind `af hook`. Always returns 0 — see the module doc.
