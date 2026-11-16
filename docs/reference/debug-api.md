@@ -144,7 +144,8 @@ collector comes back.
 `/debug/health` lists one row per collector and session (with its transport:
 `jsonl spool` or `POST /v1/logs`), the receiver's own counters under
 `otlp_receiver` (`logs_requests`, `logs_accepted`, `logs_dropped`,
-`logs_unclaimed`, `bodies_quarantined`), and the most recent rejects, which
+`logs_unclaimed`, `bodies_quarantined`, and `bodies_timed_out`: requests
+given up on because their body did not arrive within ten seconds), and the most recent rejects, which
 carry metadata only. Values come from what `af watch` has flushed to the store,
 so they can be up to one flush interval (a minute) old; the receiver counters
 are live.

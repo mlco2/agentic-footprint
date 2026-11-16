@@ -25,7 +25,7 @@ pub use normalize::{
     MAX_ATTRIBUTE_BYTES, MAX_ATTRIBUTE_KEY_BYTES, MAX_LOG_RECORDS, MAX_REJECT_KEYS,
 };
 pub use sanitize::sanitize_id;
-pub use server::{serve, Counters, ServerHandle};
+pub use server::{serve, serve_with_body_deadline, Counters, ServerHandle};
 
 /// Response header every receiver response carries, valued with this
 /// crate's version: how `af setup`/`af service` tell an af receiver from

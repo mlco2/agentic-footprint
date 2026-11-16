@@ -25,8 +25,12 @@
 //!
 //! tiny_http 0.12 does not expose the body socket for a read timeout. To keep
 //! one slow client from serializing ingestion, requests run on a bounded
-//! worker pool. Excess work receives a retryable `503`, and shutdown waits
-//! only a bounded time for a worker stuck in a body read.
+//! worker pool, and to keep a few stalled clients from holding every worker,
+//! a body is read on a thread of its own that the worker waits for only
+//! [`BODY_READ_DEADLINE`]: past it the worker moves on and the read is left
+//! to end when its client closes (at most [`MAX_BODY_READS`] at a time).
+//! Excess work receives a retryable `503`, and shutdown waits only a
+//! bounded time for a worker.
 
 use std::io::{self, Read};
 use std::net::SocketAddr;
@@ -53,6 +57,13 @@ const MAX_BODY_BYTES: u64 = 4 * 1024 * 1024;
 const WORKER_COUNT: usize = 4;
 const REQUEST_QUEUE_CAPACITY: usize = 16;
 const SHUTDOWN_GRACE: Duration = Duration::from_millis(250);
+/// How long a worker waits for a request's body. An exporter on loopback
+/// sends its few KiB at once; ten seconds is a client that has stopped.
+const BODY_READ_DEADLINE: Duration = Duration::from_secs(10);
+/// Body reads in progress at once, abandoned ones included: each is a
+/// parked thread and a buffer of at most [`MAX_BODY_BYTES`]. Past this the
+/// receiver answers a retryable `503` without reading.
+const MAX_BODY_READS: u64 = 64;
 
 /// Handle to a running [`serve`] instance. Dropping it (or calling
 /// [`ServerHandle::shutdown`] explicitly) unblocks the server's
@@ -90,6 +101,9 @@ pub struct Counters {
     bodies_quarantined: AtomicU64,
     metrics_discarded: AtomicU64,
     requests_overloaded: AtomicU64,
+    bodies_timed_out: AtomicU64,
+    /// Body reads in progress right now (a gauge, not a count).
+    body_reads: AtomicU64,
 }
 
 impl Counters {
@@ -151,6 +165,11 @@ impl Counters {
     pub fn requests_overloaded(&self) -> u64 {
         self.requests_overloaded.load(Ordering::Relaxed)
     }
+
+    /// Requests given up on because their body did not arrive in time.
+    pub fn bodies_timed_out(&self) -> u64 {
+        self.bodies_timed_out.load(Ordering::Relaxed)
+    }
 }
 
 impl ServerHandle {
@@ -198,6 +217,16 @@ impl Drop for ServerHandle {
 /// thread. Normalized events and metadata-only rejects are sent to `sink`;
 /// the receiver writes nothing to disk.
 pub fn serve(addr: SocketAddr, sink: SyncSender<Inbound>) -> anyhow::Result<ServerHandle> {
+    serve_with_body_deadline(addr, sink, BODY_READ_DEADLINE)
+}
+
+/// [`serve`] with the time a request's body is waited for given (tests use
+/// a short one).
+pub fn serve_with_body_deadline(
+    addr: SocketAddr,
+    sink: SyncSender<Inbound>,
+    body_deadline: Duration,
+) -> anyhow::Result<ServerHandle> {
     // Unauthenticated by design, so reachable only from this machine: the
     // Host check alone cannot stop a LAN client that sends `Host: 127.0.0.1`.
     if !addr.ip().is_loopback() {
@@ -222,6 +251,7 @@ pub fn serve(addr: SocketAddr, sink: SyncSender<Inbound>) -> anyhow::Result<Serv
             Arc::clone(&request_rx),
             sink.clone(),
             Arc::clone(&counters),
+            body_deadline,
         ));
     }
 
@@ -268,6 +298,7 @@ fn spawn_worker(
     request_rx: Arc<Mutex<Receiver<tiny_http::Request>>>,
     sink: SyncSender<Inbound>,
     counters: Arc<Counters>,
+    body_deadline: Duration,
 ) -> WorkerHandle {
     let (finished_tx, finished) = mpsc::channel();
     let thread = std::thread::spawn(move || {
@@ -279,7 +310,7 @@ fn spawn_worker(
             let Ok(request) = request else {
                 break;
             };
-            handle_request(request, &sink, &counters);
+            handle_request(request, &sink, &counters, body_deadline);
         }
         let _ = finished_tx.send(());
     });
@@ -289,7 +320,12 @@ fn spawn_worker(
     }
 }
 
-fn handle_request(request: tiny_http::Request, sink: &SyncSender<Inbound>, counters: &Counters) {
+fn handle_request(
+    request: tiny_http::Request,
+    sink: &SyncSender<Inbound>,
+    counters: &Arc<Counters>,
+    body_deadline: Duration,
+) {
     // DNS-rebinding guard: a page on the open web can resolve its own
     // hostname to 127.0.0.1 and POST here, but the `Host` it sends is
     // still its own. An absent `Host` is allowed — a legitimate exporter
@@ -335,8 +371,8 @@ fn handle_request(request: tiny_http::Request, sink: &SyncSender<Inbound>, count
         return;
     }
     match url.as_str() {
-        "/v1/logs" => handle_logs(request, sink, counters),
-        "/v1/metrics" => handle_metrics(request, counters),
+        "/v1/logs" => handle_logs(request, sink, counters, body_deadline),
+        "/v1/metrics" => handle_metrics(request, counters, body_deadline),
         _ => respond(request, 404, "not found"),
     }
 }
@@ -358,14 +394,65 @@ fn read_capped_body(request: &mut tiny_http::Request) -> io::Result<Option<Vec<u
     Ok(Some(body))
 }
 
+/// Reads the request's body on a thread of its own and waits for it at most
+/// `deadline`; gives the request back with what was read.
+///
+/// `None`: there is nothing left to answer. Either the body did not arrive
+/// in time (the worker is free again; the read ends, and the connection is
+/// closed, when the client gives up), or too many reads are already in
+/// progress and the request was answered with a retryable `503`.
+fn read_body_within(
+    mut request: tiny_http::Request,
+    deadline: Duration,
+    counters: &Arc<Counters>,
+) -> Option<(tiny_http::Request, io::Result<Option<Vec<u8>>>)> {
+    if counters.body_reads.load(Ordering::Relaxed) >= MAX_BODY_READS {
+        counters.requests_overloaded.fetch_add(1, Ordering::Relaxed);
+        respond_retryable(
+            request,
+            503,
+            "receiver_overloaded",
+            "too many requests are waiting for their body",
+        );
+        return None;
+    }
+    let (done_tx, done) = mpsc::sync_channel(1);
+    let reader_counters = Arc::clone(counters);
+    counters.body_reads.fetch_add(1, Ordering::Relaxed);
+    let spawned = std::thread::Builder::new()
+        .name("af-otlp-body".to_string())
+        .spawn(move || {
+            let body = read_capped_body(&mut request);
+            reader_counters.body_reads.fetch_sub(1, Ordering::Relaxed);
+            // Nobody waiting any more: the request is dropped here, which
+            // closes its connection.
+            let _ = done_tx.send((request, body));
+        });
+    if spawned.is_err() {
+        // The request went with the closure: its connection is closed.
+        counters.body_reads.fetch_sub(1, Ordering::Relaxed);
+        return None;
+    }
+    match done.recv_timeout(deadline) {
+        Ok(read) => Some(read),
+        Err(_) => {
+            counters.bodies_timed_out.fetch_add(1, Ordering::Relaxed);
+            None
+        }
+    }
+}
+
 /// `POST /v1/metrics` — read the body (draining the connection cleanly)
 /// and discard it. No Contract #1 shape for raw OTel metrics in this PoC;
 /// Claude Code's exporter only needs a 2xx to consider the batch
 /// delivered.
-fn handle_metrics(mut request: tiny_http::Request, counters: &Counters) {
+fn handle_metrics(request: tiny_http::Request, counters: &Arc<Counters>, body_deadline: Duration) {
+    let Some((request, body)) = read_body_within(request, body_deadline, counters) else {
+        return;
+    };
     // A read error still counts and still 200s: the body is discarded
     // either way, and the exporter must not back off over it.
-    if let Ok(None) = read_capped_body(&mut request) {
+    if let Ok(None) = body {
         respond(request, 413, "payload too large");
         return;
     }
@@ -373,9 +460,17 @@ fn handle_metrics(mut request: tiny_http::Request, counters: &Counters) {
     respond(request, 200, "{}");
 }
 
-fn handle_logs(mut request: tiny_http::Request, sink: &SyncSender<Inbound>, counters: &Counters) {
+fn handle_logs(
+    request: tiny_http::Request,
+    sink: &SyncSender<Inbound>,
+    counters: &Arc<Counters>,
+    body_deadline: Duration,
+) {
     counters.logs_requests.fetch_add(1, Ordering::Relaxed);
-    let raw = match read_capped_body(&mut request) {
+    let Some((request, body)) = read_body_within(request, body_deadline, counters) else {
+        return;
+    };
+    let raw = match body {
         Ok(Some(raw)) => raw,
         // Over the cap is the one case that does *not* get the receiver's
         // usual "always 200 so the exporter never backs off": there is no

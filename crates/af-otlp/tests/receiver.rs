@@ -565,12 +565,19 @@ fn post_with_headers(
 }
 
 fn start_stalled_post(addr: SocketAddr) -> TcpStream {
+    start_stalled_post_of(addr, 1024)
+}
+
+/// A request that announces `length` bytes and sends one. tiny_http reads a
+/// small body itself before handing the request over; a large one is read
+/// by whoever handles the request, which is where a worker can be held.
+fn start_stalled_post_of(addr: SocketAddr, length: usize) -> TcpStream {
     let mut stream = TcpStream::connect(addr).expect("connect stalled client");
-    stream
-        .write_all(
-            b"POST /v1/logs HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nContent-Length: 1024\r\nConnection: close\r\n\r\n{",
-        )
-        .expect("write incomplete request");
+    write!(
+        stream,
+        "POST /v1/logs HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nContent-Length: {length}\r\nConnection: close\r\n\r\n{{"
+    )
+    .expect("write incomplete request");
     stream
 }
 
@@ -622,6 +629,49 @@ fn one_stalled_body_does_not_block_other_ingestion() {
     assert!(
         started.elapsed() < Duration::from_secs(1),
         "a stalled client serialized otherwise independent ingestion"
+    );
+    drop(stalled);
+}
+
+/// More stalled clients than there are workers: after the body deadline the
+/// workers are free again, whether or not those clients ever finish.
+#[test]
+fn stalled_bodies_are_given_up_on_and_ingestion_resumes() {
+    let (sink, _inbox) = mpsc::sync_channel(8);
+    let handle = af_otlp::serve_with_body_deadline(
+        "127.0.0.1:0".parse().unwrap(),
+        sink,
+        Duration::from_millis(300),
+    )
+    .expect("server starts");
+    let stalled: Vec<TcpStream> = (0..6)
+        .map(|_| start_stalled_post_of(handle.addr(), 100_000))
+        .collect();
+    thread::sleep(Duration::from_millis(900));
+
+    let body = serde_json::to_vec(&fixture("logs-api-request.json")).unwrap();
+    let mut stream = TcpStream::connect(handle.addr()).expect("connect");
+    stream
+        .set_read_timeout(Some(Duration::from_secs(3)))
+        .unwrap();
+    write!(
+        stream,
+        "POST /v1/logs HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        body.len()
+    )
+    .unwrap();
+    stream.write_all(&body).unwrap();
+    let mut response = String::new();
+    let _ = stream.read_to_string(&mut response);
+    assert!(
+        response.starts_with("HTTP/1.1 200"),
+        "stalled clients still hold the receiver: {response:?}"
+    );
+    assert!(
+        handle.counters().bodies_timed_out() >= 4,
+        "timed out: {}, overloaded: {}",
+        handle.counters().bodies_timed_out(),
+        handle.counters().requests_overloaded()
     );
     drop(stalled);
 }

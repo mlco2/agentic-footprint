@@ -2607,6 +2607,7 @@ impl Watch {
                 health["logs_unclaimed"] = json!(counters.logs_unclaimed());
                 health["bodies_quarantined"] = json!(counters.bodies_quarantined());
                 health["metrics_discarded"] = json!(counters.metrics_discarded());
+                health["bodies_timed_out"] = json!(counters.bodies_timed_out());
             }
             None => {
                 health["note"] = json!("no OTLP receiver is running in this af watch process");
