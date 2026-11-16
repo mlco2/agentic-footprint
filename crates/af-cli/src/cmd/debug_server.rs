@@ -282,6 +282,11 @@ impl DebugState {
     }
 
     #[cfg(test)]
+    pub(crate) fn has_health(&self) -> bool {
+        self.health.is_some()
+    }
+
+    #[cfg(test)]
     pub(crate) fn want(&mut self, session_id: &str) {
         self.wanted.insert(session_id.to_string());
     }
@@ -598,7 +603,12 @@ impl DebugState {
 
     /// `map`'s entry for `session_id`; a miss for a named session is
     /// recorded for the watcher, which publishes it shortly after.
-    fn by_session_or_want(&mut self, reports: bool, session_id: Option<&str>) -> Option<Value> {
+    fn by_session_or_want(
+        &mut self,
+        reports: bool,
+        session_id: Option<&str>,
+        may_want: bool,
+    ) -> Option<Value> {
         let map = if reports {
             &self.reports
         } else {
@@ -606,7 +616,7 @@ impl DebugState {
         };
         let found = DebugState::by_session(map, session_id);
         if let (None, Some(id)) = (&found, session_id) {
-            if self.wanted.len() < WANTED_CAP {
+            if may_want && self.wanted.len() < WANTED_CAP {
                 self.wanted.insert(id.to_string());
             }
         }
@@ -667,8 +677,10 @@ impl DebugState {
 pub struct DebugServer {
     /// `None` for a server on a Unix socket.
     addr: Option<SocketAddr>,
-    /// The socket file to remove on the way out, for a server on one.
-    socket: Option<std::path::PathBuf>,
+    /// The socket file to remove on the way out, for a server on one, and
+    /// the file's identity when it was bound: a path that has since become
+    /// another collector's socket is not this server's to remove.
+    socket: Option<(std::path::PathBuf, Option<(u64, u64)>)>,
     server: Arc<Server>,
     state: Arc<Mutex<DebugState>>,
     thread: Option<JoinHandle<()>>,
@@ -698,8 +710,16 @@ impl DebugServer {
             state.disconnect_all();
         }
         self.server.unblock();
-        if let Some(socket) = self.socket.take() {
-            let _ = std::fs::remove_file(socket);
+        if let Some((socket, bound_as)) = self.socket.take() {
+            if file_identity(&socket) == bound_as {
+                let _ = std::fs::remove_file(socket);
+            } else {
+                // The HTTP library unlinks its socket path when the server
+                // is dropped, whoever owns the file by then. Never dropping
+                // it is the only way to leave the other collector's socket
+                // alone; this process is on its way out.
+                std::mem::forget(Arc::clone(&self.server));
+            }
         }
         let Some(thread) = self.thread.take() else {
             return;
@@ -773,7 +793,23 @@ pub fn serve_unix(path: &std::path::Path, state: Arc<Mutex<DebugState>>) -> Resu
         .map_err(|err| anyhow::anyhow!("failed to bind {}: {err}", path.display()))?;
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
         .with_context(|| format!("restrict {}", path.display()))?;
-    Ok(run(server, state, None, Some(path.to_path_buf())))
+    let socket = (path.to_path_buf(), file_identity(path));
+    Ok(run(server, state, None, Some(socket)))
+}
+
+/// Device and inode of `path`, where there are such things.
+fn file_identity(path: &std::path::Path) -> Option<(u64, u64)> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let meta = std::fs::symlink_metadata(path).ok()?;
+        Some((meta.dev(), meta.ino()))
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+        None
+    }
 }
 
 /// The console socket's file name inside the state directory.
@@ -809,7 +845,7 @@ fn run(
     server: Server,
     state: Arc<Mutex<DebugState>>,
     addr: Option<SocketAddr>,
-    socket: Option<std::path::PathBuf>,
+    socket: Option<(std::path::PathBuf, Option<(u64, u64)>)>,
 ) -> DebugServer {
     let server = Arc::new(server);
     let thread_server = Arc::clone(&server);
@@ -1003,10 +1039,13 @@ fn respond_session_field(
     reports: bool,
     session_id: Option<&str>,
 ) {
+    // Asking makes the watcher work, so only the console's own pages may:
+    // a request another site's page sent carries that site's `Origin`.
+    let may_want = header_value(&request, "Origin").is_none() || allowed_origin(&request).is_some();
     let body = state
         .lock()
         .ok()
-        .and_then(|mut s| s.by_session_or_want(reports, session_id))
+        .and_then(|mut s| s.by_session_or_want(reports, session_id, may_want))
         .unwrap_or(Value::Null);
     respond_json(request, 200, body);
 }
@@ -2180,6 +2219,41 @@ mod tests {
             vec!["old".to_string()]
         );
         assert!(state.lock().unwrap().take_wanted().is_empty(), "taken once");
+    }
+
+    #[test]
+    fn a_page_from_another_origin_cannot_make_the_watcher_work() {
+        let state = shared(DebugState::default());
+        let server = start_test_server_with(Arc::clone(&state));
+        let _ = http_get(
+            server.addr,
+            "/debug/session?session_id=old",
+            &[("Origin", "https://evil.example")],
+        );
+        assert!(state.lock().unwrap().take_wanted().is_empty());
+        let _ = http_get(
+            server.addr,
+            "/debug/session?session_id=old",
+            &[("Origin", "http://127.0.0.1:9414")],
+        );
+        assert_eq!(
+            state.lock().unwrap().take_wanted().len(),
+            1,
+            "the console's own page may"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_server_leaves_a_socket_file_that_is_no_longer_its_own() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("console.sock");
+        let server = serve_unix(&path, shared(DebugState::default())).expect("serve");
+        // Another collector replaced the file while this one was running.
+        std::fs::remove_file(&path).expect("unlink");
+        let _other = std::os::unix::net::UnixListener::bind(&path).expect("bind");
+        drop(server);
+        assert!(path.exists(), "the other collector's socket survives");
     }
 
     #[test]

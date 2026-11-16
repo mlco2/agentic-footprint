@@ -135,9 +135,9 @@ mod imp {
         }
     }
 
-    /// One connection: both directions until either side ends, then both
-    /// sockets are closed, so the collector sees a closed tab at once and
-    /// a browser sees a collector that went away.
+    /// One connection, both directions. A client that stops sending only
+    /// ends the collector's reading; everything closes when the collector
+    /// stops answering or the client can no longer be written to.
     fn bridge(client: TcpStream, socket: &Path) {
         let Ok(collector) = UnixStream::connect(socket) else {
             refuse(client, "collector_not_running");
@@ -151,8 +151,7 @@ mod imp {
         let (mut client_write, mut collector_read) = (client, collector);
         let upstream = std::thread::spawn(move || {
             let _ = std::io::copy(&mut client_read, &mut collector_write);
-            let _ = collector_write.shutdown(Shutdown::Both);
-            let _ = client_read.shutdown(Shutdown::Both);
+            let _ = collector_write.shutdown(Shutdown::Write);
         });
         let _ = std::io::copy(&mut collector_read, &mut client_write);
         let _ = client_write.shutdown(Shutdown::Both);
@@ -194,6 +193,9 @@ mod imp {
                 "GET {path} HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n"
             )
             .expect("write");
+            // Some clients close their sending half once the request is
+            // out; the answer must still come back.
+            stream.shutdown(Shutdown::Write).expect("half-close");
             let mut response = Vec::new();
             let _ = stream.read_to_end(&mut response);
             String::from_utf8_lossy(&response).into_owned()

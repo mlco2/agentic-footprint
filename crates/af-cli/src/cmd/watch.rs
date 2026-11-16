@@ -2683,7 +2683,7 @@ impl Watch {
     /// Publishes `sessions` as a backfill; with `list`, the picker's rows
     /// for every stored session first. A session the store does not hold
     /// is skipped.
-    fn tell(&mut self, store: &mut Store, sessions: &BTreeSet<String>, list: bool) {
+    fn tell(&mut self, store: &Store, sessions: &BTreeSet<String>, list: bool) {
         let summaries = match store.session_summaries() {
             Ok(summaries) => summaries,
             Err(err) => {
@@ -2721,10 +2721,41 @@ impl Watch {
             }
         }
         self.backfill = true;
-        if let Err(err) = self.rebuild_sessions(store, &known) {
-            eprintln!("af watch: rebuilding sessions for the console failed: {err:#}");
+        if let Err(err) = self.show_sessions(store, &known) {
+            eprintln!("af watch: describing sessions for the console failed: {err:#}");
         }
         self.backfill = false;
+    }
+
+    /// Publishes `sessions` from what the store already holds, and the
+    /// health payload. Looking only: nothing is rebuilt or written, so a
+    /// console's request can never change a stored result.
+    fn show_sessions(&mut self, store: &Store, sessions: &BTreeSet<String>) -> Result<()> {
+        // Not cached: the first pass to resolve a zone rebuilds the whole
+        // store, and must still find none resolved.
+        let zone = match &self.zone {
+            Some(zone) => zone.clone(),
+            None => {
+                let (id, source) = super::resolve_zone(store, self.zone_flag.as_deref())?;
+                Zone::unresolved(id, source)
+            }
+        };
+        let mut loaded = BTreeMap::new();
+        for session in sessions {
+            loaded.insert(
+                session.clone(),
+                LoadedSession::load(store.events_for_session(session)?, true),
+            );
+        }
+        for (session_id, loaded) in &loaded {
+            self.refresh_session(store, session_id, loaded, &zone)?;
+        }
+        self.publish_health(
+            loaded
+                .iter()
+                .map(|(session_id, loaded)| (session_id.as_str(), loaded.events.as_slice())),
+        );
+        Ok(())
     }
 
     /// Emits one decision on both surfaces it has: the `--debug` stderr
@@ -3399,9 +3430,31 @@ mod tests {
         debug.lock().unwrap().want("past");
         debug.lock().unwrap().want("no-such-session");
         watch.sync_attachment(&mut store);
-        let state = debug.lock().unwrap();
-        assert_eq!(state.frames_of("session"), 1);
-        assert_eq!(state.frames_of("alloc"), 0, "its old traces stay untold");
+        {
+            let state = debug.lock().unwrap();
+            assert_eq!(state.frames_of("session"), 1);
+            assert_eq!(state.frames_of("alloc"), 0, "its old traces stay untold");
+        }
+        // Looking is not writing: a request from a console must never
+        // rewrite a session's stored results (here it would, under a zone
+        // this watch has not resolved yet).
+        assert!(
+            store.joins_for_session("past").expect("joins").is_empty(),
+            "showing a session stores nothing"
+        );
+    }
+
+    #[test]
+    fn attaching_to_an_idle_collector_still_tells_its_health() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut store = Store::open(&dir.path().join("state.db")).expect("open");
+        let (mut watch, debug) = unattended(dir.path());
+        debug.lock().unwrap().set_attached(1);
+        watch.sync_attachment(&mut store);
+        assert!(
+            debug.lock().unwrap().has_health(),
+            "receiver and runtime health"
+        );
     }
 
     #[test]
