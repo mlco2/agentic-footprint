@@ -128,6 +128,17 @@ export class ReportStore {
     }
   }
 
+  /** Forget every report — they describe a watcher process that is gone
+   * (AfClient, on a `boot_id` change). `focused` is kept: it says what the
+   * view shows, not what the server holds. */
+  clear(): void {
+    this.levels = {};
+    this.bySession = {};
+    this.desiredVersions.clear();
+    this.storedVersions.clear();
+    this.sessionOrder = [];
+  }
+
   private trackSession(sessionId: string): void {
     if (!this.sessionOrder.includes(sessionId)) this.sessionOrder.push(sessionId);
     while (this.sessionOrder.length > DEBUG_SESSION_CAP) {

@@ -212,3 +212,69 @@ describe("HealthStore — replace-on-arrival, preserving conformance === undefin
     expect(store.data?.conformance, "must not retain the previous payload's conformance array").toBeUndefined();
   });
 });
+
+// --- StatusStore + the `clear()` every store gained for a watcher restart ---
+import { StatusStore } from "../src/lib/stores/statusStore.svelte";
+import { EventStore as EventStoreForClear } from "../src/lib/stores/eventStore.svelte";
+import { SessionStore as SessionStoreForClear } from "../src/lib/stores/sessionStore.svelte";
+import type { WatcherStatus } from "../src/lib/types/debug";
+
+describe("StatusStore", () => {
+  const status: WatcherStatus = {
+    boot_id: "b1",
+    started_at: "2026-11-16T09:00:00.000Z",
+    af_version: "0.1.0",
+    flush_interval_ms: 60000,
+    receiver: { endpoint: "127.0.0.1:4318", note: null },
+    agents: [],
+  };
+
+  it("tells 'not loaded yet' apart from 'this watcher has no status route'", () => {
+    const store = new StatusStore();
+    expect(store.data).toBeNull();
+    expect(store.unavailable).toBe(false);
+
+    store.markUnavailable();
+    expect(store.data).toBeNull();
+    expect(store.unavailable).toBe(true);
+
+    store.set(status);
+    expect(store.data).toEqual(status);
+    expect(store.unavailable, "a status arriving later supersedes 'unavailable'").toBe(false);
+
+    store.clear();
+    expect(store.data).toBeNull();
+    expect(store.unavailable).toBe(false);
+  });
+});
+
+describe("clear() — forgetting a watcher process that is gone", () => {
+  it("EventStore returns to its freshly-constructed state and bumps rev on the next flush", () => {
+    const store = new EventStoreForClear(8);
+    store.ingestDecision({ kind: "attr", ts: "2026-11-16T09:00:00.000Z", text: "x" });
+    store.ingestGap({ t_start: "2026-11-16T09:00:00.000Z", t_end: "2026-11-16T09:00:05.000Z", reason: "r", collector: "c" });
+    store.replaceWatchdog([{ pid: 1 } as never]);
+    store.flush();
+    const rev = store.rev;
+
+    store.clear();
+    expect(store.decisions).toHaveLength(0);
+    expect(store.gaps).toHaveLength(0);
+    expect(store.watchdog).toHaveLength(0);
+    expect(store.totalSeen).toBe(0);
+    expect(store.facts).toHaveLength(0);
+    store.flush();
+    expect(store.rev).toBe(rev + 1);
+  });
+
+  it("SessionStore forgets sessions, summaries and the pin", () => {
+    const store = new SessionStoreForClear();
+    store.setSummaries([{ session_id: "s1", agent_app: null, t_start: "a", t_last: "b", events: 1 }]);
+    store.pin("s1");
+    expect(store.selectedId).toBe("s1");
+    store.clear();
+    expect(store.list).toEqual([]);
+    expect(store.pinnedId).toBeNull();
+    expect(store.selectedId).toBeNull();
+  });
+});

@@ -65,6 +65,15 @@ export class SessionStore {
     }
   }
 
+  /** Forget every session and the pin — the watcher behind the connection
+   * is a different process (AfClient, on a `boot_id` change). */
+  clear(): void {
+    this.sessions = {};
+    this.summaries = {};
+    this.sessionOrder = [];
+    this.pinnedId = null;
+  }
+
   /** `null` re-enters follow-latest mode. */
   pin(id: string | null): void {
     this.pinnedId = id;

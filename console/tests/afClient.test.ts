@@ -4,7 +4,8 @@
 // `reset`. No real network, no real timers except where fake timers are
 // used explicitly for the backoff assertions.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { AfClient, type EventSourceLike } from "../src/lib/client/afClient.svelte";
+import { AfClient, type EventSourceLike, type VisibilityLike } from "../src/lib/client/afClient.svelte";
+import { StatusStore } from "../src/lib/stores/statusStore.svelte";
 import { EventStore } from "../src/lib/stores/eventStore.svelte";
 import { AllocStore } from "../src/lib/stores/allocStore.svelte";
 import { SessionStore } from "../src/lib/stores/sessionStore.svelte";
@@ -12,7 +13,7 @@ import { ReportStore } from "../src/lib/stores/reportStore.svelte";
 import { HealthStore } from "../src/lib/stores/healthStore.svelte";
 import { UiStore } from "../src/lib/stores/uiStore.svelte";
 import type { FactEvent } from "../src/lib/types/contract1";
-import type { AllocationTrace, DebugReport, HealthPayload, SessionInfo, Snapshot } from "../src/lib/types/debug";
+import type { AllocationTrace, DebugReport, HealthPayload, SessionInfo, Snapshot, WatcherStatus } from "../src/lib/types/debug";
 
 // --- fake EventSource --------------------------------------------------
 
@@ -40,6 +41,43 @@ class FakeEventSource implements EventSourceLike {
   emitError(): void {
     for (const l of this.listeners.get("error") ?? []) l({ data: "" });
   }
+
+  /** The browser's `open` event: response headers arrived, stream is up. */
+  emitOpen(): void {
+    for (const l of this.listeners.get("open") ?? []) l({ data: "" });
+  }
+}
+
+/** A controllable stand-in for the page's visibility: `hidden` is what
+ * `document.hidden` would say, `wake()` is the tab coming back (or the
+ * window regaining focus, or the network coming back). */
+class FakeVisibility implements VisibilityLike {
+  hidden = false;
+  private callbacks: Array<() => void> = [];
+
+  isHidden(): boolean {
+    return this.hidden;
+  }
+
+  onWake(cb: () => void): void {
+    this.callbacks.push(cb);
+  }
+
+  wake(): void {
+    this.hidden = false;
+    for (const cb of this.callbacks) cb();
+  }
+}
+
+function watcherStatus(bootId: string): WatcherStatus {
+  return {
+    boot_id: bootId,
+    started_at: "2026-07-25T00:00:00.000Z",
+    af_version: "0.1.0",
+    flush_interval_ms: 60000,
+    receiver: { endpoint: "127.0.0.1:4318", note: null },
+    agents: [],
+  };
 }
 
 // --- fixtures ------------------------------------------------------------
@@ -131,6 +169,8 @@ interface Harness {
   sessionStore: SessionStore;
   reportStore: ReportStore;
   healthStore: HealthStore;
+  statusStore: StatusStore;
+  visibility: FakeVisibility;
   uiStore: UiStore;
   esInstances: FakeEventSource[];
   fetchCalls: string[];
@@ -146,6 +186,11 @@ interface Harness {
   setReportFails: (fails: boolean) => void;
   /** Same, for the post-snapshot `/debug/health` fetch. */
   setHealthFails: (fails: boolean) => void;
+  /** What `/debug/status` answers: a status with this boot id, a 404 (a
+   * watcher that predates the route), or a network failure. */
+  setStatus: (mode: { bootId: string } | "404" | "fail") => void;
+  /** `/debug/session` answers `null`: the watcher has no session yet. */
+  setSessionNull: (isNull: boolean) => void;
 }
 
 function makeHarness(options: { eventStoreCapacity?: number } = {}): Harness {
@@ -164,13 +209,22 @@ function makeHarness(options: { eventStoreCapacity?: number } = {}): Harness {
   let sessionFails = false;
   let reportFails = false;
   let healthFails = false;
+  let statusMode: { bootId: string } | "404" | "fail" = { bootId: "boot-1" };
+  let sessionNull = false;
+  const statusStore = new StatusStore();
+  const visibility = new FakeVisibility();
 
   const fetchImpl = (vi.fn(async (url: string) => {
     fetchCalls.push(url);
+    if (url === "/debug/status") {
+      if (statusMode === "fail") throw new Error("simulated /debug/status network failure");
+      if (statusMode === "404") return { ok: false, status: 404, json: async () => ({ error: "not_found" }) } as unknown as Response;
+      return fakeJsonResponse(watcherStatus(statusMode.bootId));
+    }
     if (url === "/debug/session") {
       if (sessionFails) throw new Error("simulated /debug/session network failure");
       callOrder.push("session");
-      return fakeJsonResponse(SESSION_INFO);
+      return fakeJsonResponse(sessionNull ? null : SESSION_INFO);
     }
     if (url.startsWith("/debug/snapshot")) {
       if (snapshotFails) throw new Error("simulated /debug/snapshot network failure");
@@ -203,6 +257,8 @@ function makeHarness(options: { eventStoreCapacity?: number } = {}): Harness {
     sessionStore,
     reportStore,
     healthStore,
+    statusStore,
+    visibility,
     uiStore,
     fetchImpl,
     createEventSource,
@@ -215,6 +271,8 @@ function makeHarness(options: { eventStoreCapacity?: number } = {}): Harness {
     sessionStore,
     reportStore,
     healthStore,
+    statusStore,
+    visibility,
     uiStore,
     esInstances,
     fetchCalls,
@@ -233,6 +291,12 @@ function makeHarness(options: { eventStoreCapacity?: number } = {}): Harness {
     },
     setHealthFails: (fails: boolean) => {
       healthFails = fails;
+    },
+    setStatus: (mode) => {
+      statusMode = mode;
+    },
+    setSessionNull: (isNull: boolean) => {
+      sessionNull = isNull;
     },
   };
 }
@@ -700,6 +764,7 @@ describe("AfClient — bootstrap failure handling", () => {
 
     h.setSessionFails(false);
     await vi.advanceTimersByTimeAsync(500);
+    await vi.advanceTimersByTimeAsync(0); // the retry is status -> session -> snapshot: one more async hop than before
     expect(h.sessionStore.data).toEqual(SESSION_INFO);
     expect(h.esInstances).toHaveLength(1);
     h.client.dispose();
@@ -783,6 +848,316 @@ describe("AfClient — status transitions with backoff", () => {
     // Recovery: any frame on the new connection brings it back to live.
     h.esInstances.at(-1)!.emit("fact", actionSpanFact("spn_recover", "evt_recover", 0, 100), 2);
     expect(h.client.status).toBe("live");
+    h.client.dispose();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Connection state machine: live on open, heartbeat, boot id, quiet retries
+// ---------------------------------------------------------------------------
+
+/** The `/debug/*` requests of one bootstrap, in order, ignoring the
+ * fire-and-forget report/health/sessions fetches that follow it. */
+function bootstrapFetches(calls: string[]): string[] {
+  return calls.filter((url) => url === "/debug/status" || url === "/debug/session" || url.startsWith("/debug/snapshot"));
+}
+
+describe("AfClient — live on open, and the empty watcher", () => {
+  it("is live as soon as the stream opens, before any frame", async () => {
+    const h = makeHarness();
+    await h.client.start();
+    expect(h.client.status).toBe("connecting");
+    h.esInstances[0].emitOpen();
+    expect(h.client.status).toBe("live");
+    h.client.dispose();
+  });
+
+  it("probes /debug/status first, then session, then snapshot", async () => {
+    const h = makeHarness();
+    await h.client.start();
+    expect(bootstrapFetches(h.fetchCalls)).toEqual(["/debug/status", "/debug/session", "/debug/snapshot?window=180s"]);
+    expect(h.statusStore.data?.boot_id).toBe("boot-1");
+    expect(h.client.bootId).toBe("boot-1");
+    h.client.dispose();
+  });
+
+  it("a null session is not a failure: the watcher simply has no session yet", async () => {
+    const h = makeHarness();
+    h.setSessionNull(true);
+    h.setSnapshot(emptySnapshot(-1));
+    await h.client.start();
+    expect(h.esInstances, "the stream is still opened").toHaveLength(1);
+    expect(h.esInstances[0].url).toBe("/debug/stream?from=-1");
+    expect(h.sessionStore.data).toBeNull();
+    expect(h.sessionStore.list).toEqual([]);
+    h.esInstances[0].emitOpen();
+    expect(h.client.status).toBe("live");
+    h.client.dispose();
+  });
+
+  it("a 404 on /debug/status does not block bootstrap", async () => {
+    const h = makeHarness();
+    h.setStatus("404");
+    await h.client.start();
+    expect(h.esInstances).toHaveLength(1);
+    expect(h.statusStore.unavailable).toBe(true);
+    expect(h.statusStore.data).toBeNull();
+    h.esInstances[0].emitOpen();
+    expect(h.client.status).toBe("live");
+    h.client.dispose();
+  });
+
+  it("a status frame with the same boot_id only updates the status store", async () => {
+    const h = makeHarness();
+    await h.client.start();
+    h.esInstances[0].emitOpen();
+    const fetchesBefore = h.fetchCalls.length;
+    const next = { ...watcherStatus("boot-1"), flush_interval_ms: 1234 };
+    h.esInstances[0].emit("status", next);
+    expect(h.statusStore.data?.flush_interval_ms).toBe(1234);
+    expect(h.esInstances).toHaveLength(1);
+    expect(h.fetchCalls).toHaveLength(fetchesBefore);
+    h.client.dispose();
+  });
+
+  it("status and ping frames are applied even while paused, never buffered", async () => {
+    const h = makeHarness();
+    await h.client.start();
+    h.uiStore.toggleLive();
+    h.esInstances[0].emit("status", { ...watcherStatus("boot-1"), flush_interval_ms: 77 });
+    h.esInstances[0].emit("ping", { boot_id: "boot-1" });
+    expect(h.statusStore.data?.flush_interval_ms).toBe(77);
+    expect(h.client.pausedBuffered).toBe(0);
+    h.client.dispose();
+  });
+});
+
+describe("AfClient — reconnect, boot id and heartbeat", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("reconnect after an error is a full bootstrap, not a resubscribe from the old cursor", async () => {
+    const h = makeHarness();
+    h.setSnapshot(emptySnapshot(10));
+    await h.client.start();
+    h.esInstances[0].emitOpen();
+    h.esInstances[0].emit("fact", actionSpanFact("spn_a", "evt_a", 0, 100), 11);
+
+    h.setSnapshot(emptySnapshot(40));
+    h.fetchCalls.length = 0;
+    h.esInstances[0].emitError();
+    expect(h.esInstances[0].closed, "the failed stream is closed at once, so the browser cannot auto-reconnect it").toBe(true);
+    await vi.advanceTimersByTimeAsync(500);
+
+    expect(bootstrapFetches(h.fetchCalls)).toEqual(["/debug/status", "/debug/session", "/debug/snapshot?window=180s"]);
+    expect(h.esInstances).toHaveLength(2);
+    expect(h.esInstances[1].url, "from the NEW snapshot's cursor").toBe("/debug/stream?from=40");
+    h.client.dispose();
+  });
+
+  it("a different boot_id clears state and re-syncs", async () => {
+    const h = makeHarness();
+    const fact = actionSpanFact("spn_a", "evt_a", 0, 100);
+    h.setSnapshot(emptySnapshot(5, { events: [fact] }));
+    await h.client.start();
+    h.esInstances[0].emitOpen();
+    h.esInstances[0].emit("decision", { kind: "attr", text: "old process", ts: "2026-07-25T00:00:00.000Z" }, 6);
+    h.client.tick();
+    expect(h.eventStore.totalSeen).toBe(1);
+    expect(h.eventStore.decisions).toHaveLength(1);
+
+    // The watcher restarted: same event in its fresh snapshot, new boot id.
+    h.setStatus({ bootId: "boot-2" });
+    h.setSnapshot(emptySnapshot(0, { events: [fact] }));
+    h.esInstances[0].emit("ping", { boot_id: "boot-2" });
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(h.esInstances[0].closed).toBe(true);
+    expect(h.esInstances).toHaveLength(2);
+    expect(h.esInstances[1].url).toBe("/debug/stream?from=0");
+    expect(h.client.bootId).toBe("boot-2");
+    expect(h.statusStore.data?.boot_id).toBe("boot-2");
+    expect(h.eventStore.decisions, "the old process's decision log is gone").toHaveLength(0);
+    expect(h.eventStore.totalSeen, "the store was cleared, then the same event id was ingested again from the new snapshot").toBe(1);
+    h.client.dispose();
+  });
+
+  it("a status frame carrying a different boot_id re-syncs too", async () => {
+    const h = makeHarness();
+    await h.client.start();
+    h.esInstances[0].emitOpen();
+    h.setStatus({ bootId: "boot-2" });
+    h.esInstances[0].emit("status", watcherStatus("boot-2"));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.esInstances).toHaveLength(2);
+    expect(h.client.bootId).toBe("boot-2");
+    h.client.dispose();
+  });
+
+  it("a re-bootstrap does not duplicate coverage gaps it already holds", async () => {
+    const h = makeHarness();
+    const gap = { t_start: "2026-07-25T00:00:10.000Z", t_end: "2026-07-25T00:00:20.000Z", reason: "sampler exited" };
+    h.setSnapshot(emptySnapshot(3, { coverage_gaps: [gap] as Snapshot["coverage_gaps"] }));
+    await h.client.start();
+    h.esInstances[0].emitOpen();
+    h.esInstances[0].emitError();
+    await vi.advanceTimersByTimeAsync(500);
+    expect(h.esInstances).toHaveLength(2);
+    expect(h.eventStore.gaps).toHaveLength(1);
+    h.client.dispose();
+  });
+
+  it("no event for 45s closes the stream and counts one failure", async () => {
+    const h = makeHarness();
+    await h.client.start();
+    h.esInstances[0].emitOpen();
+    await vi.advanceTimersByTimeAsync(44_000);
+    expect(h.client.status).toBe("live");
+    expect(h.esInstances[0].closed).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(h.esInstances[0].closed).toBe(true);
+    // One failure: reconnecting, and the retry (500ms later) has not yet opened.
+    expect(["reconnecting", "connecting"]).toContain(h.client.status);
+    expect(h.client.status).not.toBe("offline");
+    h.client.dispose();
+  });
+
+  it("any event, including ping, resets the heartbeat clock", async () => {
+    const h = makeHarness();
+    await h.client.start();
+    h.esInstances[0].emitOpen();
+    for (let i = 0; i < 4; i += 1) {
+      await vi.advanceTimersByTimeAsync(30_000);
+      h.esInstances[0].emit("ping", { boot_id: "boot-1" });
+    }
+    expect(h.esInstances[0].closed).toBe(false);
+    expect(h.client.status).toBe("live");
+    expect(h.esInstances).toHaveLength(1);
+    h.client.dispose();
+  });
+
+  it("backoff doubles from 500ms and caps at 30s", async () => {
+    const h = makeHarness();
+    h.setStatus("fail");
+    await h.client.start(); // failure 1
+    const attempts = () => h.fetchCalls.filter((url) => url === "/debug/status").length;
+    expect(attempts()).toBe(1);
+    for (const delay of [500, 1000, 2000, 4000, 8000, 16000, 30000, 30000]) {
+      await vi.advanceTimersByTimeAsync(delay - 1);
+      const before = attempts();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(attempts(), `one attempt exactly ${delay}ms after the previous failure`).toBe(before + 1);
+    }
+    expect(h.client.status).toBe("offline");
+    h.client.dispose();
+  });
+
+  it("offline after 5 consecutive failures; an open stream resets the count", async () => {
+    const h = makeHarness();
+    h.setStatus("fail");
+    await h.client.start();
+    await vi.advanceTimersByTimeAsync(500 + 1000 + 2000);
+    expect(h.client.status).toBe("reconnecting"); // 4 failures
+    await vi.advanceTimersByTimeAsync(4000);
+    expect(h.client.status).toBe("offline"); // 5
+
+    h.setStatus({ bootId: "boot-1" });
+    await vi.advanceTimersByTimeAsync(8000);
+    expect(h.esInstances).toHaveLength(1);
+    h.esInstances[0].emitOpen();
+    expect(h.client.status).toBe("live");
+
+    // The count restarted: one new failure is "reconnecting", after 500ms.
+    h.setStatus("fail");
+    h.esInstances[0].emitError();
+    expect(h.client.status).toBe("reconnecting");
+    const before = h.fetchCalls.length;
+    await vi.advanceTimersByTimeAsync(500);
+    expect(h.fetchCalls.length).toBe(before + 1);
+    h.client.dispose();
+  });
+
+  it("no retry timer runs while the tab is hidden", async () => {
+    const h = makeHarness();
+    await h.client.start();
+    h.esInstances[0].emitOpen();
+    await vi.advanceTimersByTimeAsync(0); // let the first bootstrap's best-effort report/health fetches settle
+    h.visibility.hidden = true;
+    h.fetchCalls.length = 0;
+    h.esInstances[0].emitError();
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(h.fetchCalls, "a hidden tab does not poll a watcher that is off").toEqual([]);
+    expect(h.esInstances).toHaveLength(1);
+    h.client.dispose();
+  });
+
+  it("waking the tab retries immediately and restarts backoff at 500ms", async () => {
+    const h = makeHarness();
+    await h.client.start();
+    h.esInstances[0].emitOpen();
+    h.visibility.hidden = true;
+    h.setStatus("fail");
+    h.esInstances[0].emitError();
+    await vi.advanceTimersByTimeAsync(60_000);
+    h.fetchCalls.length = 0;
+    expect(h.client.status, "one failure, however long the tab stayed hidden").toBe("reconnecting");
+
+    h.visibility.wake();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.fetchCalls, "one attempt at once").toEqual(["/debug/status"]);
+
+    // It failed: the next attempt is the backoff floor away, not 30s.
+    await vi.advanceTimersByTimeAsync(499);
+    expect(h.fetchCalls).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(h.fetchCalls).toHaveLength(2);
+    h.client.dispose();
+  });
+
+  it("waking a tab whose stream is healthy does nothing", async () => {
+    const h = makeHarness();
+    await h.client.start();
+    h.esInstances[0].emitOpen();
+    h.fetchCalls.length = 0;
+    h.visibility.wake();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(bootstrapFetches(h.fetchCalls)).toEqual([]);
+    expect(h.esInstances[0].closed).toBe(false);
+    h.client.dispose();
+  });
+
+  it("a wake after a long sleep makes exactly one attempt, re-syncs, and never goes offline", async () => {
+    const h = makeHarness();
+    await h.client.start();
+    h.esInstances[0].emitOpen();
+    const seen: string[] = [];
+
+    // The laptop slept: ten minutes pass with no timer having run, and the
+    // watcher was restarted meanwhile.
+    vi.setSystemTime(Date.now() + 10 * 60_000);
+    h.setStatus({ bootId: "boot-2" });
+    h.fetchCalls.length = 0;
+    h.visibility.wake();
+    seen.push(h.client.status);
+    await vi.advanceTimersByTimeAsync(0);
+    seen.push(h.client.status);
+
+    expect(bootstrapFetches(h.fetchCalls)).toEqual(["/debug/status", "/debug/session", "/debug/snapshot?window=180s"]);
+    expect(h.esInstances).toHaveLength(2);
+    expect(h.client.bootId).toBe("boot-2");
+    h.esInstances[1].emitOpen();
+    seen.push(h.client.status);
+    expect(seen.at(-1)).toBe("live");
+    expect(seen).not.toContain("offline");
+
+    // And nothing else fires afterwards: one attempt, not a burst.
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(h.esInstances).toHaveLength(2);
     h.client.dispose();
   });
 });

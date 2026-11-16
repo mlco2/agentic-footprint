@@ -1,5 +1,5 @@
-// AfClient (DATA-CONTRACT §3.1): owns fetch + EventSource. Bootstraps in a
-// strict order — session, then snapshot, then subscribe — so the chart is
+// AfClient (DATA-CONTRACT §3.1): owns fetch + EventSource. Connects in a
+// strict order — status, session, then snapshot, then subscribe — so the chart is
 // never shown empty while a live stream races ahead of the backfill it
 // needs. Also the one place in the app allowed to run `setInterval`
 // (architecture rule: exactly one, 1 Hz, in the whole app): it drives both
@@ -15,12 +15,25 @@
 // `Last-Event-ID`, or a client's first connection after a snapshot will
 // replay from the wrong point.
 import type { FactEvent } from "../types/contract1";
-import type { DebugReport, HealthPayload, OpenActionSpanEvent, Snapshot, SseEventName, SseFrame, SessionInfo, SessionSummary } from "../types/debug";
+import type {
+  DebugReport,
+  GapFrame,
+  HealthPayload,
+  OpenActionSpanEvent,
+  PingFrame,
+  Snapshot,
+  SseEventName,
+  SseFrame,
+  SessionInfo,
+  SessionSummary,
+  WatcherStatus,
+} from "../types/debug";
 import { AllocStore, allocStore as defaultAllocStore } from "../stores/allocStore.svelte";
 import { EventStore, eventStore as defaultEventStore } from "../stores/eventStore.svelte";
 import { SessionStore, sessionStore as defaultSessionStore } from "../stores/sessionStore.svelte";
 import { ReportStore, reportStore as defaultReportStore } from "../stores/reportStore.svelte";
 import { HealthStore, healthStore as defaultHealthStore } from "../stores/healthStore.svelte";
+import { StatusStore, statusStore as defaultStatusStore } from "../stores/statusStore.svelte";
 import { UiStore, uiStore as defaultUiStore } from "../stores/uiStore.svelte";
 import { boundFetch } from "./boundFetch";
 
@@ -36,21 +49,53 @@ export interface EventSourceLike {
 
 export type EventSourceFactory = (url: string) => EventSourceLike;
 
+/** What AfClient needs to know about whether anyone is looking — narrowed
+ * for the same reason as `EventSourceLike`. */
+export interface VisibilityLike {
+  isHidden(): boolean;
+  /** Calls back when the tab becomes visible, the window regains focus, or
+   * the browser reports the network is back. */
+  onWake(cb: () => void): void;
+}
+
+/** The real thing: `document.hidden`, `visibilitychange`, `focus`, `online`.
+ * Inert outside a browser (unit tests of other modules import this file). */
+const browserVisibility: VisibilityLike = {
+  isHidden: () => typeof document !== "undefined" && document.hidden,
+  onWake(cb) {
+    if (typeof document === "undefined" || typeof window === "undefined") return;
+    document.addEventListener("visibilitychange", () => {
+      if (!document.hidden) cb();
+    });
+    window.addEventListener("focus", cb);
+    window.addEventListener("online", cb);
+  },
+};
+
 export interface AfClientDeps {
   eventStore?: EventStore;
   allocStore?: AllocStore;
   sessionStore?: SessionStore;
   reportStore?: ReportStore;
   healthStore?: HealthStore;
+  statusStore?: StatusStore;
   uiStore?: UiStore;
   fetchImpl?: typeof fetch;
   createEventSource?: EventSourceFactory;
+  visibility?: VisibilityLike;
+  /** Wall clock in ms, for the heartbeat. Injectable so a test can jump it. */
+  now?: () => number;
 }
 
-const SSE_EVENT_NAMES: SseEventName[] = ["fact", "decision", "alloc", "reject", "gap", "watchdog", "report", "health", "session", "reset"];
+const SSE_EVENT_NAMES: SseEventName[] = ["fact", "decision", "alloc", "reject", "gap", "watchdog", "report", "health", "session", "reset", "status", "ping"];
 
 const BACKOFF_MIN_MS = 500;
-const BACKOFF_MAX_MS = 8000;
+/** While the watcher is off this is the whole cost of an open console: one
+ * refused loopback connection every 30s, and none at all while the tab is
+ * hidden (see `scheduleReconnect`). */
+const BACKOFF_MAX_MS = 30000;
+/** Three missed server pings (one every 15s of silence). */
+const HEARTBEAT_TIMEOUT_MS = 45000;
 const OFFLINE_AFTER_CONSECUTIVE_FAILURES = 5;
 const DEDUP_CAP = 8192;
 const TICK_MS = 1000;
@@ -66,11 +111,19 @@ export class AfClient {
    * surface needs it live, it's bookkeeping for reconnect/`?from=`. */
   lastSeq = 0;
 
+  /** The watcher process this client last synced with (`/debug/status`'s
+   * `boot_id`); `null` before the first status, or when the watcher has no
+   * status route. A different one arriving later means a restart. */
+  bootId: string | null = null;
+
   private readonly eventStoreRef: EventStore;
   private readonly allocStoreRef: AllocStore;
   private readonly sessionStoreRef: SessionStore;
   private readonly reportStoreRef: ReportStore;
   private readonly healthStoreRef: HealthStore;
+  private readonly statusStoreRef: StatusStore;
+  private readonly visibilityRef: VisibilityLike;
+  private readonly now: () => number;
   private readonly uiStoreRef: UiStore;
   private readonly fetchImplRef: typeof fetch;
   private readonly createEventSource: EventSourceFactory;
@@ -82,6 +135,13 @@ export class AfClient {
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private backoffMs = BACKOFF_MIN_MS;
   private consecutiveFailures = 0;
+  /** Bumped by every `connect()`; an older attempt that finds it changed
+   * after an `await` stops without touching anything. */
+  private connectGen = 0;
+  /** When the open stream last showed any sign of life (open, a frame, a
+   * ping) — the heartbeat check compares against this. */
+  private lastEventAtMs = 0;
+  private wakeRegistered = false;
 
   /** FIFO of frames received while `uiStore.live === false`. The SSE
    * connection itself stays open while paused — pausing only affects
@@ -105,46 +165,103 @@ export class AfClient {
     this.sessionStoreRef = deps.sessionStore ?? defaultSessionStore;
     this.reportStoreRef = deps.reportStore ?? defaultReportStore;
     this.healthStoreRef = deps.healthStore ?? defaultHealthStore;
+    this.statusStoreRef = deps.statusStore ?? defaultStatusStore;
+    this.visibilityRef = deps.visibility ?? browserVisibility;
+    this.now = deps.now ?? (() => Date.now());
     this.uiStoreRef = deps.uiStore ?? defaultUiStore;
     this.fetchImplRef = deps.fetchImpl ?? boundFetch;
     this.createEventSource = deps.createEventSource ?? ((url: string) => new EventSource(url) as unknown as EventSourceLike);
   }
 
   // ---------------------------------------------------------------------
-  // Bootstrap
+  // Connecting
   // ---------------------------------------------------------------------
 
-  /** Strict order: session -> snapshot -> subscribe. The ticker is started
-   * unconditionally, decoupled from bootstrap success/failure — `uiStore`'s
-   * clock (while live) should keep advancing even if the initial connection
-   * hasn't succeeded yet, and bootstrap retries never need a second one
+  /** The ticker is started unconditionally, decoupled from whether the
+   * first connection succeeds — `uiStore`'s clock (while live) should keep
+   * advancing either way, and retries never need a second one
    * (`startTicker` is idempotent). */
   async start(): Promise<void> {
     this.status = "connecting";
     this.startTicker();
-    await this.bootstrap();
+    if (!this.wakeRegistered) {
+      this.wakeRegistered = true;
+      this.visibilityRef.onWake(() => this.handleWake());
+    }
+    await this.connect();
   }
 
-  /** Session -> snapshot -> subscribe, but never left to fail silently: a
-   * thrown fetch (network down, server not up yet, ...) is exactly as much
-   * of a "not connected" fact as an SSE `error` event, so it's registered
-   * the same way — status moves to `reconnecting`/`offline` (never left
-   * standing at `connecting`, and never an unhandled rejection from the
-   * `void this.bootstrap()` retry path) and a backoff retry is scheduled
-   * that re-runs this whole method. */
-  private async bootstrap(): Promise<void> {
+  /** The one way in: first load, every retry, a `reset`, a heartbeat
+   * timeout and a new `boot_id` all come through here, so a reconnect is
+   * always a full re-sync and never a bare resubscribe from a cursor that
+   * may belong to a watcher process that no longer exists.
+   *
+   * Strict order: status (the probe — which watcher is this?), session,
+   * snapshot, subscribe. A thrown fetch (network down, watcher not up) is
+   * exactly as much of a "not connected" fact as an SSE `error`, so it is
+   * registered the same way and retried with backoff.
+   *
+   * `connectGen` makes a superseded attempt abandon itself: a wake or a
+   * new `boot_id` can start a second `connect()` while the first is still
+   * awaiting a fetch, and only the latest may touch the stores. */
+  private async connect(): Promise<void> {
+    const gen = ++this.connectGen;
+    this.cancelReconnectTimer();
+    this.closeEventSource();
     try {
-      const session = await this.fetchJson<SessionInfo>("/debug/session");
-      this.sessionStoreRef.set(session);
+      const status = await this.fetchStatus();
+      if (gen !== this.connectGen) return;
+      if (status) {
+        // Another process than the one whose history is held: that
+        // history cannot be merged with the new one by sequence number.
+        if (this.bootId !== null && status.boot_id !== this.bootId) this.clearForNewBoot();
+        this.bootId = status.boot_id;
+        this.statusStoreRef.set(status);
+      } else {
+        this.statusStoreRef.markUnavailable();
+      }
+
+      // `null` is "the watcher has no session yet", not a failure.
+      const session = await this.fetchJson<SessionInfo | null>("/debug/session");
+      if (gen !== this.connectGen) return;
+      if (session) this.sessionStoreRef.set(session);
 
       const snapshot = await this.fetchJson<Snapshot>("/debug/snapshot?window=180s");
+      if (gen !== this.connectGen) return;
       this.ingestSnapshot(snapshot);
 
       this.subscribe(snapshot.as_of_seq);
       void this.fetchReportAndHealthOnce();
     } catch {
-      this.registerFailureAndScheduleRetry(() => void this.bootstrap());
+      if (gen === this.connectGen) this.registerFailureAndScheduleRetry();
     }
+  }
+
+  /** `GET /debug/status`. A network failure throws (the watcher is not
+   * reachable, which fails the whole attempt). An HTTP error or a `null`
+   * body means the watcher answered and has no status to give — an `af`
+   * older than the route — and returns `null`: the console still works,
+   * it just cannot show agents. */
+  private async fetchStatus(): Promise<WatcherStatus | null> {
+    const res = await this.fetchImplRef("/debug/status");
+    if (!res.ok) return null;
+    const body = (await res.json()) as WatcherStatus | null;
+    return body && typeof body.boot_id === "string" ? body : null;
+  }
+
+  /** Everything held describes a watcher process that is gone. */
+  private clearForNewBoot(): void {
+    this.eventStoreRef.clear();
+    this.allocStoreRef.clear();
+    this.sessionStoreRef.clear();
+    this.reportStoreRef.clear();
+    this.healthStoreRef.clear();
+    this.seenIds.clear();
+    this.seenRing.fill(undefined);
+    this.seenWriteIndex = 0;
+    this.seenCount = 0;
+    this.dropPauseBuffer();
+    this.lastSeq = 0;
   }
 
   /** The real `af watch --debug` server pushes `report`/`health` frames per
@@ -155,18 +272,19 @@ export class AfClient {
    * fire-and-forget: each fetch is independently non-fatal (a failure here
    * leaves that store exactly as empty as it already was; the next
    * `report`/`health` SSE frame fills it in normally), so this must never
-   * feed into `bootstrap()`/`rebootstrap()`'s own failure-and-retry path —
-   * it is not part of "did we connect", it's a best-effort head start. */
+   * feed into `connect()`'s own failure-and-retry path — it is not part of
+   * "did we connect", it's a best-effort head start. A watcher with no
+   * session yet answers `null` to both, which is left alone. */
   private async fetchReportAndHealthOnce(): Promise<void> {
     try {
-      const report = await this.fetchJson<DebugReport>("/debug/report?level=session");
-      this.reportStoreRef.set(report);
+      const report = await this.fetchJson<DebugReport | null>("/debug/report?level=session");
+      if (report) this.reportStoreRef.set(report);
     } catch {
       // non-fatal — a `report` SSE frame will arrive on the next ingest pass
     }
     try {
-      const health = await this.fetchJson<HealthPayload>("/debug/health");
-      this.healthStoreRef.set(health);
+      const health = await this.fetchJson<HealthPayload | null>("/debug/health");
+      if (health) this.healthStoreRef.set(health);
     } catch {
       // non-fatal — a `health` SSE frame will arrive on the next ingest pass
     }
@@ -220,9 +338,7 @@ export class AfClient {
     for (const open of snapshot.open_spans) {
       this.eventStoreRef.ingestOpenSpan(open as OpenActionSpanEvent);
     }
-    for (const gap of snapshot.coverage_gaps) {
-      this.eventStoreRef.ingestGap(gap);
-    }
+    for (const gap of snapshot.coverage_gaps) this.ingestGapOnce(gap);
     this.eventStoreRef.replaceWatchdog(snapshot.watchdog);
     for (const alloc of snapshot.allocations) {
       if (this.markSeen(alloc.sample_event_id)) this.allocStoreRef.ingest(alloc);
@@ -230,39 +346,35 @@ export class AfClient {
     this.lastSeq = snapshot.as_of_seq;
   }
 
-  /** `event: reset` — the server's Last-Event-ID was too old to replay from.
-   * Full re-bootstrap: re-snapshot, then resubscribe from the new
-   * `as_of_seq`. Receiving the `reset` frame itself is real evidence the
-   * transport just worked (handled by `onFrameReceived` before this is
-   * called), but `closeEventSource()` below tears that connection down —
-   * if the follow-up snapshot fetch then fails, the client is genuinely
-   * disconnected and must not go on showing a `live` dot (global-constraints
-   * #6: never stale-but-plausible). So this is guarded exactly like
-   * `bootstrap()`: a failure registers as a connection failure and retries
-   * with backoff, re-running this same method. */
-  private async rebootstrap(): Promise<void> {
-    this.closeEventSource();
-    try {
-      const snapshot = await this.fetchJson<Snapshot>("/debug/snapshot?window=180s");
-      this.ingestSnapshot(snapshot);
-      this.subscribe(snapshot.as_of_seq);
-      void this.fetchReportAndHealthOnce();
-    } catch {
-      this.registerFailureAndScheduleRetry(() => void this.rebootstrap());
-    }
+  /** A coverage gap carries no id, and every reconnect re-reads the last
+   * 180s of them from the snapshot: without this the same gap is appended
+   * once per reconnect. Its own content is its identity. */
+  private ingestGapOnce(gap: GapFrame): void {
+    if (this.markSeen(`gap:${gap.collector}:${gap.t_start}:${gap.t_end}:${gap.reason}`)) this.eventStoreRef.ingestGap(gap);
   }
 
   // ---------------------------------------------------------------------
-  // SSE subscription + reconnect
+  // SSE subscription, liveness and retries
   // ---------------------------------------------------------------------
 
   private subscribe(fromSeq: number): void {
     const es = this.createEventSource(`/debug/stream?from=${fromSeq}`);
     this.es = es;
+    // The heartbeat clock starts with the attempt, not with the first
+    // event: a connection that is accepted and then says nothing at all is
+    // as dead as one that went quiet later.
+    this.lastEventAtMs = this.now();
     for (const name of SSE_EVENT_NAMES) {
-      es.addEventListener(name, (ev) => this.handleFrame(name, ev));
+      es.addEventListener(name, (ev) => {
+        if (this.es === es) this.handleFrame(name, ev);
+      });
     }
-    es.addEventListener("error", () => this.handleError());
+    es.addEventListener("open", () => {
+      if (this.es === es) this.onTransportAlive();
+    });
+    es.addEventListener("error", () => {
+      if (this.es === es) this.handleError();
+    });
   }
 
   private closeEventSource(): void {
@@ -272,36 +384,74 @@ export class AfClient {
     }
   }
 
+  /** Closed at once, not at retry time: a browser `EventSource` left open
+   * after an error reconnects by itself, to the old cursor, behind this
+   * client's back. */
   private handleError(): void {
-    this.registerFailureAndScheduleRetry(() => {
-      this.closeEventSource();
-      this.subscribe(this.lastSeq);
-    });
+    this.closeEventSource();
+    this.registerFailureAndScheduleRetry();
   }
 
-  /** Single source of truth for "the transport just failed" — used by the
-   * SSE `error` listener, a failed initial bootstrap, and a failed
-   * post-`reset` re-bootstrap alike, so all three count against the same
-   * consecutive-failure/backoff sequence and land on the same
-   * `reconnecting`/`offline` status rule (N=5). `retry` is whatever redoing
-   * the failed step means for that caller (resubscribe vs. re-bootstrap). */
-  private registerFailureAndScheduleRetry(retry: () => void): void {
+  /** Single source of truth for "the transport just failed" — an SSE
+   * `error`, a failed `connect()` and a heartbeat timeout alike, so all
+   * three count against the same consecutive-failure/backoff sequence and
+   * land on the same `reconnecting`/`offline` status rule (N=5). */
+  private registerFailureAndScheduleRetry(): void {
     this.consecutiveFailures += 1;
     this.status = this.consecutiveFailures >= OFFLINE_AFTER_CONSECUTIVE_FAILURES ? "offline" : "reconnecting";
-    this.scheduleReconnect(retry);
+    this.scheduleReconnect();
   }
 
-  private scheduleReconnect(retry: () => void): void {
+  /** No timer while the tab is hidden: a console nobody is looking at does
+   * not poll a watcher that is off. `handleWake` makes the attempt the
+   * moment the tab is looked at again. */
+  private scheduleReconnect(): void {
     if (this.reconnectTimer !== null) return;
+    if (this.visibilityRef.isHidden()) return;
     const delay = this.backoffMs;
     this.backoffMs = Math.min(this.backoffMs * 2, BACKOFF_MAX_MS);
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
-      retry();
+      void this.connect();
     }, delay);
   }
 
-  private onFrameReceived(): void {
+  private cancelReconnectTimer(): void {
+    if (this.reconnectTimer !== null) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+  }
+
+  /** The tab became visible, the window got focus, or the network came
+   * back. A stream that is open and has been heard from recently is left
+   * alone; anything else gets one attempt now, with the backoff restarted
+   * — whatever delay had built up was earned while nobody was waiting.
+   *
+   * This is also the laptop-wakes-from-sleep path: timers did not run
+   * while it slept, so the heartbeat is stale, and the watcher may have
+   * been restarted meanwhile. One full re-sync covers both. */
+  private handleWake(): void {
+    const healthy = this.es !== null && this.now() - this.lastEventAtMs < HEARTBEAT_TIMEOUT_MS;
+    if (healthy) return;
+    this.backoffMs = BACKOFF_MIN_MS;
+    if (this.status === "live") this.status = "reconnecting";
+    void this.connect();
+  }
+
+  /** Called from the 1 Hz tick: a stream that has said nothing — no frame,
+   * no `ping` — for [HEARTBEAT_TIMEOUT_MS] is treated as lost. The server
+   * pings every 15s of silence, so this is three missed in a row. */
+  private checkHeartbeat(): void {
+    if (this.es === null) return;
+    if (this.now() - this.lastEventAtMs < HEARTBEAT_TIMEOUT_MS) return;
+    this.closeEventSource();
+    this.registerFailureAndScheduleRetry();
+  }
+
+  /** The stream opened, or delivered something: the transport works. */
+  private onTransportAlive(): void {
+    this.lastEventAtMs = this.now();
     this.consecutiveFailures = 0;
     this.backoffMs = BACKOFF_MIN_MS;
     if (this.status !== "live") this.status = "live";
@@ -312,7 +462,14 @@ export class AfClient {
   // ---------------------------------------------------------------------
 
   private handleFrame(name: SseEventName, ev: { data: string; lastEventId?: string }): void {
-    this.onFrameReceived();
+    this.onTransportAlive();
+
+    // Protocol frames: not ring frames (no id), never buffered by a pause —
+    // they are about the connection, not about the session being watched.
+    if (name === "status" || name === "ping") {
+      this.handleProtocolFrame(name, ev.data);
+      return;
+    }
 
     if (ev.lastEventId) {
       const seq = Number(ev.lastEventId);
@@ -321,14 +478,14 @@ export class AfClient {
 
     if (name === "reset") {
       // If frames were buffered while paused, they're from the stream
-      // generation that's about to be torn down by `rebootstrap()` — the
+      // generation that's about to be torn down by `connect()` — the
       // fresh re-snapshot it fetches supersedes them entirely. Replaying
       // them on a later resume would silently reintroduce stale data on top
       // of (or racing) the fresh snapshot, so they're dropped here, exactly
       // like any other buffer overflow: surfaced honestly through
       // `pausedDropped`, never silently discarded.
       if (!this.uiStoreRef.live) this.dropPauseBuffer();
-      void this.rebootstrap();
+      void this.connect();
       return;
     }
 
@@ -347,6 +504,28 @@ export class AfClient {
     this.applyFrame(frame);
   }
 
+  /** `status` replaces the watcher status; both it and `ping` carry the
+   * `boot_id`, and one that differs from the process this client
+   * bootstrapped from means a full re-sync (`connect()` does the clearing
+   * once the new status confirms it). */
+  private handleProtocolFrame(name: "status" | "ping", raw: string): void {
+    let data: WatcherStatus | PingFrame;
+    try {
+      data = JSON.parse(raw);
+    } catch {
+      return;
+    }
+    const bootId = typeof data?.boot_id === "string" ? data.boot_id : null;
+    if (bootId !== null && this.bootId !== null && bootId !== this.bootId) {
+      void this.connect();
+      return;
+    }
+    if (name === "status" && bootId !== null) {
+      this.bootId = bootId;
+      this.statusStoreRef.set(data as WatcherStatus);
+    }
+  }
+
   /** Dispatch by SSE event name (DATA-CONTRACT §2.3 table). */
   private applyFrame(frame: SseFrame): void {
     switch (frame.event) {
@@ -363,7 +542,7 @@ export class AfClient {
         this.eventStoreRef.ingestReject(frame.data);
         return;
       case "gap":
-        this.eventStoreRef.ingestGap(frame.data);
+        this.ingestGapOnce(frame.data);
         return;
       case "watchdog":
         this.eventStoreRef.replaceWatchdog(frame.data.pids);
@@ -378,6 +557,8 @@ export class AfClient {
         this.sessionStoreRef.set(frame.data);
         return;
       case "reset":
+      case "status":
+      case "ping":
         return; // handled in handleFrame before reaching applyFrame
     }
   }
@@ -469,6 +650,7 @@ export class AfClient {
    * `rev`-visible until the *next* tick (up to another full second later),
    * since `dirty` gets set again only after that tick's flush already ran. */
   tick(): void {
+    this.checkHeartbeat();
     this.uiStoreRef.tick();
     this.drainPauseBufferIfLive();
     this.eventStoreRef.flush();
@@ -479,11 +661,9 @@ export class AfClient {
    * closes the EventSource. Not part of the app's normal lifecycle (the
    * client lives for the page's whole life). */
   dispose(): void {
+    this.connectGen += 1; // an attempt still awaiting a fetch abandons itself
     this.closeEventSource();
-    if (this.reconnectTimer !== null) {
-      clearTimeout(this.reconnectTimer);
-      this.reconnectTimer = null;
-    }
+    this.cancelReconnectTimer();
     if (this.intervalId !== null) {
       clearInterval(this.intervalId);
       this.intervalId = null;

@@ -41,6 +41,14 @@ export class AllocStore {
     this.markDirty();
   }
 
+  /** Forget every trace — they belong to a watcher process that is gone
+   * (AfClient, on a `boot_id` change). In-flight fetches are left to
+   * finish; their ids are not ones the new process will ask about. */
+  clear(): void {
+    this.map.clear();
+    this.markDirty();
+  }
+
   /** Synchronous cache read — does not fetch. */
   get(id: string): AllocationEntry | undefined {
     return this.map.get(id);

@@ -160,6 +160,32 @@ export class EventStore {
     this.dirty = true;
   }
 
+  /** Back to the freshly-constructed state, all-time counters included —
+   * everything held came from a watcher process that is gone (AfClient, on
+   * a `boot_id` change), and its sequence of events cannot be merged with
+   * the new process's. `rev` is bumped on the next `flush()` like any
+   * other change, so selectors recompute once. */
+  clear(): void {
+    this.ring = new Array(this.capacity);
+    this.writeIndex = 0;
+    this.count = 0;
+    this.nextSeq = 0;
+    this._totalSeen = 0;
+    this.spanMap.clear();
+    this.buckets.clear();
+    this._perType.clear();
+    this._perCollector.clear();
+    this._perCollectorLastSeenMs.clear();
+    this._decisions = [];
+    this._decisionSeq = 0;
+    this._rejects = [];
+    this._gaps = [];
+    this._watchdog = [];
+    this.openSpanOrder = [];
+    this._openSpanDropped = 0;
+    this.markDirty();
+  }
+
   /** Bumps `rev` once if anything changed since the last flush; a no-op
    * otherwise. Called from AfClient's single 1 Hz interval — never from
    * ingest methods themselves. */
