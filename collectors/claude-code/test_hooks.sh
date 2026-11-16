@@ -861,7 +861,9 @@ rm -rf "$state12"
 state13="$(mktemp -d)/fresh-state"
 payload13="$(ls "$DATA"/*.json | head -1)"
 (umask 022 && run_hook "$state13" "$payload13") >/dev/null 2>&1 || true
-modes13="$(find "$state13" -exec stat -f '%Lp' {} + 2>/dev/null || find "$state13" -exec stat -c '%a' {} +)"
+# GNU form first: on Linux `stat -f` is not an error but "file system
+# status", so trying the BSD form first never falls through there.
+modes13="$(find "$state13" -exec stat -c '%a' {} + 2>/dev/null || find "$state13" -exec stat -f '%Lp' {} +)"
 if [ -n "$modes13" ] && ! printf '%s\n' "$modes13" | grep -qv '^[67]00$'; then
   pass "Private files: everything the hook creates is owner-only"
 else
