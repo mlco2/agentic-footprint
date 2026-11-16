@@ -10,7 +10,7 @@
 //! watcher has no project directory to inspect, so a project-only setup is
 //! reported as not configured until its first event arrives.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -598,6 +598,31 @@ pub(crate) struct ProcessFact {
     /// Started before the configuration last changed: it is still running
     /// with whatever the file said before.
     pub(crate) stale: bool,
+    /// Where it runs, when it could be inspected.
+    pub(crate) cwd: Option<PathBuf>,
+    /// The configuration this very process loads. `None`: it could not be
+    /// inspected far enough to know, and nothing is claimed about it.
+    pub(crate) config: Option<UserConfig>,
+    /// The file that configuration lives in — or would live in, for a
+    /// Codex home that has none.
+    pub(crate) config_path: Option<PathBuf>,
+    /// The session it is running, when a link exists.
+    pub(crate) session_id: Option<String>,
+}
+
+impl ProcessFact {
+    /// A process nothing is known about beyond the process table.
+    fn listed(pid: u32, started: SystemTime, stale: bool) -> Self {
+        Self {
+            pid,
+            started,
+            stale,
+            cwd: None,
+            config: None,
+            config_path: None,
+            session_id: None,
+        }
+    }
 }
 
 /// Everything detection knows about one agent, before any event.
@@ -622,10 +647,12 @@ pub(crate) fn facts_from(
     let processes = processes.map(|all| {
         all.iter()
             .filter(|process| process.name == agent.command())
-            .map(|process| ProcessFact {
-                pid: process.pid,
-                started: process.started,
-                stale: config_modified.is_some_and(|modified| process.started < modified),
+            .map(|process| {
+                ProcessFact::listed(
+                    process.pid,
+                    process.started,
+                    config_modified.is_some_and(|modified| process.started < modified),
+                )
             })
             .collect()
     });
@@ -638,9 +665,28 @@ pub(crate) fn facts_from(
 }
 
 /// Detects every supported agent. Reads the user-scope config files,
-/// `PATH`, and one `ps`; writes nothing.
+/// `PATH`, and one `ps`; writes nothing. No process is inspected: each is
+/// only listed.
 pub(crate) fn detect(home: &Path, logs_endpoint: &str) -> Vec<AgentFacts> {
-    let processes = running_agents();
+    detect_from(
+        home,
+        logs_endpoint,
+        running_agents().as_deref(),
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+    )
+}
+
+/// [`detect`] from already-gathered inputs: the process list, what
+/// inspecting those processes found (by pid), and the Claude Code sessions
+/// the hook tied to a pid.
+pub(crate) fn detect_from(
+    home: &Path,
+    logs_endpoint: &str,
+    processes: Option<&[AgentProcess]>,
+    inspections: &BTreeMap<u32, Inspection>,
+    claude_sessions: &BTreeMap<u32, String>,
+) -> Vec<AgentFacts> {
     AgentId::all()
         .into_iter()
         .map(|agent| {
@@ -653,15 +699,154 @@ pub(crate) fn detect(home: &Path, logs_endpoint: &str) -> Vec<AgentFacts> {
                         .ok()
                 }
             };
-            facts_from(
+            let mut facts = facts_from(
                 agent,
                 setup::command_exists(agent.command()),
                 config,
                 modified,
-                processes.as_deref(),
-            )
+                processes,
+            );
+            for process in facts.processes.iter_mut().flatten() {
+                if let Some(inspection) = inspections.get(&process.pid) {
+                    judge_process(
+                        agent,
+                        process,
+                        inspection,
+                        home,
+                        logs_endpoint,
+                        claude_sessions,
+                    );
+                }
+            }
+            facts
         })
         .collect()
+}
+
+/// Fills in what inspecting one process allows to be said about it: the
+/// configuration it loads, and whether it started before that changed.
+fn judge_process(
+    agent: AgentId,
+    process: &mut ProcessFact,
+    inspection: &Inspection,
+    home: &Path,
+    logs_endpoint: &str,
+    claude_sessions: &BTreeMap<u32, String>,
+) {
+    process.cwd = inspection.cwd.clone();
+    let judged = match agent {
+        AgentId::ClaudeCode => {
+            process.session_id = claude_sessions.get(&process.pid).cloned();
+            // Without its directory the project scopes are unknown, and
+            // they can switch everything off.
+            inspection
+                .cwd
+                .as_deref()
+                .map(|cwd| claude_config_for(home, Some(cwd), logs_endpoint))
+        }
+        AgentId::Codex => {
+            process.session_id = inspection.codex_session.clone();
+            inspection.codex_home.as_deref().map(|codex_home| {
+                process.config_path = Some(codex_home.join("config.toml"));
+                codex_config_for(codex_home, logs_endpoint)
+            })
+        }
+        #[cfg(feature = "experimental-opencode")]
+        AgentId::OpenCode => None,
+    };
+    let Some((config, modified)) = judged else {
+        return;
+    };
+    if let UserConfig::Configured { path } | UserConfig::Misconfigured { path, .. } = &config {
+        process.config_path = Some(path.clone());
+    }
+    process.stale = modified.is_some_and(|modified| process.started < modified);
+    process.config = Some(config);
+}
+
+/// The `af setup` invocation that configures what this process loads.
+fn setup_command(agent: AgentId, process: &ProcessFact, home: &Path) -> String {
+    let base = format!("af setup --agents {}", agent.id());
+    let quoted = |path: &Path| {
+        let text = path.display().to_string();
+        if text.contains(' ') {
+            format!("'{text}'")
+        } else {
+            text
+        }
+    };
+    let codex_home = process.config_path.as_deref().and_then(Path::parent);
+    match (agent, &process.cwd, codex_home) {
+        // A Codex home that is neither the default nor the project's own:
+        // setup finds it through the same variable Codex was given.
+        (AgentId::Codex, cwd, Some(codex_home))
+            if codex_home != home.join(".codex")
+                && cwd.as_deref().map(|cwd| cwd.join(".codex")).as_deref() != Some(codex_home) =>
+        {
+            format!("CODEX_HOME={} {base}", quoted(codex_home))
+        }
+        (AgentId::Codex, _, Some(codex_home)) if codex_home == home.join(".codex") => base,
+        (_, Some(cwd), _) => format!("{base} --project {}", quoted(cwd)),
+        _ => base,
+    }
+}
+
+/// One process's state: `(state, detail, action, last event ms)`. First
+/// rule that matches; an event that arrived outranks every file.
+fn process_state(
+    agent: AgentId,
+    process: &ProcessFact,
+    home: &Path,
+    activity: Option<&Activity>,
+    unexplained_ms: Option<i64>,
+) -> (&'static str, Option<String>, Option<String>, Option<i64>) {
+    let heard = process
+        .session_id
+        .as_ref()
+        .and_then(|session| activity?.sessions.get(session).copied());
+    if heard.is_some() {
+        return ("receiving", None, None, heard);
+    }
+    let Some(config) = &process.config else {
+        return (
+            "unknown",
+            Some("cannot inspect this process".to_string()),
+            None,
+            None,
+        );
+    };
+    match config {
+        UserConfig::Misconfigured { detail, .. } => (
+            "misconfigured",
+            Some(detail.clone()),
+            Some(setup_command(agent, process, home)),
+            None,
+        ),
+        UserConfig::Absent => (
+            "not_configured",
+            process
+                .config_path
+                .as_ref()
+                .map(|path| format!("{} has no telemetry configuration", path.display())),
+            Some(setup_command(agent, process, home)),
+            None,
+        ),
+        UserConfig::Configured { .. } if process.stale => (
+            "needs_restart",
+            None,
+            Some(format!("restart {}", agent.command())),
+            None,
+        ),
+        // Configured, linked to no session, while the agent's events come
+        // from sessions no process accounts for: they may well be its own,
+        // and "nothing received" would be a claim nothing supports.
+        UserConfig::Configured { .. }
+            if process.session_id.is_none() && unexplained_ms.is_some() =>
+        {
+            ("receiving", None, None, unexplained_ms)
+        }
+        UserConfig::Configured { .. } => ("waiting", None, None, None),
+    }
 }
 
 /// `ps` reports elapsed time in whole seconds, so the start time derived
@@ -698,7 +883,8 @@ pub(crate) fn keep_start_times(new: &mut [AgentFacts], old: &[AgentFacts]) {
 /// What a watcher has received from one agent since it started.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct Activity {
-    pub(crate) sessions: BTreeSet<String>,
+    /// Each session heard from, with the time of its last event (ms).
+    pub(crate) sessions: BTreeMap<String, i64>,
     pub(crate) last_event_at_ms: Option<i64>,
 }
 
@@ -713,35 +899,51 @@ pub(crate) fn system_time_rfc3339(time: SystemTime) -> Option<String> {
 /// purpose: an event that actually arrived outranks anything the files or
 /// the process table suggest.
 pub(crate) fn agent_row(facts: &AgentFacts, activity: Option<&Activity>) -> Value {
-    let last_event_at_ms = activity.and_then(|activity| activity.last_event_at_ms);
-    let has_stale = facts
-        .processes
-        .as_ref()
-        .is_some_and(|processes| processes.iter().any(|process| process.stale));
+    agent_row_in(facts, activity, Path::new(""))
+}
 
+/// [`agent_row`] knowing the home directory, which only decides how a
+/// setup command for a Codex in its default home is spelled.
+pub(crate) fn agent_row_in(facts: &AgentFacts, activity: Option<&Activity>, home: &Path) -> Value {
+    let last_event_at_ms = activity.and_then(|activity| activity.last_event_at_ms);
+    let processes = facts.processes.as_deref().unwrap_or_default();
+
+    // The latest event from a session that no listed process accounts for.
+    let unexplained_ms = activity.and_then(|activity| {
+        activity
+            .sessions
+            .iter()
+            .filter(|(session, _)| {
+                !processes
+                    .iter()
+                    .any(|process| process.session_id.as_ref() == Some(session))
+            })
+            .map(|(_, at)| *at)
+            .max()
+    });
+    let states: Vec<_> = processes
+        .iter()
+        .map(|process| process_state(facts.agent, process, home, activity, unexplained_ms))
+        .collect();
+
+    // Without an event, the most actionable thing a process says; with no
+    // process that could be inspected, what the user-scope file says.
+    let from_processes = [
+        "needs_restart",
+        "misconfigured",
+        "not_configured",
+        "waiting",
+    ]
+    .into_iter()
+    .find(|wanted| states.iter().any(|(state, ..)| state == wanted));
     let (state, action): (&str, Option<String>) = if last_event_at_ms.is_some() {
         ("receiving", None)
+    } else if let Some(state) = from_processes {
+        (state, None)
     } else {
-        match (&facts.config, facts.installed) {
-            #[cfg(feature = "experimental-opencode")]
-            (_, true) if facts.agent == AgentId::OpenCode => {
-                ("waiting", Some("af collect opencode".to_string()))
-            }
-            #[cfg(feature = "experimental-opencode")]
-            (_, false) if facts.agent == AgentId::OpenCode => ("not_installed", None),
-            (UserConfig::Configured { .. }, _) if has_stale => (
-                "needs_restart",
-                Some(format!("restart {}", facts.agent.command())),
-            ),
-            (UserConfig::Configured { .. }, _) => ("waiting", None),
-            (UserConfig::Misconfigured { .. }, _) => {
-                ("misconfigured", Some("af setup".to_string()))
-            }
-            (UserConfig::Absent, true) => ("not_configured", Some("af setup".to_string())),
-            (UserConfig::Absent, false) => ("not_installed", None),
-        }
+        global_state(facts)
     };
-
+    let global = from_processes.is_none() || last_event_at_ms.is_some();
     let (config_path, detail) = match &facts.config {
         UserConfig::Absent => (None, None),
         UserConfig::Configured { path } => (Some(path), None),
@@ -752,17 +954,30 @@ pub(crate) fn agent_row(facts: &AgentFacts, activity: Option<&Activity>) -> Valu
         "id": facts.agent.id(),
         "name": facts.agent.name(),
         "state": state,
-        "detail": detail,
+        // The user-scope file's own trouble; silent when the state above
+        // was read from a process, whose row carries its reason.
+        "detail": detail.filter(|_| global),
         "action": action,
         "config_path": config_path.map(|path| path.display().to_string()),
         "processes": facts.processes.as_ref().map(|processes| {
             processes
                 .iter()
-                .map(|process| {
+                .zip(&states)
+                .map(|(process, (state, detail, action, heard))| {
                     json!({
                         "pid": process.pid,
                         "started_at": system_time_rfc3339(process.started),
                         "stale": process.stale,
+                        "cwd": process.cwd.as_ref().map(|path| path.display().to_string()),
+                        "config_path": process
+                            .config_path
+                            .as_ref()
+                            .map(|path| path.display().to_string()),
+                        "state": state,
+                        "detail": detail,
+                        "action": action,
+                        "session_id": process.session_id,
+                        "last_event_at": heard.and_then(af_core::rfc3339_ms),
                     })
                 })
                 .collect::<Vec<_>>()
@@ -770,6 +985,31 @@ pub(crate) fn agent_row(facts: &AgentFacts, activity: Option<&Activity>) -> Valu
         "sessions": activity.map_or(0, |activity| activity.sessions.len()),
         "last_event_at": last_event_at_ms.and_then(af_core::rfc3339_ms),
     })
+}
+
+/// The agent's state from the user-scope file and the process table alone
+/// — what there is to say when no process could be inspected.
+fn global_state(facts: &AgentFacts) -> (&'static str, Option<String>) {
+    let has_stale = facts
+        .processes
+        .as_ref()
+        .is_some_and(|processes| processes.iter().any(|process| process.stale));
+    match (&facts.config, facts.installed) {
+        #[cfg(feature = "experimental-opencode")]
+        (_, true) if facts.agent == AgentId::OpenCode => {
+            ("waiting", Some("af collect opencode".to_string()))
+        }
+        #[cfg(feature = "experimental-opencode")]
+        (_, false) if facts.agent == AgentId::OpenCode => ("not_installed", None),
+        (UserConfig::Configured { .. }, _) if has_stale => (
+            "needs_restart",
+            Some(format!("restart {}", facts.agent.command())),
+        ),
+        (UserConfig::Configured { .. }, _) => ("waiting", None),
+        (UserConfig::Misconfigured { .. }, _) => ("misconfigured", Some("af setup".to_string())),
+        (UserConfig::Absent, true) => ("not_configured", Some("af setup".to_string())),
+        (UserConfig::Absent, false) => ("not_installed", None),
+    }
 }
 
 #[cfg(test)]
@@ -856,11 +1096,7 @@ mod tests {
                 processes: Some(
                     processes
                         .into_iter()
-                        .map(|(pid, started)| ProcessFact {
-                            pid,
-                            started,
-                            stale: false,
-                        })
+                        .map(|(pid, started)| ProcessFact::listed(pid, started, false))
                         .collect(),
                 ),
             }]
@@ -1271,16 +1507,8 @@ mod tests {
         assert_eq!(
             facts.processes,
             Some(vec![
-                ProcessFact {
-                    pid: 1,
-                    started: at(940),
-                    stale: true
-                },
-                ProcessFact {
-                    pid: 2,
-                    started: at(1_060),
-                    stale: false
-                },
+                ProcessFact::listed(1, at(940), true),
+                ProcessFact::listed(2, at(1_060), false),
             ]),
             "only this agent's processes, each judged against the config's mtime"
         );
@@ -1298,24 +1526,259 @@ mod tests {
         );
     }
 
+    // --- per-process state ---------------------------------------------------
+
+    fn codex_process(pid: u32, started: SystemTime) -> AgentProcess {
+        AgentProcess {
+            pid,
+            name: "codex".into(),
+            started,
+        }
+    }
+
+    /// A Codex process running in `project` with `<project>/.codex` as its
+    /// home, writing session `session`.
+    fn codex_in(project: &Path, session: &str) -> Inspection {
+        Inspection {
+            cwd: Some(project.to_path_buf()),
+            codex_home: Some(project.join(".codex")),
+            codex_session: Some(session.to_string()),
+        }
+    }
+
+    fn row_of(facts: &[AgentFacts], agent: AgentId, activity: Option<&Activity>) -> Value {
+        let facts = facts.iter().find(|facts| facts.agent == agent).unwrap();
+        agent_row(facts, activity)
+    }
+
+    fn sessions(entries: &[(&str, i64)]) -> Activity {
+        Activity {
+            sessions: entries
+                .iter()
+                .map(|(id, at)| (id.to_string(), *at))
+                .collect(),
+            last_event_at_ms: entries.iter().map(|(_, at)| *at).max(),
+        }
+    }
+
+    fn later() -> SystemTime {
+        SystemTime::now() + Duration::from_secs(3600)
+    }
+
+    #[test]
+    fn a_codex_with_an_unconfigured_project_home_is_not_configured_with_its_project_command() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("home");
+        let project = dir.path().join("project");
+        std::fs::create_dir_all(project.join(".codex")).unwrap();
+        // The user's default home is configured: irrelevant to this process.
+        std::fs::create_dir_all(home.join(".codex")).unwrap();
+        std::fs::write(
+            home.join(".codex/config.toml"),
+            setup::append_codex_otel("", ENDPOINT),
+        )
+        .unwrap();
+        let processes = [codex_process(7, later())];
+        let inspections = BTreeMap::from([(7, codex_in(&project, "s9"))]);
+        let facts = detect_from(
+            &home,
+            ENDPOINT,
+            Some(&processes),
+            &inspections,
+            &BTreeMap::new(),
+        );
+        let row = row_of(&facts, AgentId::Codex, None);
+        let process = &row["processes"][0];
+        assert_eq!(process["state"], "not_configured", "{process}");
+        assert_eq!(process["cwd"], project.display().to_string());
+        assert_eq!(
+            process["config_path"],
+            project.join(".codex/config.toml").display().to_string()
+        );
+        assert_eq!(
+            process["action"],
+            format!("af setup --agents codex --project {}", project.display())
+        );
+        assert_eq!(process["session_id"], "s9");
+        assert_eq!(
+            row["state"], "not_configured",
+            "the agent's state is its process's, not the unused global file's"
+        );
+    }
+
+    #[test]
+    fn an_uninspectable_process_is_unknown_never_not_configured() {
+        let dir = tempfile::tempdir().unwrap();
+        let processes = [codex_process(7, later())];
+        let facts = detect_from(
+            dir.path(),
+            ENDPOINT,
+            Some(&processes),
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+        );
+        let row = row_of(&facts, AgentId::Codex, None);
+        let process = &row["processes"][0];
+        assert_eq!(process["state"], "unknown");
+        assert_eq!(process["action"], Value::Null);
+        assert_eq!(process["cwd"], Value::Null);
+        assert!(
+            ["not_configured", "not_installed"].contains(&row["state"].as_str().unwrap()),
+            "with nothing inspected the agent falls back to the global file: {row}"
+        );
+    }
+
+    #[test]
+    fn two_processes_one_exporting_one_not() {
+        let dir = tempfile::tempdir().unwrap();
+        let (a, b) = (dir.path().join("a"), dir.path().join("b"));
+        let processes = [codex_process(7, later()), codex_process(8, later())];
+        let inspections = BTreeMap::from([(7, codex_in(&a, "s-a")), (8, codex_in(&b, "s-b"))]);
+        let facts = detect_from(
+            dir.path(),
+            ENDPOINT,
+            Some(&processes),
+            &inspections,
+            &BTreeMap::new(),
+        );
+        let row = row_of(&facts, AgentId::Codex, Some(&sessions(&[("s-a", 5_000)])));
+        assert_eq!(row["state"], "receiving");
+        assert_eq!(row["processes"][0]["state"], "receiving");
+        assert_eq!(
+            row["processes"][0]["last_event_at"],
+            af_core::rfc3339_ms(5_000).unwrap()
+        );
+        assert_eq!(row["processes"][1]["state"], "not_configured");
+        assert_eq!(row["processes"][1]["last_event_at"], Value::Null);
+    }
+
+    #[test]
+    fn a_claude_process_is_linked_to_its_session_by_the_hooks_pid() {
+        let (_dir, home, project) = claude_scopes_fixture(None);
+        let processes = [claude_process(11, later())];
+        let inspections = BTreeMap::from([(
+            11,
+            Inspection {
+                cwd: Some(project.clone()),
+                ..Inspection::default()
+            },
+        )]);
+        let links = BTreeMap::from([(11, "c1".to_string())]);
+        let facts = detect_from(&home, ENDPOINT, Some(&processes), &inspections, &links);
+        let quiet = row_of(&facts, AgentId::ClaudeCode, None);
+        assert_eq!(quiet["processes"][0]["state"], "not_configured");
+        assert_eq!(
+            quiet["processes"][0]["action"],
+            format!(
+                "af setup --agents claude-code --project {}",
+                project.display()
+            )
+        );
+        let row = row_of(
+            &facts,
+            AgentId::ClaudeCode,
+            Some(&sessions(&[("c1", 9_000)])),
+        );
+        assert_eq!(row["processes"][0]["state"], "receiving");
+        assert_eq!(row["processes"][0]["session_id"], "c1");
+    }
+
+    #[test]
+    fn agent_state_takes_the_most_actionable_process_state() {
+        let (_dir, home, project) = claude_scopes_fixture(Some(&claude_settings(
+            "http://127.0.0.1:4318",
+            Some(GOOD_HOOK),
+        )));
+        let elsewhere = home.join("elsewhere");
+        std::fs::write(
+            project.join(".claude/settings.local.json"),
+            r#"{"env":{"CLAUDE_CODE_ENABLE_TELEMETRY":"0"}}"#,
+        )
+        .unwrap();
+        let at_cwd = |cwd: &Path| Inspection {
+            cwd: Some(cwd.to_path_buf()),
+            ..Inspection::default()
+        };
+        let inspections = BTreeMap::from([
+            (1, at_cwd(&elsewhere)),
+            (2, at_cwd(&project)),
+            (3, at_cwd(&elsewhere)),
+        ]);
+        let states = |processes: &[AgentProcess]| {
+            let facts = detect_from(
+                &home,
+                ENDPOINT,
+                Some(processes),
+                &inspections,
+                &BTreeMap::new(),
+            );
+            let row = row_of(&facts, AgentId::ClaudeCode, None);
+            let each: Vec<String> = row["processes"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|process| process["state"].as_str().unwrap().to_string())
+                .collect();
+            (row["state"].as_str().unwrap().to_string(), each)
+        };
+        assert_eq!(
+            states(&[claude_process(1, later()), claude_process(2, later())]),
+            (
+                "misconfigured".to_string(),
+                vec!["waiting".to_string(), "misconfigured".to_string()]
+            )
+        );
+        // Started long before its settings were written: restart outranks.
+        assert_eq!(
+            states(&[claude_process(2, later()), claude_process(3, at(1))]).0,
+            "needs_restart"
+        );
+    }
+
+    #[test]
+    fn a_waiting_process_with_no_session_link_takes_events_nothing_else_explains() {
+        let (_dir, home, _project) = claude_scopes_fixture(Some(&claude_settings(
+            "http://127.0.0.1:4318",
+            Some(GOOD_HOOK),
+        )));
+        let processes = [claude_process(1, later())];
+        let inspections = BTreeMap::from([(
+            1,
+            Inspection {
+                cwd: Some(home.clone()),
+                ..Inspection::default()
+            },
+        )]);
+        let facts = detect_from(
+            &home,
+            ENDPOINT,
+            Some(&processes),
+            &inspections,
+            &BTreeMap::new(),
+        );
+        let row = row_of(
+            &facts,
+            AgentId::ClaudeCode,
+            Some(&sessions(&[("orphan", 4_000)])),
+        );
+        assert_eq!(
+            row["processes"][0]["state"], "receiving",
+            "never 'nothing received' while the agent's events have no other source"
+        );
+    }
+
     fn facts(installed: bool, config: UserConfig, stale: Option<bool>) -> AgentFacts {
         AgentFacts {
             agent: AgentId::ClaudeCode,
             installed,
             config,
-            processes: stale.map(|stale| {
-                vec![ProcessFact {
-                    pid: 6363,
-                    started: at(10),
-                    stale,
-                }]
-            }),
+            processes: stale.map(|stale| vec![ProcessFact::listed(6363, at(10), stale)]),
         }
     }
 
     fn active() -> Activity {
         Activity {
-            sessions: BTreeSet::from(["s1".to_string(), "s2".to_string()]),
+            sessions: BTreeMap::from([("s1".to_string(), 1), ("s2".to_string(), 2)]),
             last_event_at_ms: Some(1_794_000_000_123),
         }
     }
@@ -1445,7 +1908,8 @@ mod tests {
 
     #[test]
     fn every_agent_is_listed_once_with_distinct_ids() {
-        let ids: BTreeSet<&str> = AgentId::all().into_iter().map(AgentId::id).collect();
+        let ids: std::collections::BTreeSet<&str> =
+            AgentId::all().into_iter().map(AgentId::id).collect();
         assert_eq!(ids.len(), AgentId::all().len());
         assert!(ids.contains("claude-code") && ids.contains("codex"));
     }

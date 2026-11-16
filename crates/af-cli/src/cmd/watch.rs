@@ -1173,7 +1173,11 @@ impl Watch {
             return;
         };
         let activity = self.activity.entry(agent).or_default();
-        activity.sessions.insert(session_id.to_string());
+        let heard = activity
+            .sessions
+            .entry(session_id.to_string())
+            .or_insert(at_ms);
+        *heard = (*heard).max(at_ms);
         activity.last_event_at_ms =
             Some(activity.last_event_at_ms.map_or(at_ms, |at| at.max(at_ms)));
         self.status_dirty = true;
