@@ -33,6 +33,8 @@ fn watch_exits_gracefully_on_ctrl_break() {
             "watch",
             "--batch-interval-ms",
             "0",
+            "--console-window-ms",
+            "0",
             "--no-sidecars",
             "--no-otlp",
             "--debug",

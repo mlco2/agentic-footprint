@@ -85,7 +85,7 @@ export interface AfClientDeps {
   visibility?: VisibilityLike;
 }
 
-const SSE_EVENT_NAMES: SseEventName[] = ["fact", "decision", "alloc", "reject", "gap", "watchdog", "report", "health", "session", "reset", "status", "ping"];
+const SSE_EVENT_NAMES: SseEventName[] = ["fact", "decision", "alloc", "reject", "gap", "watchdog", "report", "health", "session", "sessions", "reset", "status", "ping"];
 
 const BACKOFF_MIN_MS = 500;
 /** While the watcher is off this is the whole cost of an open console: one
@@ -328,16 +328,18 @@ export class AfClient {
     const encoded = encodeURIComponent(sessionId);
     void (async () => {
       try {
-        const info = await this.fetchJson<SessionInfo>(`/debug/session?session_id=${encoded}`);
-        this.sessionStoreRef.set(info);
+        // `null`: the collector has not rebuilt this session since a console
+        // attached. Asking is what makes it do so; the frames follow.
+        const info = await this.fetchJson<SessionInfo | null>(`/debug/session?session_id=${encoded}`);
+        if (info) this.sessionStoreRef.set(info);
       } catch {
         // non-fatal — the session frame republishes every pass
       }
       try {
-        const report = await this.fetchJson<DebugReport>(
+        const report = await this.fetchJson<DebugReport | null>(
           `/debug/report?level=session&session_id=${encoded}`,
         );
-        this.reportStoreRef.set(report);
+        if (report) this.reportStoreRef.set(report);
       } catch {
         // non-fatal — the report frame republishes every pass
       }
@@ -584,6 +586,9 @@ export class AfClient {
         return;
       case "session":
         this.sessionStoreRef.set(frame.data);
+        return;
+      case "sessions":
+        if (Array.isArray(frame.data)) this.sessionStoreRef.setSummaries(frame.data);
         return;
       case "reset":
       case "status":

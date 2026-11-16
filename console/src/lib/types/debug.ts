@@ -404,6 +404,7 @@ export type SseEventName =
   | "report"
   | "health"
   | "session"
+  | "sessions"
   | "reset"
   | "status"
   | "ping";
@@ -427,6 +428,9 @@ export interface SseFrameDataMap {
   /** Per-session replace-on-arrival, one frame per session per pass — the
    * picker follows sessions live through these. */
   session: SessionInfo;
+  /** The picker's whole list, replacing the summaries: sent when the
+   * collector lists its stored sessions for a console that has attached. */
+  sessions: SessionSummary[];
   reset: ResetFrame;
   status: WatcherStatus;
   ping: PingFrame;

@@ -146,6 +146,8 @@ impl Watch {
             .env("AF_STATE_DIR", state_dir)
             .args(["watch", "--debug"])
             .args(["--batch-interval-ms", "0"])
+            // The fixtures are dated: tell the console all of them.
+            .args(["--console-window-ms", "0"])
             .args(["--debug-addr", &addr.to_string()])
             .args(extra)
             .stdout(Stdio::piped())

@@ -155,6 +155,8 @@ pub struct WatchArgs {
     /// facts (sample-only staleness waits [`SAMPLE_REBUILD_FACTOR`] times
     /// longer). New sessions skip the wait. Tests pass zero.
     pub batch_interval: Duration,
+    /// How far back a backfill reaches, in milliseconds; 0 is everything.
+    pub console_window_ms: i64,
 }
 
 /// Termination-request plumbing: one flag, set by the platform's stop
@@ -228,7 +230,7 @@ mod shutdown {
 /// and the `/debug` API have no authentication, and a wildcard or LAN bind
 /// would hand both to the network (a `Host: 127.0.0.1` header passes the
 /// host check from anywhere).
-fn loopback_addr(flag: &str, value: &str) -> Result<SocketAddr> {
+pub(crate) fn loopback_addr(flag: &str, value: &str) -> Result<SocketAddr> {
     let addr: SocketAddr = value
         .parse()
         .with_context(|| format!("invalid {flag} {value}"))?;
@@ -989,6 +991,8 @@ struct Watch {
     /// collector behind `af console`. Otherwise (`--debug`, tests) a debug
     /// state is watched for as long as it exists.
     on_demand: bool,
+    /// How far back a backfill reaches; 0 is everything.
+    console_window_ms: i64,
     /// Whether someone is looking at the debug state right now.
     watched: bool,
     /// Set while telling a console what it missed — at startup, on attach,
@@ -1163,6 +1167,7 @@ impl Watch {
             retired_collectors: BTreeMap::new(),
             reported_events: BoundedSet::new(DEDUP_HORIZON),
             on_demand: false,
+            console_window_ms: args.console_window_ms,
             watched,
             backfill: false,
             rejects: VecDeque::new(),
@@ -1887,7 +1892,7 @@ impl Watch {
             }
             // Remembered above either way: an old trace is passed over, not
             // postponed to the session's next refresh.
-            if self.backfill && !Self::recent(&loaded.samples[trace.sample_index].t_end) {
+            if self.backfill && !self.recent(&loaded.samples[trace.sample_index].t_end) {
                 continue;
             }
             self.decide(&attr_decision(trace));
@@ -2618,13 +2623,14 @@ impl Watch {
     }
 
     /// Whether `ts` is inside the window a console is told about.
-    fn recent(ts: &str) -> bool {
-        af_core::parse_ts(ts).is_none_or(|ms| ms >= now_ms() - debug_server::SNAPSHOT_WINDOW_MS)
+    fn recent(&self, ts: &str) -> bool {
+        self.console_window_ms == 0
+            || af_core::parse_ts(ts).is_none_or(|ms| ms >= now_ms() - self.console_window_ms)
     }
 
     /// The decision and `fact` frame for one event, once.
     fn publish_fact(&mut self, event: &Envelope) {
-        if (self.backfill && !Self::recent(&event.ts))
+        if (self.backfill && !self.recent(&event.ts))
             || !self.reported_events.insert(&event.event_id)
         {
             return;
@@ -2703,10 +2709,15 @@ impl Watch {
                     })
                 })
                 .collect();
-            if let Some(state) = &self.debug_state {
-                if let Ok(mut state) = state.lock() {
-                    state.set_session_summaries(rows);
-                }
+            // Also sent down the stream: a page that connected before this
+            // ran has already fetched an empty list.
+            let listed = self.debug_state.as_ref().and_then(|state| {
+                let mut state = state.lock().ok()?;
+                state.set_session_summaries(rows);
+                Some(state.session_list())
+            });
+            if let Some(listed) = listed {
+                self.publish("sessions", listed);
             }
         }
         self.backfill = true;
@@ -2952,6 +2963,7 @@ mod tests {
             local_grid_zone: None,
             remote_region: None,
             batch_interval: Duration::ZERO,
+            console_window_ms: debug_server::SNAPSHOT_WINDOW_MS,
         }
     }
 
@@ -3352,6 +3364,11 @@ mod tests {
                 state.frames_of("session"),
                 1,
                 "only the live session is rebuilt"
+            );
+            assert_eq!(
+                state.frames_of("sessions"),
+                1,
+                "the list goes down the stream too"
             );
         }
 

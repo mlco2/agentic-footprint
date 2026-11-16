@@ -331,6 +331,24 @@ describe("AfClient — bootstrap order", () => {
   });
 });
 
+describe("AfClient — the picker's rows over the stream", () => {
+  it("a `sessions` frame replaces the summaries, so a console attached before the collector listed them still gets them", async () => {
+    const h = makeHarness();
+    h.setSnapshot(emptySnapshot(0));
+    await h.client.start();
+    h.esInstances[0].emit(
+      "sessions",
+      [
+        { session_id: "s2", agent_app: null, t_start: "2026-01-02T00:00:00.000Z", t_last: "2026-01-02T00:01:00.000Z", events: 9 },
+        { session_id: "s1", agent_app: null, t_start: "2026-01-01T00:00:00.000Z", t_last: "2026-01-01T00:01:00.000Z", events: 3 },
+      ],
+      1,
+    );
+    expect(h.sessionStore.list.map((row) => row.session_id)).toEqual(["s2", "s1"]);
+    h.client.dispose();
+  });
+});
+
 // The real `af watch --debug` server only pushes `report`/`health` frames
 // per ingest pass, not on subscribe (docs/design-log.md) — unlike the mock,
 // whose `/debug/stream` promptly resends the latest of each to a new

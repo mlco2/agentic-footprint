@@ -21,6 +21,8 @@ enum Commands {
     Setup(cmd::setup::Args),
     /// Manage the resident per-user `af watch` receiver
     Service(cmd::service::Args),
+    /// Open the debug console of the collector that is already running
+    Console(cmd::console::Args),
     /// Diagnose why an agent's data is not arriving (read-only)
     Doctor(cmd::doctor::Args),
     /// Update af itself (and its managed Python runtime)
@@ -116,6 +118,10 @@ enum Commands {
         /// often (tests pass 0). A new session is still written at once.
         #[arg(long, default_value_t = cmd::watch::DEFAULT_BATCH_INTERVAL_MS, hide = true)]
         batch_interval_ms: u64,
+        /// How far back, in milliseconds, a console is told about what it
+        /// was not there to see. 0: everything (tests and fixture replays).
+        #[arg(long, default_value_t = cmd::debug_server::SNAPSHOT_WINDOW_MS as u64, hide = true)]
+        console_window_ms: u64,
     },
     /// Python runtime setup and diagnostics. Hidden: the installer and
     /// `af self update` drive it, and `af doctor` reports its health.
@@ -177,6 +183,9 @@ fn main() {
         Commands::SelfCmd(args) => {
             exit_with("af self", cmd::self_update::run(&paths::state_dir(), args))
         }
+        Commands::Console(args) => {
+            exit_with("af console", cmd::console::run(&paths::state_dir(), args))
+        }
         Commands::Service(args) => {
             let state_dir = paths::state_dir();
             exit_with(
@@ -219,6 +228,7 @@ fn main() {
             local_grid_zone,
             remote_region,
             batch_interval_ms,
+            console_window_ms,
         } => {
             let state_dir = paths::state_dir();
             let args = cmd::watch::WatchArgs {
@@ -232,6 +242,7 @@ fn main() {
                 local_grid_zone,
                 remote_region,
                 batch_interval: std::time::Duration::from_millis(batch_interval_ms),
+                console_window_ms: i64::try_from(console_window_ms).unwrap_or(i64::MAX),
             };
             exit_with("af watch", cmd::watch::run(&state_dir, args).map(|()| 0));
         }
