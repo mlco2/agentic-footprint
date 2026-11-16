@@ -4,7 +4,7 @@
   "title": "af summary, protocol version 1",
   "description": "Output of `af summary`. New fields may be added without a version change; consumers ignore what they do not know.",
   "type": "object",
-  "required": ["protocol_version", "af_version", "generated_at", "period", "collector", "totals", "by_agent", "by_model", "by_day"],
+  "required": ["protocol_version", "af_version", "generated_at", "period", "collector", "totals", "by_agent", "by_model", "models_not_estimated", "by_day"],
   "properties": {
     "protocol_version": {"const": 1},
     "af_version": {"type": "string"},
@@ -46,6 +46,21 @@
         "allOf": [{"$ref": "#/$defs/figures"}],
         "required": ["agent", "model"],
         "properties": {"agent": {"type": "string"}, "model": {"type": "string"}}
+      }
+    },
+    "models_not_estimated": {
+      "type": "array",
+      "description": "Models whose calls have no impact figure for a lasting reason (not `pending`), largest first. Their calls and tokens are counted everywhere; their impacts are in no `remote` sum.",
+      "items": {
+        "type": "object",
+        "required": ["agent", "model", "reason", "calls", "tokens"],
+        "properties": {
+          "agent": {"type": "string"},
+          "model": {"type": "string"},
+          "reason": {"type": "string", "description": "The estimator's status, e.g. `unknown_model`."},
+          "calls": {"$ref": "#/$defs/count"},
+          "tokens": {"$ref": "#/$defs/count"}
+        }
       }
     },
     "by_day": {

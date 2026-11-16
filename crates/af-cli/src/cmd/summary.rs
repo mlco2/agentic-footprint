@@ -294,6 +294,36 @@ pub fn build(
                 })
                 .collect()
         ),
+        // Models the estimator has no figures for, largest first: what a
+        // reader needs to be told is missing from `remote`, and how much.
+        "models_not_estimated": ranked(
+            by_model
+                .iter()
+                .filter_map(|((agent, model), figures)| {
+                    // `pending` is a matter of minutes; these are not.
+                    let calls: u64 = figures
+                        .unestimated
+                        .iter()
+                        .filter(|(reason, _)| reason.as_str() != "pending")
+                        .map(|(_, calls)| calls)
+                        .sum();
+                    let reason = figures
+                        .unestimated
+                        .keys()
+                        .find(|reason| reason.as_str() != "pending")?;
+                    Some((
+                        figures.total_tokens(),
+                        json!({
+                            "agent": agent,
+                            "model": model,
+                            "reason": reason,
+                            "calls": calls,
+                            "tokens": figures.total_tokens(),
+                        }),
+                    ))
+                })
+                .collect()
+        ),
         "by_day": by_day
             .iter()
             .map(|(day, figures)| figures.json(json!({"date": date_of(*day)})))
@@ -464,6 +494,11 @@ mod tests {
             totals["unestimated_by_reason"],
             json!({"pending": 1, "unknown_model": 1}),
             "why a call has no figure: not estimated yet, or a model the estimator does not know"
+        );
+        assert_eq!(
+            summary["models_not_estimated"],
+            json!([{"agent": "claude-code", "model": "claude-haiku-5-5", "reason": "unknown_model", "calls": 1, "tokens": 11}]),
+            "named, so a reader can be told what the impact figures leave out"
         );
         assert_eq!(totals["remote"]["gwp"]["unit"], "kgCO2eq");
         assert_eq!(totals["remote"]["gwp"]["total"]["max"], 0.003);

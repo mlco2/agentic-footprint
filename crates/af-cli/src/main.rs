@@ -25,6 +25,8 @@ enum Commands {
     Console(cmd::console::Args),
     /// Aggregated tokens and estimated impacts as JSON (read-only)
     Summary(cmd::summary::Args),
+    /// What is installed and running here, as JSON (read-only)
+    Status,
     /// Diagnose why an agent's data is not arriving (read-only)
     Doctor(cmd::doctor::Args),
     /// Update af itself (and its managed Python runtime)
@@ -185,6 +187,7 @@ fn main() {
         Commands::SelfCmd(args) => {
             exit_with("af self", cmd::self_update::run(&paths::state_dir(), args))
         }
+        Commands::Status => exit_with("af status", cmd::status::run(&paths::state_dir())),
         Commands::Summary(args) => {
             exit_with("af summary", cmd::summary::run(&paths::state_dir(), args))
         }

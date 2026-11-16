@@ -83,6 +83,15 @@ fn read_receipt(state_dir: &Path) -> Result<Option<Receipt>> {
     }
 }
 
+/// Whether the running binary is one `af self update` manages: a release
+/// install with its receipt.
+pub(crate) fn manages_this_binary(state_dir: &Path) -> bool {
+    let (Ok(Some(receipt)), Ok(exe)) = (read_receipt(state_dir), std::env::current_exe()) else {
+        return false;
+    };
+    receipt_is_for(&receipt, &exe)
+}
+
 fn receipt_is_for(receipt: &Receipt, exe: &Path) -> bool {
     match (receipt.binary.canonicalize(), exe.canonicalize()) {
         (Ok(recorded), Ok(running)) => recorded == running,

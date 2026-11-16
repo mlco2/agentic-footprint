@@ -11,6 +11,7 @@ The release binary is named `af`.
 | `af report` | Ingest pending facts, update derived results, and print a report. |
 | `af replay` | Rebuild derived estimates and joins from retained raw facts. |
 | `af watch` | Run resident ingestion, sampling, estimation, and optional debugging. |
+| `af status` | Print what is installed and running (service, receiver, agents) as JSON (read-only). |
 | `af summary` | Print aggregated tokens and estimated impacts as JSON (read-only). |
 | `af console` | Open the debug console of the `af watch` that is already running (macOS/Linux). |
 | `af doctor` | Diagnose why an agent's data is not arriving (read-only). |
@@ -34,7 +35,8 @@ estimated remote impacts in total, by agent, by model and per local day. It
 opens the store read-only and never ingests, estimates or writes, so it is safe
 to run repeatedly from another program; `schemas/summary/v1.schema.json` is its
 contract. Impacts are sums over the calls that have an estimate
-(`estimated_calls`); `unestimated_by_reason` says why the others have none.
+(`estimated_calls`); `unestimated_by_reason` says why the others have none, and
+`models_not_estimated` names the models the estimator has no figures for.
 
 `af console` serves the debug console on `--addr` (default
 `127.0.0.1:9414`, loopback only) by relaying to the running `af watch`, which

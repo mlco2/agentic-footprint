@@ -95,7 +95,7 @@ fn definition_path() -> Option<PathBuf> {
 /// The logs endpoint the installed service's receiver serves, read back
 /// from its definition (`--otlp-addr`), so a restart or status check
 /// verifies the address it was installed with rather than the default.
-fn installed_endpoint() -> Option<String> {
+pub(crate) fn installed_endpoint() -> Option<String> {
     let definition = fs::read_to_string(definition_path()?).ok()?;
     otlp_addr_in(&definition).map(|addr| format!("http://{addr}/v1/logs"))
 }
