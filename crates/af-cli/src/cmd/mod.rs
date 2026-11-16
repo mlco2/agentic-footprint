@@ -16,6 +16,7 @@ pub mod report;
 pub mod self_update;
 pub mod service;
 pub mod setup;
+pub mod summary;
 #[cfg(test)]
 pub(crate) mod test_support;
 pub mod validate_line;

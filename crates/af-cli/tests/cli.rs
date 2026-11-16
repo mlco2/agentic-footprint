@@ -14,6 +14,32 @@ const AF_RECEIVER_OK: &str = concat!(
     "\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
 );
 
+/// `af summary` is what another program runs every few seconds: it must
+/// answer on a machine where nothing was ever collected, and leave it so.
+#[test]
+fn summary_of_a_machine_with_no_data_is_json_and_writes_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let output = Command::cargo_bin("af")
+        .unwrap()
+        .env("AF_STATE_DIR", dir.path())
+        .args(["summary", "--period", "30d", "--utc-offset-minutes", "-300"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let summary: serde_json::Value = serde_json::from_slice(&output).expect("one JSON document");
+    assert_eq!(summary["protocol_version"], 1);
+    assert_eq!(summary["period"]["utc_offset_minutes"], -300);
+    assert_eq!(summary["by_day"].as_array().unwrap().len(), 30);
+    assert_eq!(summary["totals"]["calls"], 0);
+    assert_eq!(
+        std::fs::read_dir(dir.path()).unwrap().count(),
+        0,
+        "read-only"
+    );
+}
+
 #[test]
 fn reports_cli_version() {
     let mut cmd = Command::cargo_bin("af").unwrap();

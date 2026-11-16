@@ -24,7 +24,7 @@ serde_json = "1"
 toml = { version = "0.9", default-features = false, features = ["parse", "serde"] }
 serde = { version = "1", features = ["derive"] }
 sha2 = "0.10"
-time.workspace = true
+time = { workspace = true, features = ["local-offset"] }
 ureq = "2.12"
 # Release signatures, verified in-process: no cosign to install. Pinned
 # exactly — the crate is pre-1.0 and its API moves between releases.

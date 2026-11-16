@@ -23,6 +23,8 @@ enum Commands {
     Service(cmd::service::Args),
     /// Open the debug console of the collector that is already running
     Console(cmd::console::Args),
+    /// Aggregated tokens and estimated impacts as JSON (read-only)
+    Summary(cmd::summary::Args),
     /// Diagnose why an agent's data is not arriving (read-only)
     Doctor(cmd::doctor::Args),
     /// Update af itself (and its managed Python runtime)
@@ -182,6 +184,9 @@ fn main() {
         }
         Commands::SelfCmd(args) => {
             exit_with("af self", cmd::self_update::run(&paths::state_dir(), args))
+        }
+        Commands::Summary(args) => {
+            exit_with("af summary", cmd::summary::run(&paths::state_dir(), args))
         }
         Commands::Console(args) => {
             exit_with("af console", cmd::console::run(&paths::state_dir(), args))

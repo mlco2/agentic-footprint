@@ -62,6 +62,35 @@ impl Store {
         Ok(rows.collect::<std::result::Result<_, _>>()?)
     }
 
+    /// Every `llm_call` whose stored timestamp is between `from` and `to`
+    /// **as text**, oldest first.
+    ///
+    /// Stored timestamps do not all carry the same precision, and text
+    /// order is not time order across them: a caller cutting on instants
+    /// passes bounds wider than its period and compares parsed values.
+    pub fn llm_calls_with_ts_between(&self, from: &str, to: &str) -> Result<Vec<Envelope>> {
+        let mut stmt = self.0.prepare(
+            "SELECT json FROM raw_events
+             WHERE type = 'llm_call' AND ts >= ?1 AND ts <= ?2
+             ORDER BY ts ASC, event_id ASC",
+        )?;
+        let rows = stmt.query_map(params![from, to], |row| row.get::<_, String>(0))?;
+        let mut events = Vec::new();
+        for row in rows {
+            events.push(serde_json::from_str(&row?).map_err(Error::from)?);
+        }
+        Ok(events)
+    }
+
+    /// The latest timestamp of any stored event, as stored.
+    pub fn last_event_ts(&self) -> Result<Option<String>> {
+        Ok(self
+            .0
+            .query_row("SELECT MAX(ts) FROM raw_events", [], |row| {
+                row.get::<_, Option<String>>(0)
+            })?)
+    }
+
     /// Distinct sessions that have events from `collector`, sorted.
     pub fn session_ids_for_collector(&self, collector: &str) -> Result<Vec<String>> {
         let mut stmt = self.0.prepare(

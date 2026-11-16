@@ -1,0 +1,101 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/mlco2/agentic-footprint/schemas/summary/v1.schema.json",
+  "title": "af summary, protocol version 1",
+  "description": "Output of `af summary`. New fields may be added without a version change; consumers ignore what they do not know.",
+  "type": "object",
+  "required": ["protocol_version", "af_version", "generated_at", "period", "collector", "totals", "by_agent", "by_model", "by_day"],
+  "properties": {
+    "protocol_version": {"const": 1},
+    "af_version": {"type": "string"},
+    "generated_at": {"type": "string"},
+    "period": {
+      "type": "object",
+      "required": ["name", "from", "to", "utc_offset_minutes"],
+      "properties": {
+        "name": {"enum": ["today", "7d", "30d"]},
+        "from": {"type": "string", "description": "Start of the first local day, RFC 3339 UTC."},
+        "to": {"type": "string"},
+        "utc_offset_minutes": {"type": "integer", "description": "The offset local days are cut in, for the whole period."}
+      }
+    },
+    "collector": {
+      "type": "object",
+      "required": ["running", "last_event_at"],
+      "properties": {
+        "running": {"type": ["boolean", "null"], "description": "Whether a collector answers on its console socket; null where that cannot be asked."},
+        "last_event_at": {"type": ["string", "null"]}
+      }
+    },
+    "totals": {"$ref": "#/$defs/figures"},
+    "by_agent": {
+      "type": "array",
+      "description": "Largest token total first.",
+      "items": {
+        "allOf": [{"$ref": "#/$defs/figures"}],
+        "required": ["agent", "name"],
+        "properties": {
+          "agent": {"type": "string", "description": "claude-code, codex, … or `other`."},
+          "name": {"type": "string"}
+        }
+      }
+    },
+    "by_model": {
+      "type": "array",
+      "items": {
+        "allOf": [{"$ref": "#/$defs/figures"}],
+        "required": ["agent", "model"],
+        "properties": {"agent": {"type": "string"}, "model": {"type": "string"}}
+      }
+    },
+    "by_day": {
+      "type": "array",
+      "description": "Every local day of the period, oldest first, including days with no call.",
+      "items": {
+        "allOf": [{"$ref": "#/$defs/figures"}],
+        "required": ["date"],
+        "properties": {"date": {"type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}$"}}
+      }
+    }
+  },
+  "$defs": {
+    "count": {"type": "integer", "minimum": 0},
+    "figures": {
+      "type": "object",
+      "required": ["calls", "sessions", "tokens", "estimated_calls", "unestimated_calls", "unestimated_by_reason", "remote"],
+      "properties": {
+        "calls": {"$ref": "#/$defs/count"},
+        "sessions": {"$ref": "#/$defs/count", "description": "Sessions with at least one call in the group."},
+        "tokens": {
+          "type": "object",
+          "description": "Measured: as reported by the agents.",
+          "required": ["input", "output", "thought", "cache_read", "cache_write", "total"],
+          "additionalProperties": {"$ref": "#/$defs/count"}
+        },
+        "estimated_calls": {"$ref": "#/$defs/count", "description": "Calls whose impacts are in `remote`."},
+        "unestimated_calls": {"$ref": "#/$defs/count"},
+        "unestimated_by_reason": {
+          "type": "object",
+          "description": "`pending` (not estimated yet) or the estimator's status, e.g. `unknown_model`.",
+          "additionalProperties": {"$ref": "#/$defs/count"}
+        },
+        "remote": {
+          "type": "object",
+          "description": "Modelled impacts of the remote inference, summed over `estimated_calls` only: a lower bound when `unestimated_calls` is not zero. Keys: energy, gwp, water, adpe, pe. Nothing measured on this machine is included.",
+          "additionalProperties": {
+            "type": "object",
+            "required": ["unit", "total"],
+            "properties": {
+              "unit": {"type": "string"},
+              "total": {
+                "type": "object",
+                "required": ["min", "max"],
+                "properties": {"min": {"type": "number"}, "max": {"type": "number"}}
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
