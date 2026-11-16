@@ -2424,18 +2424,23 @@ mod tests {
 
     #[test]
     fn pings_stop_while_frames_flow() {
-        let state = shared(heartbeat_state(Duration::from_millis(400)));
+        // Frames every 50 ms for longer than the stream is read, which is
+        // itself longer than the heartbeat: without frames a ping would
+        // have been due. Only a pause of a whole second between two frames
+        // could let one through, so a slow machine does not fail this; how
+        // many frames arrive in the window is not what is being tested.
+        let state = shared(heartbeat_state(Duration::from_secs(1)));
         let server = start_test_server_with(Arc::clone(&state));
         let mut stream = open_stream(server.addr, "/debug/stream");
         let publisher = std::thread::spawn(move || {
-            for i in 0..12 {
+            for i in 0..32 {
                 std::thread::sleep(Duration::from_millis(50));
                 state.lock().unwrap().publish("fact", json!({"i": i}), i);
             }
         });
-        let events = read_events(&mut stream, Duration::from_millis(600));
+        let events = read_events(&mut stream, Duration::from_millis(1300));
         publisher.join().unwrap();
-        assert!(events.iter().filter(|e| e.event == "fact").count() >= 8);
+        assert!(events.iter().any(|e| e.event == "fact"), "frames flowed");
         assert!(
             events.iter().all(|e| e.event != "ping"),
             "a stream that is carrying frames needs no heartbeat: {events:?}"
