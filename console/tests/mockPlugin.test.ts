@@ -84,7 +84,7 @@ describe("mock watcher status", () => {
     expect(status.receiver.endpoint).toBe("127.0.0.1:4318");
     expect(Date.parse(status.started_at)).not.toBeNaN();
     const states = status.agents.map((agent) => agent.state);
-    const expected: AgentState[] = ["receiving", "waiting", "not_configured"];
+    const expected: AgentState[] = ["receiving", "not_configured", "not_configured"];
     for (const state of expected) expect(states).toContain(state);
     for (const agent of status.agents) {
       expect(agent.id).toBeTruthy();

@@ -9,7 +9,7 @@
 // lifetime, so "3s ago" versus "idle 12m" is derived here from
 // `last_event_at` — a subtraction used only to choose words, not a reported
 // quantity.
-import type { AgentStatus, WatcherStatus } from "../types/debug";
+import type { AgentProcessInfo, AgentStatus, WatcherStatus } from "../types/debug";
 
 /** State is never carried by the mark alone: every row has `label` too. */
 export type AgentMark = "●" | "◐" | "○";
@@ -22,6 +22,22 @@ export interface AgentRowView {
   /** A second line explaining the state, when there is something to say. */
   note: string | null;
   /** A command to run, when the watcher names an obvious next step. */
+  action: string | null;
+  /** One entry per running process the watcher judged on its own — empty
+   * for a watcher that only lists processes. */
+  processes: ProcessRowView[];
+  /** "1 of 3 not exporting": processes that need something done while the
+   * agent as a whole is receiving. */
+  summary: string | null;
+}
+
+export interface ProcessRowView {
+  pid: number;
+  /** The directory it runs in, home shortened to `~`; `null` if unknown. */
+  where: string | null;
+  mark: AgentMark;
+  label: string;
+  note: string | null;
   action: string | null;
 }
 
@@ -62,18 +78,56 @@ const WORDING: Record<string, [AgentMark, string]> = {
   not_installed: ["○", "not installed"],
 };
 
+/** `/Users/me/x` and `/home/me/x` read as `~/x`, wherever they appear. */
+function tilde(text: string): string {
+  return text.replace(/\/(?:Users|home)\/[^/\s]+/g, "~");
+}
+
+const NOT_EXPORTING = new Set(["needs_restart", "misconfigured", "not_configured"]);
+
+function processView(process: AgentProcessInfo, nowMs: number): ProcessRowView {
+  const base = { pid: process.pid, where: process.cwd ? tilde(process.cwd) : null, action: process.action ?? null };
+  const detail = process.detail ? tilde(process.detail) : null;
+  switch (process.state) {
+    case "receiving":
+      return { ...base, mark: "●", label: recency(process.last_event_at ?? null, nowMs), note: null };
+    case "needs_restart":
+      return { ...base, mark: "◐", label: "configured, needs restart", note: "started before its settings changed" };
+    case "waiting": {
+      // The safety net for setups the watcher does not model: silence is
+      // stated as silence, with how long it has lasted.
+      const started = Date.parse(process.started_at);
+      const since = Number.isNaN(started) ? "" : ` in ${coarse(nowMs - started)}`;
+      return { ...base, mark: "◐", label: `configured, nothing received${since}`, note: detail };
+    }
+    case "unknown":
+      return { ...base, mark: "○", label: "cannot inspect this process", note: null };
+    default: {
+      const [mark, label] = WORDING[String(process.state)] ?? ["○", String(process.state)];
+      return { ...base, mark, label, note: detail };
+    }
+  }
+}
+
 function view(agent: AgentStatus, nowMs: number): AgentRowView {
   const receiving = agent.state === "receiving";
   // A state this console does not know (a newer watcher) is shown as the
   // watcher spelled it rather than dropped or guessed at.
   const [mark, label] = receiving ? (["●", recency(agent.last_event_at, nowMs)] as const) : (WORDING[agent.state] ?? ["○", String(agent.state)]);
+  const judged = (agent.processes ?? []).filter((process) => process.state !== undefined);
+  const idle = judged.filter((process) => NOT_EXPORTING.has(String(process.state))).length;
+  // With a row per process, each says its own reason; the agent row keeps
+  // only what is about the agent itself.
+  const ownNote = receiving || agent.state === "needs_restart" ? staleNote(agent) : agent.detail;
   return {
     id: agent.id,
     name: agent.name,
     mark,
     label,
-    note: receiving || agent.state === "needs_restart" ? staleNote(agent) : agent.detail,
+    note: judged.length > 0 ? agent.detail : ownNote,
     action: agent.action,
+    processes: judged.map((process) => processView(process, nowMs)),
+    summary: receiving && idle > 0 ? `${idle} of ${judged.length} not exporting` : null,
   };
 }
 

@@ -3,7 +3,7 @@
 // `nowMs` is an argument, never read from a clock.
 import { describe, expect, it } from "vitest";
 import { selectAgentRows, selectWatcherLine } from "../src/lib/selectors/agents";
-import type { AgentState, AgentStatus, WatcherStatus } from "../src/lib/types/debug";
+import type { AgentProcessInfo, AgentState, AgentStatus, WatcherStatus } from "../src/lib/types/debug";
 
 const NOW = Date.parse("2026-11-16T09:20:00.000Z");
 
@@ -152,5 +152,87 @@ describe("selectWatcherLine", () => {
 
   it("is empty without a status", () => {
     expect(selectWatcherLine(null, NOW)).toBe("");
+  });
+});
+
+describe("per-process rows", () => {
+  const proc = (overrides: Partial<AgentProcessInfo>): AgentProcessInfo => ({
+    pid: 7,
+    started_at: new Date(NOW - 12 * 60_000).toISOString(),
+    stale: false,
+    cwd: "/Users/dev/work/api",
+    config_path: null,
+    state: "waiting",
+    detail: null,
+    action: null,
+    session_id: null,
+    last_event_at: null,
+    ...overrides,
+  });
+
+  it("a payload without per-process state has no sub-rows (older watcher)", () => {
+    const r = row(agent("needs_restart", { processes: [{ pid: 1, started_at: "x", stale: true }] }));
+    expect(r.processes).toEqual([]);
+    expect(r.note).toBe("PID 1 started before its settings changed — restart it");
+  });
+
+  it("names the process, where it runs, its state, why, and the command", () => {
+    const r = row(
+      agent("not_configured", {
+        id: "codex",
+        name: "Codex",
+        processes: [
+          proc({
+            pid: 74475,
+            cwd: "/Users/dev/oss/codecarbon",
+            state: "not_configured",
+            detail: "/Users/dev/oss/codecarbon/.codex/config.toml has no telemetry configuration",
+            action: "af setup --agents codex --project /Users/dev/oss/codecarbon",
+          }),
+        ],
+      }),
+    );
+    expect(r.processes).toEqual([
+      {
+        pid: 74475,
+        where: "~/oss/codecarbon",
+        mark: "○",
+        label: "not configured",
+        note: "~/oss/codecarbon/.codex/config.toml has no telemetry configuration",
+        action: "af setup --agents codex --project /Users/dev/oss/codecarbon",
+      },
+    ]);
+    expect(r.note, "the process row says it; the agent row does not repeat it").toBeNull();
+  });
+
+  it.each([
+    [{ state: "receiving", last_event_at: new Date(NOW - 3_000).toISOString() }, "●", "receiving · 3s ago"],
+    [{ state: "needs_restart", stale: true }, "◐", "configured, needs restart"],
+    [{ state: "waiting" }, "◐", "configured, nothing received in 12m"],
+    [{ state: "misconfigured", detail: "exports telemetry to http://x" }, "○", "misconfigured"],
+    [{ state: "unknown", cwd: null }, "○", "cannot inspect this process"],
+  ] as const)("%j -> %s %s", (overrides, mark, label) => {
+    const [p] = row(agent("waiting", { processes: [proc(overrides as Partial<AgentProcessInfo>)] })).processes;
+    expect(p.mark).toBe(mark);
+    expect(p.label).toBe(label);
+  });
+
+  it("a restart note and a Linux home are worded and shortened too", () => {
+    const [p] = row(agent("needs_restart", { processes: [proc({ state: "needs_restart", stale: true, cwd: "/home/dev/x" })] })).processes;
+    expect(p.note).toBe("started before its settings changed");
+    expect(p.where).toBe("~/x");
+    expect(row(agent("waiting", { processes: [proc({ cwd: "/srv/app" })] })).processes[0].where).toBe("/srv/app");
+    expect(row(agent("waiting", { processes: [proc({ cwd: null })] })).processes[0].where).toBeNull();
+  });
+
+  it("says how many processes are not exporting when the agent as a whole is receiving", () => {
+    const r = row(
+      agent("receiving", {
+        last_event_at: new Date(NOW - 1_000).toISOString(),
+        processes: [proc({ pid: 1, state: "receiving", last_event_at: new Date(NOW - 1_000).toISOString() }), proc({ pid: 2, state: "not_configured" }), proc({ pid: 3, state: "unknown" })],
+      }),
+    );
+    expect(r.summary).toBe("1 of 3 not exporting");
+    expect(row(agent("waiting", { processes: [proc({})] })).summary).toBeNull();
   });
 });

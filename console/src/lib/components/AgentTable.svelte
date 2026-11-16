@@ -16,12 +16,20 @@
       <span class="agent-row__label">{row.label}</span>
       {#if row.note || row.action}
         <span class="agent-row__more">
-          {#if row.note}{row.note}{/if}
-          {#if row.action}
-            {#if row.note}<span aria-hidden="true"> · </span>{/if}run <code class="agent-row__action">{row.action}</code>
-          {/if}
+          {row.note ?? ""}{#if row.action}{row.note ? " · " : ""}run <code class="agent-row__action">{row.action}</code>{/if}
         </span>
       {/if}
+      {#each row.processes as process (process.pid)}
+        <span class="agent-row__process" data-pid={process.pid}>
+          <span aria-hidden="true">{process.mark}</span>
+          {`PID ${process.pid}${process.where ? ` · ${process.where}` : ""} — ${process.label}`}
+          {#if process.note || process.action}
+            <span class="agent-row__process-more">
+              {process.note ?? ""}{#if process.action}{process.note ? " · " : ""}run <code class="agent-row__action">{process.action}</code>{/if}
+            </span>
+          {/if}
+        </span>
+      {/each}
     </div>
   {/each}
 </div>
@@ -49,6 +57,18 @@
     grid-column: 3;
     font-size: 11.5px;
     color: var(--color-neutral-600);
+  }
+  /* One line per process under the agent, its reason on a line of its own. */
+  .agent-row__process {
+    grid-column: 3;
+    font-size: 11.5px;
+    color: var(--color-neutral-700);
+  }
+  .agent-row__process-more {
+    display: block;
+    padding-left: 1.4em;
+    color: var(--color-neutral-600);
+    overflow-wrap: anywhere;
   }
   .agent-row__action {
     font-size: 11px;

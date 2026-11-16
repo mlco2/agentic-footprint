@@ -229,7 +229,11 @@ test.describe("watcher status and reconnect", () => {
   test("Health tab lists the agents above the collectors", async () => {
     await gotoTab(page, "health");
     await expect(page.locator(".health__main .agent-row")).toHaveCount(3);
-    await expect(page.locator('.health__main .agent-row[data-agent="codex"]')).toContainText("configured, waiting for first event");
+    const codexProcess = page.locator('.health__main .agent-row[data-agent="codex"] .agent-row__process');
+    await expect(codexProcess).toHaveCount(1);
+    await expect(codexProcess).toContainText("PID 7447 · ~/work/api");
+    await expect(codexProcess).toContainText("not configured");
+    await expect(codexProcess.locator("code")).toHaveText("af setup --agents codex --project /Users/dev/work/api");
     await expect(page.locator('.health__main .agent-row[data-agent="opencode"]')).toContainText("af setup");
     await gotoTab(page, "timeline");
   });

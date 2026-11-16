@@ -328,11 +328,26 @@ export interface Snapshot {
  * - `not_installed`  no command, no config */
 export type AgentState = "receiving" | "needs_restart" | "waiting" | "misconfigured" | "not_configured" | "not_installed";
 
+/** What the watcher says about one running process of an agent. `unknown`
+ * is "could not be inspected", never a guess at its configuration. */
+export type AgentProcessState = "receiving" | "needs_restart" | "waiting" | "misconfigured" | "not_configured" | "unknown";
+
 export interface AgentProcessInfo {
   pid: number;
   started_at: string;
-  /** Started before the agent's configuration last changed. */
+  /** Started before the configuration it loads last changed. */
   stale: boolean;
+  // Everything below is absent on a watcher that predates per-process
+  // detection: it only listed processes.
+  /** The directory the process runs in. */
+  cwd?: string | null;
+  /** The configuration file this process loads, or would load. */
+  config_path?: string | null;
+  state?: AgentProcessState;
+  detail?: string | null;
+  action?: string | null;
+  session_id?: string | null;
+  last_event_at?: string | null;
 }
 
 /** One row of `WatcherStatus.agents`. `receiving` is sticky for the watcher's

@@ -14,7 +14,7 @@
 {:else if rows.length > 0}
   <span class="masthead__meta agent-marks">
     {#each rows as row (row.id)}
-      <span class="agent-mark" data-agent={row.id} title="{row.name}: {row.label}" aria-label="{row.name}: {row.label}">
+      <span class="agent-mark" data-agent={row.id} title="{row.name}: {row.label}{row.summary ? ` · ${row.summary}` : ''}" aria-label="{row.name}: {row.label}{row.summary ? ` · ${row.summary}` : ''}">
         {row.name} <span aria-hidden="true">{row.mark}</span>
       </span>
     {/each}
