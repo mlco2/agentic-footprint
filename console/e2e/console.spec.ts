@@ -195,3 +195,80 @@ test.describe("af debug console", () => {
     expect(sub2).toBe(sub1);
   });
 });
+
+// Watcher status, the empty watcher and restart recovery. A separate page,
+// and after the suite above on purpose: these flip mock-wide switches
+// (`/debug/__mock/empty`, `/debug/__mock/restart`) that the scenario-timed
+// tests must not see. Each test leaves the mock as it found it.
+test.describe("watcher status and reconnect", () => {
+  let page: Page;
+  const consoleErrors: string[] = [];
+
+  test.beforeAll(async ({ browser }) => {
+    page = await browser.newPage();
+    page.on("pageerror", (err) => consoleErrors.push(String(err)));
+    await page.goto("/");
+    await expect(page.locator(".masthead__dot--live")).toBeVisible({ timeout: 15_000 });
+  });
+
+  test.afterAll(async () => {
+    await page.request.post("/debug/__mock/empty?on=0");
+    await page.close();
+  });
+
+  test("masthead shows one mark per agent with a text label", async () => {
+    const marks = page.locator(".masthead .agent-mark");
+    await expect(marks).toHaveCount(3);
+    await expect(marks.first()).toContainText("Claude Code");
+    for (const label of await marks.evaluateAll((els) => els.map((el) => el.getAttribute("aria-label") ?? ""))) {
+      expect(label, "state in words, not only a glyph").toMatch(/^.+: .+$/);
+    }
+    await expect(page.locator('.agent-mark[data-agent="claude-code"]')).toHaveAttribute("aria-label", /receiving/);
+  });
+
+  test("Health tab lists the agents above the collectors", async () => {
+    await gotoTab(page, "health");
+    await expect(page.locator(".health__main .agent-row")).toHaveCount(3);
+    await expect(page.locator('.health__main .agent-row[data-agent="codex"]')).toContainText("configured, waiting for first event");
+    await expect(page.locator('.health__main .agent-row[data-agent="opencode"]')).toContainText("af setup");
+    await gotoTab(page, "timeline");
+  });
+
+  test("empty watcher shows the onboarding panel, not empty tabs", async () => {
+    await page.request.post("/debug/__mock/empty?on=1");
+    await page.reload();
+
+    const panel = page.locator(".onboarding");
+    await expect(panel).toBeVisible({ timeout: 15_000 });
+    await expect(page.locator(".masthead__dot--live"), "an empty watcher is still a live connection").toBeVisible({ timeout: 15_000 });
+    await expect(panel.locator(".rail-section__heading")).toHaveText(["Watcher", "Agents"]);
+    await expect(panel).toContainText("receiver 127.0.0.1:4318");
+    await expect(panel.locator('.agent-row[data-agent="claude-code"]')).toContainText("needs restart");
+    await expect(panel.locator('.agent-row[data-agent="claude-code"]')).toContainText("PID 6363");
+    await expect(panel).toContainText("Events appear here within a minute of an agent's first activity.");
+    await expect(page.locator(".disconnected-banner")).toHaveCount(0);
+    await expect(page.locator(".tabbar .tab")).toHaveCount(TABS.length);
+
+    // The first session arrives: the tabs take over without a reload.
+    await page.request.post("/debug/__mock/empty?on=0");
+    await expect(panel).toBeHidden({ timeout: 5_000 });
+    await expect(page.locator('.agent-mark[data-agent="claude-code"]')).toHaveAttribute("aria-label", /receiving/);
+    expect(consoleErrors).toEqual([]);
+  });
+
+  test("the console recovers from a watcher restart without a reload", async () => {
+    await gotoTab(page, "stream");
+    await expect(page.locator(".event-table__row").first()).toBeVisible({ timeout: 15_000 });
+
+    // A restart must lead to a full re-sync: a new snapshot request, not a
+    // bare resubscribe from the old cursor.
+    const resync = page.waitForRequest((req) => req.url().includes("/debug/snapshot"), { timeout: 15_000 });
+    await page.request.post("/debug/__mock/restart");
+    await resync;
+
+    await expect(page.locator(".masthead__dot--live")).toBeVisible({ timeout: 15_000 });
+    await expect(page.locator(".disconnected-banner")).toHaveCount(0);
+    await expect(page.locator(".event-table__row").first()).toBeVisible({ timeout: 15_000 });
+    expect(consoleErrors).toEqual([]);
+  });
+});

@@ -6,11 +6,11 @@
 
 {#if status === "reconnecting"}
   <div class="disconnected-banner">
-    SSE reconnecting — no live events until the connection is restored.
+    Reconnecting to the watcher…
   </div>
 {:else if status === "offline"}
   <div class="disconnected-banner">
-    SSE offline — no live events until the connection is restored. Still retrying.
+    Watcher not running — start it with <code>af watch --debug</code>. Retrying quietly.
   </div>
 {/if}
 

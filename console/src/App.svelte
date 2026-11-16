@@ -9,12 +9,20 @@
   import Attribution from "./lib/tabs/Attribution.svelte";
   import Impact from "./lib/tabs/Impact.svelte";
   import Health from "./lib/tabs/Health.svelte";
+  import OnboardingPanel from "./lib/components/OnboardingPanel.svelte";
   import { afClient } from "./lib/client/afClient.svelte";
+  import { sessionStore } from "./lib/stores/sessionStore.svelte";
   import { uiStore, type Tab } from "./lib/stores/uiStore.svelte";
 
   // Ids double as display labels via `.tab { text-transform: capitalize }`
   // in TabBar — no separate id<->label lookup table needed.
   const TABS: Tab[] = ["timeline", "stream", "attribution", "impact", "health"];
+
+  // The watcher is reachable (or we are still finding out) and has no
+  // session to show: say what it is waiting for instead of rendering five
+  // empty tabs. While disconnected the tabs stay, with whatever they last
+  // held, under the banner — an onboarding screen then would be a lie.
+  const onboarding = $derived(sessionStore.list.length === 0 && (afClient.status === "live" || afClient.status === "connecting"));
 
   onMount(() => {
     void afClient.start();
@@ -27,7 +35,9 @@
   <DisconnectedBanner status={afClient.status} />
 
   <main class="af-main">
-    {#if uiStore.tab === "timeline"}
+    {#if onboarding}
+      <OnboardingPanel />
+    {:else if uiStore.tab === "timeline"}
       <Timeline />
     {:else if uiStore.tab === "stream"}
       <Stream />

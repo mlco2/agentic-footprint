@@ -9,6 +9,7 @@
   import { afClient } from "../client/afClient.svelte";
   import { sessionStore } from "../stores/sessionStore.svelte";
   import { uiStore } from "../stores/uiStore.svelte";
+  import AgentMarks from "./AgentMarks.svelte";
 
   const sessions = $derived(sessionStore.list);
   const selectedId = $derived(sessionStore.selectedId);
@@ -38,6 +39,7 @@
   <span class="masthead__title">af · debug console</span>
   <span class="masthead__subtitle">agentic-footprint control plane</span>
   <div class="masthead__spacer"></div>
+  <AgentMarks />
   {#if sessions.length === 0}
     <span class="masthead__meta">session —</span>
   {:else}

@@ -15,6 +15,9 @@
   import ConformanceBars from "../components/ConformanceBars.svelte";
   import RejectedList from "../components/RejectedList.svelte";
   import WatchdogList from "../components/WatchdogList.svelte";
+  import AgentTable from "../components/AgentTable.svelte";
+  import { statusStore } from "../stores/statusStore.svelte";
+  import { selectAgentRows } from "../selectors/agents";
 
   const health = $derived(healthStore.data ?? undefined);
   const session = $derived(sessionStore.data);
@@ -23,10 +26,17 @@
   const conformance = $derived.by(() => selectConformance(health));
   const rejected = $derived.by(() => selectRejected(health));
   const aside = $derived.by(() => selectHealthAside(health, eventStore.rev, session));
+  const agents = $derived.by(() => selectAgentRows(statusStore.data, uiStore.nowMs));
 </script>
 
 <div class="health">
   <section class="health__main tab-pane">
+    {#if agents.length > 0}
+      <div class="health__region">
+        <div class="rail-section__heading">Agents</div>
+        <AgentTable rows={agents} />
+      </div>
+    {/if}
     <div class="health__region">
       <div class="rail-section__heading">Collectors</div>
       {#if collectors.length === 0}
