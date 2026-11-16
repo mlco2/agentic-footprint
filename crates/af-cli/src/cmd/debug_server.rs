@@ -187,6 +187,9 @@ pub struct DebugState {
     summaries: std::collections::BTreeMap<String, Value>,
     /// How many streams are open right now — see [`DebugState::attached`].
     attached: usize,
+    /// Sessions a console asked for that nothing here describes yet, for
+    /// the watcher to rebuild. Bounded by [`WANTED_CAP`].
+    wanted: std::collections::BTreeSet<String>,
     session_order: VecDeque<String>,
     /// Session-level reports by `session_id`, same shape and bound. Full
     /// report payloads live only here; the frame ring and subscriber queues
@@ -257,6 +260,7 @@ impl DebugState {
             sessions: std::collections::BTreeMap::new(),
             summaries: std::collections::BTreeMap::new(),
             attached: 0,
+            wanted: std::collections::BTreeSet::new(),
             session_order: VecDeque::new(),
             reports: std::collections::BTreeMap::new(),
             pending_report_evictions: VecDeque::new(),
@@ -270,6 +274,16 @@ impl DebugState {
             queue_capacity: queue_capacity.max(1),
             heartbeat,
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_attached(&mut self, streams: usize) {
+        self.attached = streams;
+    }
+
+    #[cfg(test)]
+    pub(crate) fn want(&mut self, session_id: &str) {
+        self.wanted.insert(session_id.to_string());
     }
 
     /// How many frames of `event` the ring holds.
@@ -560,13 +574,46 @@ impl DebugState {
             .collect();
     }
 
-    /// Forgets the frame log, once nobody is attached. Sequence numbers
-    /// keep counting, so a cursor issued before this is answered `reset`.
-    pub fn drop_history(&mut self) {
+    /// Forgets everything but the status, once nobody is attached: what
+    /// is kept would only go stale. Sequence numbers keep counting, so a
+    /// cursor issued before this is answered `reset`.
+    pub fn forget_picture(&mut self) {
         self.frames.clear();
+        self.sessions.clear();
+        self.session_order.clear();
+        self.summaries.clear();
+        self.reports.clear();
+        self.pending_report_evictions.clear();
+        self.health = None;
+        self.watchdog.clear();
+        self.allocs.clear();
+        self.alloc_order.clear();
+        self.wanted.clear();
     }
 
-    fn session_list(&self) -> Value {
+    /// The sessions asked for since the last call that nothing described.
+    pub fn take_wanted(&mut self) -> std::collections::BTreeSet<String> {
+        std::mem::take(&mut self.wanted)
+    }
+
+    /// `map`'s entry for `session_id`; a miss for a named session is
+    /// recorded for the watcher, which publishes it shortly after.
+    fn by_session_or_want(&mut self, reports: bool, session_id: Option<&str>) -> Option<Value> {
+        let map = if reports {
+            &self.reports
+        } else {
+            &self.sessions
+        };
+        let found = DebugState::by_session(map, session_id);
+        if let (None, Some(id)) = (&found, session_id) {
+            if self.wanted.len() < WANTED_CAP {
+                self.wanted.insert(id.to_string());
+            }
+        }
+        found
+    }
+
+    pub(crate) fn session_list(&self) -> Value {
         let summarised = self
             .summaries
             .iter()
@@ -637,10 +684,6 @@ impl DebugServer {
     /// which has none: callers that bind one do not ask.
     pub fn addr(&self) -> SocketAddr {
         self.addr.expect("this debug server is on a Unix socket")
-    }
-
-    pub fn state(&self) -> Arc<Mutex<DebugState>> {
-        Arc::clone(&self.state)
     }
 
     /// Unblocks the accept loop and waits [`JOIN_DEADLINE`] for it.
@@ -717,7 +760,7 @@ pub fn serve(addr: SocketAddr, state: Arc<Mutex<DebugState>>) -> Result<DebugSer
 pub fn serve_unix(path: &std::path::Path, state: Arc<Mutex<DebugState>>) -> Result<DebugServer> {
     use std::os::unix::fs::PermissionsExt;
     if path.exists() {
-        if std::os::unix::net::UnixStream::connect(path).is_ok() {
+        if socket_is_served(path) {
             anyhow::bail!(
                 "{} is already served by a running collector",
                 path.display()
@@ -731,6 +774,34 @@ pub fn serve_unix(path: &std::path::Path, state: Arc<Mutex<DebugState>>) -> Resu
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
         .with_context(|| format!("restrict {}", path.display()))?;
     Ok(run(server, state, None, Some(path.to_path_buf())))
+}
+
+/// The console socket's file name inside the state directory.
+pub const SOCKET_NAME: &str = "console.sock";
+
+/// [`serve_unix`] where there are Unix sockets, nothing elsewhere.
+pub fn serve_socket(
+    path: &std::path::Path,
+    state: Arc<Mutex<DebugState>>,
+) -> Result<Option<DebugServer>> {
+    #[cfg(unix)]
+    return serve_unix(path, state).map(Some);
+    #[cfg(not(unix))]
+    {
+        let _ = (path, state);
+        Ok(None)
+    }
+}
+
+/// Whether a running collector answers on the socket at `path`.
+pub fn socket_is_served(path: &std::path::Path) -> bool {
+    #[cfg(unix)]
+    return std::os::unix::net::UnixStream::connect(path).is_ok();
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+        false
+    }
 }
 
 /// Starts the accept thread for an already-bound server.
@@ -840,9 +911,7 @@ fn dispatch(request: Request, state: &Arc<Mutex<DebugState>>) {
     match path.as_str() {
         "/debug/session" => {
             let session_id = param(&query, "session_id");
-            respond_field(request, state, move |s| {
-                DebugState::by_session(&s.sessions, session_id.as_deref())
-            });
+            respond_session_field(request, state, false, session_id.as_deref());
         }
         "/debug/sessions" => respond_field(request, state, |s| Some(s.session_list())),
         "/debug/snapshot" => {
@@ -851,9 +920,7 @@ fn dispatch(request: Request, state: &Arc<Mutex<DebugState>>) {
         }
         "/debug/report" => {
             let session_id = param(&query, "session_id");
-            respond_field(request, state, move |s| {
-                DebugState::by_session(&s.reports, session_id.as_deref())
-            });
+            respond_session_field(request, state, true, session_id.as_deref());
         }
         "/debug/health" => respond_field(request, state, |s| s.health.clone()),
         "/debug/status" => respond_field(request, state, |s| s.status.clone()),
@@ -925,6 +992,21 @@ fn respond_field(
         .lock()
         .ok()
         .and_then(|s| pick(&s))
+        .unwrap_or(Value::Null);
+    respond_json(request, 200, body);
+}
+
+/// A session's stored payload (its report when `reports`), or `null`.
+fn respond_session_field(
+    request: Request,
+    state: &Arc<Mutex<DebugState>>,
+    reports: bool,
+    session_id: Option<&str>,
+) {
+    let body = state
+        .lock()
+        .ok()
+        .and_then(|mut s| s.by_session_or_want(reports, session_id))
         .unwrap_or(Value::Null);
     respond_json(request, 200, body);
 }
@@ -1073,6 +1155,14 @@ fn stream(request: Request, state: &Arc<Mutex<DebugState>>, query: &str) {
     let _ = writer.write_all(b"0\r\n\r\n");
     let _ = writer.flush();
 }
+
+/// How many not-yet-described sessions are remembered between two watcher
+/// loops: a person picking sessions, not a queue.
+const WANTED_CAP: usize = 32;
+
+/// The snapshot's default window, and how far back a console attaching to
+/// a running collector is told about.
+pub const SNAPSHOT_WINDOW_MS: i64 = 180_000;
 
 /// One open stream, counted in [`DebugState::attached`] until dropped.
 struct Attached(Arc<Mutex<DebugState>>);
@@ -1662,11 +1752,16 @@ mod tests {
         assert!(!is_loopback_origin("null"));
     }
 
+    /// Held by every test that takes real handler slots: the counter is
+    /// process-wide, and the cap test needs it at zero.
+    static SLOT_USERS: Mutex<()> = Mutex::new(());
+
     /// The cap must hold under repeated acquire/release, and slots must come
     /// back when the guard drops — a leak here bricks the server after 32
     /// requests.
     #[test]
     fn the_handler_slot_cap_holds_and_releases() {
+        let _alone = SLOT_USERS.lock().unwrap_or_else(|e| e.into_inner());
         let before = ACTIVE_HANDLERS.load(Ordering::Acquire);
         assert_eq!(before, 0, "no other unit test holds a slot");
 
@@ -1953,6 +2048,7 @@ mod tests {
     fn the_api_is_served_over_a_private_unix_socket() {
         use std::os::unix::fs::PermissionsExt;
         use std::os::unix::net::UnixStream;
+        let _alone = SLOT_USERS.lock().unwrap_or_else(|e| e.into_inner());
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("console.sock");
         let state = shared(DebugState::default());
@@ -1978,6 +2074,12 @@ mod tests {
 
         drop(server);
         assert!(!path.exists(), "the socket file goes with the server");
+        // The handler thread is detached: its slot is back before the
+        // next test that counts them.
+        let deadline = std::time::Instant::now() + Duration::from_secs(3);
+        while ACTIVE_HANDLERS.load(Ordering::Acquire) != 0 && std::time::Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
     }
 
     #[cfg(unix)]
@@ -2055,11 +2157,48 @@ mod tests {
     }
 
     #[test]
+    fn asking_for_a_session_nobody_published_records_it_as_wanted() {
+        let state = shared(DebugState::default());
+        state.lock().unwrap().publish(
+            "session",
+            json!({"session_id": "known", "t_last": "2026-01-01T00:00:00.000Z"}),
+            0,
+        );
+        let server = start_test_server_with(Arc::clone(&state));
+
+        let (status, _, body) = http_get(server.addr, "/debug/session?session_id=known", &[]);
+        assert_eq!(status, 200);
+        assert!(String::from_utf8_lossy(&body).contains("known"));
+        assert!(state.lock().unwrap().take_wanted().is_empty());
+
+        let (status, _, body) = http_get(server.addr, "/debug/report?session_id=old", &[]);
+        assert_eq!((status, body.as_slice()), (200, b"null".as_slice()));
+        let (_, _, _) = http_get(server.addr, "/debug/session?session_id=old", &[]);
+        let wanted = state.lock().unwrap().take_wanted();
+        assert_eq!(
+            wanted.into_iter().collect::<Vec<_>>(),
+            vec!["old".to_string()]
+        );
+        assert!(state.lock().unwrap().take_wanted().is_empty(), "taken once");
+    }
+
+    #[test]
+    fn forgetting_the_picture_keeps_the_status_and_drops_the_rest() {
+        let mut state = DebugState::default();
+        state.set_status(json!({"boot_id": "b1"}));
+        state.publish("session", json!({"session_id": "s1"}), 0);
+        state.set_session_summaries(vec![json!({"session_id": "s2"})]);
+        state.forget_picture();
+        assert_eq!(state.session_list(), json!([]));
+        assert_eq!(state.status, Some(json!({"boot_id": "b1"})));
+    }
+
+    #[test]
     fn dropping_history_resets_any_earlier_cursor() {
         let mut state = DebugState::default();
         state.publish("decision", json!({"kind": "attr"}), 0);
         state.publish("decision", json!({"kind": "attr"}), 0);
-        state.drop_history();
+        state.forget_picture();
         assert_eq!(state.frames_of("decision"), 0);
         let (replay, _rx) = state.subscribe(Some(0));
         assert!(

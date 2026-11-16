@@ -301,8 +301,28 @@ pub fn run(state_dir: &Path, args: WatchArgs) -> Result<()> {
     // `Disconnected` when there is no receiver at all.
     drop(inbox_tx);
 
+    // One debug state, always: the console socket serves it, and `--debug`
+    // serves it on a TCP port as well.
+    let debug_state = Arc::new(Mutex::new(DebugState::default()));
+    let socket = state_dir.join(debug_server::SOCKET_NAME);
+    if args.debug && otlp.is_none() && !args.no_otlp && debug_server::socket_is_served(&socket) {
+        bail!(
+            "a collector is already running here, and `af watch --debug` would receive nothing beside it; open its console with `af console`"
+        );
+    }
+    // Not fatal: without it there is no `af console`, and everything else
+    // works. A second watcher beside a running collector ends up here.
+    let _console_socket = match debug_server::serve_socket(&socket, Arc::clone(&debug_state)) {
+        Ok(server) => server,
+        Err(err) => {
+            eprintln!(
+                "af watch: no console socket ({err:#}); `af console` cannot attach to this process"
+            );
+            None
+        }
+    };
     let debug_server = if let Some(addr) = debug_addr {
-        let server = debug_server::serve(addr, Arc::new(Mutex::new(DebugState::default())))
+        let server = debug_server::serve(addr, Arc::clone(&debug_state))
             .context("starting the /debug server")?;
         eprintln!(
             "af watch: debug console on http://{}/ (API endpoints under /debug/*)",
@@ -339,11 +359,17 @@ pub fn run(state_dir: &Path, args: WatchArgs) -> Result<()> {
     let mut watch = Watch::new(
         state_dir,
         &effective_args,
-        debug_server.as_ref().map(|s| s.state()),
+        Some(Arc::clone(&debug_state)),
         otlp.as_ref()
             .map(|handle| (handle.addr(), handle.counters())),
     );
     watch.opaque_events = store.count_opaque_events().unwrap_or(0);
+    // Behind `af console`, diagnostics follow whoever is attached; with
+    // `--debug` they are on for the life of the process.
+    watch.on_demand = debug_server.is_none();
+    watch.watched = debug_server.is_some();
+    // The store may hold days of history: a console is told the present.
+    watch.backfill = true;
 
     // Before the first pass, so `/debug/status` answers from the first
     // second: the startup pass can take a while on a large store, and an
@@ -367,6 +393,7 @@ pub fn run(state_dir: &Path, args: WatchArgs) -> Result<()> {
     if let Err(err) = watch.rebuild_due(&mut store) {
         eprintln!("af watch: startup rebuild failed: {err:#}");
     }
+    watch.backfill = false;
 
     let mut last_pass = Instant::now();
     let mut last_reconcile = Instant::now();
@@ -420,6 +447,7 @@ pub fn run(state_dir: &Path, args: WatchArgs) -> Result<()> {
             pending_since = Some(Instant::now());
         }
         let now = Instant::now();
+        watch.sync_attachment(&mut store);
         if now.saturating_duration_since(last_detect) >= DETECT_INTERVAL {
             watch.refresh_agents();
             last_detect = now;
@@ -957,6 +985,17 @@ struct Watch {
     retired_collectors: BTreeMap<String, RetiredCollector>,
     /// Decisions already emitted, keyed by the `event_id` they refer to.
     reported_events: BoundedSet,
+    /// Whether the console's presence is what switches diagnostics on: the
+    /// collector behind `af console`. Otherwise (`--debug`, tests) a debug
+    /// state is watched for as long as it exists.
+    on_demand: bool,
+    /// Whether someone is looking at the debug state right now.
+    watched: bool,
+    /// Set while telling a console what it missed — at startup, on attach,
+    /// for a session it asked for. Facts and traces older than
+    /// [`debug_server::SNAPSHOT_WINDOW_MS`] are then passed over for good:
+    /// a console is told the present, and reads the past from reports.
+    backfill: bool,
     /// The most recent rejects, for the health payload — see
     /// [`REJECT_HISTORY`]. The health frame is republished every pass and
     /// carries this vector inline, so an unbounded one turns a spool full of
@@ -1085,6 +1124,7 @@ impl Watch {
         otlp: Option<(SocketAddr, Arc<af_otlp::Counters>)>,
     ) -> Self {
         let started_at = SystemTime::now();
+        let watched = debug_state.is_some();
         let estimator = if args.no_sidecars {
             None
         } else {
@@ -1122,6 +1162,9 @@ impl Watch {
             published_allocs: BTreeMap::new(),
             retired_collectors: BTreeMap::new(),
             reported_events: BoundedSet::new(DEDUP_HORIZON),
+            on_demand: false,
+            watched,
+            backfill: false,
             rejects: VecDeque::new(),
             rejects_dropped: 0,
             rejects_total: 0,
@@ -1162,7 +1205,7 @@ impl Watch {
     /// can see it: without the debug server this is a `ps` every thirty
     /// seconds for nobody.
     fn refresh_agents(&mut self) {
-        if self.debug_state.is_none() {
+        if self.debug_state.is_none() || !self.diagnostics() {
             return;
         }
         if let Some(home) = &self.home {
@@ -1463,15 +1506,8 @@ impl Watch {
             zone_may_have_changed |= matches!(event.payload, Payload::SessionMeta(_));
             // Decisions and fact frames are for someone watching; headless,
             // they would be built only to be dropped.
-            if !self.diagnostics() || !self.reported_events.insert(&event.event_id) {
-                continue;
-            }
-            self.decide(&ingest_decision(event));
-            if let Ok(value) = serde_json::to_value(event) {
-                self.publish("fact", value);
-            }
-            if let Payload::ActionSpan(span) = &event.payload {
-                self.decide(&span_open_decision(event, span));
+            if self.diagnostics() {
+                self.publish_fact(event);
             }
         }
 
@@ -1830,6 +1866,12 @@ impl Watch {
         if !self.diagnostics() {
             return Ok(());
         }
+        if self.backfill {
+            // What a console attaching now did not see go by.
+            for event in &loaded.events {
+                self.publish_fact(event);
+            }
+        }
         let root_pid = loaded.tree.root_pids.first().copied();
         for trace in &loaded.traces {
             let Some(sample_event_id) = loaded.sample_ids.get(trace.sample_index) else {
@@ -1841,6 +1883,11 @@ impl Watch {
                 .or_default()
                 .insert(sample_event_id.clone())
             {
+                continue;
+            }
+            // Remembered above either way: an old trace is passed over, not
+            // postponed to the session's next refresh.
+            if self.backfill && !Self::recent(&loaded.samples[trace.sample_index].t_end) {
                 continue;
             }
             self.decide(&attr_decision(trace));
@@ -2164,7 +2211,7 @@ impl Watch {
         zone: &af_core::Zone,
         session_id: &str,
     ) {
-        if self.debug_state.is_none() {
+        if self.debug_state.is_none() || !self.diagnostics() {
             return;
         }
         let session_meta = events
@@ -2245,7 +2292,7 @@ impl Watch {
     /// DATA-CONTRACT §2.6 — the session-level `impact_join` verbatim, the
     /// per-model estimate groups, and the status histogram.
     fn publish_report(&mut self, store: &Store, events: &[Envelope], session_id: &str) {
-        if self.debug_state.is_none() {
+        if self.debug_state.is_none() || !self.diagnostics() {
             return;
         }
         let Ok(joins) = store.joins_for_session(session_id) else {
@@ -2359,7 +2406,7 @@ impl Watch {
     where
         I: IntoIterator<Item = (&'a str, &'a [Envelope])>,
     {
-        if self.debug_state.is_none() {
+        if self.debug_state.is_none() || !self.diagnostics() {
             return;
         }
 
@@ -2564,10 +2611,109 @@ impl Watch {
     }
 
     /// Whether anyone can see diagnostics: the stderr decision stream
-    /// (`--debug`) or the `/debug` server. Headless, frames and decisions
-    /// are not built at all.
+    /// (`--debug`) or someone watching the `/debug` state. Otherwise frames
+    /// and decisions are not built at all.
     fn diagnostics(&self) -> bool {
-        self.debug || self.debug_state.is_some()
+        self.debug || (self.watched && self.debug_state.is_some())
+    }
+
+    /// Whether `ts` is inside the window a console is told about.
+    fn recent(ts: &str) -> bool {
+        af_core::parse_ts(ts).is_none_or(|ms| ms >= now_ms() - debug_server::SNAPSHOT_WINDOW_MS)
+    }
+
+    /// The decision and `fact` frame for one event, once.
+    fn publish_fact(&mut self, event: &Envelope) {
+        if (self.backfill && !Self::recent(&event.ts))
+            || !self.reported_events.insert(&event.event_id)
+        {
+            return;
+        }
+        self.decide(&ingest_decision(event));
+        if let Ok(value) = serde_json::to_value(event) {
+            self.publish("fact", value);
+        }
+        if let Payload::ActionSpan(span) = &event.payload {
+            self.decide(&span_open_decision(event, span));
+        }
+    }
+
+    /// Follows consoles coming and going, and serves what one asked for.
+    ///
+    /// The first to attach is told the present: status, the picker's rows,
+    /// and each live session rebuilt with its last minutes of facts and
+    /// traces. When the last leaves, the debug state is emptied and the
+    /// collector goes back to building none of it.
+    fn sync_attachment(&mut self, store: &mut Store) {
+        let Some(state) = self.debug_state.clone() else {
+            return;
+        };
+        let Ok((attached, wanted)) = state
+            .lock()
+            .map(|mut state| (state.attached() > 0, state.take_wanted()))
+        else {
+            return;
+        };
+        if self.on_demand && attached != self.watched {
+            self.watched = attached;
+            if attached {
+                self.refresh_agents();
+                self.publish_status(Instant::now(), true);
+                let live = self.sessions.keys().cloned().collect();
+                self.tell(store, &live, true);
+            } else {
+                if let Ok(mut state) = state.lock() {
+                    state.forget_picture();
+                }
+                self.published_allocs.clear();
+                self.reported_events = BoundedSet::new(DEDUP_HORIZON);
+            }
+        }
+        if self.diagnostics() && !wanted.is_empty() {
+            self.tell(store, &wanted, false);
+        }
+    }
+
+    /// Publishes `sessions` as a backfill; with `list`, the picker's rows
+    /// for every stored session first. A session the store does not hold
+    /// is skipped.
+    fn tell(&mut self, store: &mut Store, sessions: &BTreeSet<String>, list: bool) {
+        let summaries = match store.session_summaries() {
+            Ok(summaries) => summaries,
+            Err(err) => {
+                eprintln!("af watch: listing sessions for the console failed: {err:#}");
+                return;
+            }
+        };
+        let known: BTreeSet<String> = summaries
+            .iter()
+            .filter(|summary| sessions.contains(&summary.session_id))
+            .map(|summary| summary.session_id.clone())
+            .collect();
+        if list {
+            let rows = summaries
+                .iter()
+                .map(|summary| {
+                    json!({
+                        "session_id": summary.session_id,
+                        "agent_app": Value::Null,
+                        "t_start": summary.first_ts,
+                        "t_last": summary.last_ts,
+                        "events": summary.counts.iter().map(|(_, n)| n).sum::<u64>(),
+                    })
+                })
+                .collect();
+            if let Some(state) = &self.debug_state {
+                if let Ok(mut state) = state.lock() {
+                    state.set_session_summaries(rows);
+                }
+            }
+        }
+        self.backfill = true;
+        if let Err(err) = self.rebuild_sessions(store, &known) {
+            eprintln!("af watch: rebuilding sessions for the console failed: {err:#}");
+        }
+        self.backfill = false;
     }
 
     /// Emits one decision on both surfaces it has: the `--debug` stderr
@@ -2580,6 +2726,9 @@ impl Watch {
     }
 
     fn publish(&mut self, event: &'static str, data: Value) {
+        if !self.diagnostics() {
+            return;
+        }
         let Some(state) = &self.debug_state else {
             return;
         };
@@ -3026,29 +3175,32 @@ mod tests {
     /// A session of `samples` five-second energy windows, each with its
     /// process sample, under one bootstrap span.
     fn long_session(samples: usize) -> Vec<Envelope> {
-        let ts = |seconds: usize| {
-            af_core::rfc3339_ms(1_785_326_400_000 + seconds as i64 * 1000).expect("ts")
-        };
+        session_from("s", 1_785_326_400_000, samples)
+    }
+
+    /// `samples` five-second windows of session `id`, starting at `base_ms`.
+    fn session_from(id: &str, base_ms: i64, samples: usize) -> Vec<Envelope> {
+        let ts = |seconds: usize| af_core::rfc3339_ms(base_ms + seconds as i64 * 1000).expect("ts");
         let mut boot = af_events::fixtures::action_span("boot", &ts(0), &ts(1));
         boot.tool_name = af_core::BOOTSTRAP_TOOL_NAME.to_string();
         boot.pids = Some(vec![42]);
         let mut events = vec![af_events::fixtures::envelope(
-            "evt-boot-0000000001",
-            "s",
+            &format!("evt-boot-{id}-0001"),
+            id,
             &ts(0),
             Payload::ActionSpan(boot),
         )];
         for i in 0..samples {
             let (t0, t1) = (ts(i * 5), ts(i * 5 + 5));
             events.push(af_events::fixtures::envelope(
-                &format!("evt-energy-{i:010}"),
-                "s",
+                &format!("evt-energy-{id}-{i:010}"),
+                id,
                 &t1,
                 Payload::EnergySample(af_events::fixtures::energy_sample(&t0, &t1, 1.0)),
             ));
             events.push(af_events::fixtures::envelope(
-                &format!("evt-procs-{i:010}"),
-                "s",
+                &format!("evt-procs-{id}-{i:010}"),
+                id,
                 &t1,
                 Payload::ProcessSample(af_events::fixtures::process_sample(
                     &t0,
@@ -3087,6 +3239,152 @@ mod tests {
 
         watch.forget_session("s");
         assert!(watch.published_allocs.is_empty(), "retirement releases it");
+    }
+
+    /// A collector with a console socket and nobody on it.
+    fn unattended(dir: &Path) -> (Watch, Arc<Mutex<DebugState>>) {
+        let debug = Arc::new(Mutex::new(DebugState::with_limits(100_000, 16)));
+        let mut watch = Watch::new(dir, &quiet_args(), Some(Arc::clone(&debug)), None);
+        watch.home = Some(dir.join("home"));
+        watch.on_demand = true;
+        watch.watched = false;
+        (watch, debug)
+    }
+
+    #[test]
+    fn with_nobody_attached_nothing_diagnostic_is_built_or_kept() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let store = Store::open(&dir.path().join("state.db")).expect("open");
+        let (mut watch, debug) = unattended(dir.path());
+        assert!(!watch.diagnostics());
+        let loaded = LoadedSession::load(long_session(10), watch.diagnostics());
+        watch
+            .refresh_session(&store, "s", &loaded, &Zone::unresolved("FRA", "test"))
+            .expect("refresh");
+        watch.decide(&Decision {
+            kind: crate::cmd::debug_frames::DecisionKind::Attr,
+            ts: "2026-01-01T00:00:00.000Z".into(),
+            text: "x".into(),
+            reference: None,
+        });
+        let state = debug.lock().expect("lock");
+        assert_eq!(state.frames_of("alloc") + state.frames_of("decision"), 0);
+        assert_eq!(state.session_list(), json!([]));
+        assert!(watch.published_allocs.is_empty());
+    }
+
+    #[test]
+    fn a_backfill_tells_only_the_last_three_minutes_and_never_the_rest_later() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let store = Store::open(&dir.path().join("state.db")).expect("open");
+        let debug = Arc::new(Mutex::new(DebugState::with_limits(100_000, 16)));
+        let mut watch = Watch::new(dir.path(), &quiet_args(), Some(Arc::clone(&debug)), None);
+        let zone = Zone::unresolved("FRA", "test");
+        // Twelve windows ending now: 60 s, all inside the window. And a
+        // session from long ago.
+        let recent = LoadedSession::load(session_from("new", now_ms() - 60_000, 12), true);
+        let old = LoadedSession::load(session_from("old", 1_785_326_400_000, 12), true);
+
+        watch.backfill = true;
+        watch
+            .refresh_session(&store, "new", &recent, &zone)
+            .expect("new");
+        watch
+            .refresh_session(&store, "old", &old, &zone)
+            .expect("old");
+        watch.backfill = false;
+        {
+            let state = debug.lock().expect("lock");
+            assert_eq!(state.frames_of("alloc"), 12, "the recent session's only");
+            assert!(state.frames_of("fact") >= 24, "its recent facts too");
+            assert_eq!(
+                state.session_list().as_array().unwrap().len(),
+                2,
+                "both are listed"
+            );
+        }
+        // The old session's traces were passed over, not postponed.
+        watch
+            .refresh_session(&store, "old", &old, &zone)
+            .expect("old again");
+        assert_eq!(debug.lock().expect("lock").frames_of("alloc"), 12);
+    }
+
+    #[test]
+    fn attaching_tells_the_live_sessions_lists_the_rest_and_leaving_forgets() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut store = Store::open(&dir.path().join("state.db")).expect("open");
+        store
+            .insert_events(&session_from("live", now_ms() - 60_000, 12))
+            .expect("insert");
+        store
+            .insert_events(&session_from("past", 1_785_326_400_000, 3))
+            .expect("insert");
+        let (mut watch, debug) = unattended(dir.path());
+        watch
+            .sessions
+            .insert("live".into(), SessionState::seen(Instant::now()));
+
+        watch.sync_attachment(&mut store);
+        assert!(!watch.watched, "nobody yet");
+        assert_eq!(debug.lock().unwrap().session_list(), json!([]));
+
+        debug.lock().unwrap().set_attached(1);
+        watch.sync_attachment(&mut store);
+        assert!(watch.diagnostics());
+        {
+            let state = debug.lock().unwrap();
+            let list = state.session_list();
+            let ids: Vec<&str> = list
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|row| row["session_id"].as_str().unwrap())
+                .collect();
+            assert_eq!(ids, ["live", "past"], "most recent first");
+            assert_eq!(list[1]["events"], 7, "the past one from the store's count");
+            assert_eq!(
+                state.frames_of("alloc"),
+                12,
+                "live traces of the last minutes"
+            );
+            assert_eq!(
+                state.frames_of("session"),
+                1,
+                "only the live session is rebuilt"
+            );
+        }
+
+        debug.lock().unwrap().set_attached(0);
+        watch.sync_attachment(&mut store);
+        assert!(!watch.diagnostics());
+        assert_eq!(debug.lock().unwrap().session_list(), json!([]));
+        assert!(watch.published_allocs.is_empty());
+
+        // And again: the same picture, not an empty one.
+        debug.lock().unwrap().set_attached(1);
+        watch.sync_attachment(&mut store);
+        assert_eq!(debug.lock().unwrap().frames_of("alloc"), 12);
+    }
+
+    #[test]
+    fn a_session_asked_for_is_published_and_an_unknown_one_ignored() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut store = Store::open(&dir.path().join("state.db")).expect("open");
+        store
+            .insert_events(&session_from("past", 1_785_326_400_000, 3))
+            .expect("insert");
+        let (mut watch, debug) = unattended(dir.path());
+        debug.lock().unwrap().set_attached(1);
+        watch.sync_attachment(&mut store);
+        assert_eq!(debug.lock().unwrap().frames_of("session"), 0);
+
+        debug.lock().unwrap().want("past");
+        debug.lock().unwrap().want("no-such-session");
+        watch.sync_attachment(&mut store);
+        let state = debug.lock().unwrap();
+        assert_eq!(state.frames_of("session"), 1);
+        assert_eq!(state.frames_of("alloc"), 0, "its old traces stay untold");
     }
 
     #[test]
