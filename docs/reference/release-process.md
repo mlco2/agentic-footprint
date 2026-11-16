@@ -1,6 +1,8 @@
 # Release process
 
-Releases are produced only from tags matching `v*.*.*`.
+Releases are produced only from tags matching `v*.*.*`. No release has been
+published yet; until the first one, af is installed from a source checkout
+and `af self update` has nothing to install.
 
 ## Maintainer checklist
 

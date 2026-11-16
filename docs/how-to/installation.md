@@ -61,8 +61,14 @@ Custom install and project paths:
 
 ## Curl-ready inputs
 
-Release archives are signed and checksummed. Until the canonical repository URL
-is published, the installer accepts explicit release inputs:
+!!! note "No release has been published yet"
+    Installing from a source checkout, as above, is the only way to install
+    today. The inputs in this section are for release binaries and source
+    archives, and have nothing published to point at until the first
+    release. See [known limitations](../reference/known-limitations.md).
+
+Release archives will be signed and checksummed. The installer accepts
+explicit release inputs:
 
 A URL input always needs its SHA-256 (`AF_BINARY_SHA256`, `AF_SOURCE_SHA256`,
 from the release's `SHA256SUMS`); the installer refuses before downloading
@@ -162,9 +168,13 @@ the command printed by the wizard, keep it running, then rerun `af setup`.
 
 ## Updating
 
+No release has been published yet, so `af self update` has nothing to
+install. An af built from a source checkout is updated by pulling and
+rerunning `./install.sh`. Once releases exist:
+
 ```sh
 af self update            # the latest release
-af self update 0.3.0      # an exact release
+af self update X.Y.Z      # an exact release
 af self update --dry-run  # show what would change
 ```
 
@@ -177,8 +187,7 @@ alone, which comes from the same release. It then replaces the binary, refreshes
 the managed CodeCarbon/EcoLogits runtime, and restarts the background
 receiver. The runtime moves to the newest releases published at least 7 days
 ago, and only after they pass a smoke test; otherwise the current runtime is
-kept. An af built from a source checkout is updated by pulling and rerunning
-`./install.sh`.
+kept. Run from a source-checkout build, it changes nothing and exits 2.
 
 ## When data does not arrive
 
@@ -212,7 +221,11 @@ with `journalctl --user -u agentic-footprint-watch.service`. Both service
 definitions set a `077` umask, so the logs and every file the service creates
 are readable by your account only. The background
 service deliberately does not use `--debug` and listens on no debug port; run
-`af console` to open the debug UI on it, for as long as that command runs.
+`af console` to open the debug UI on it, for as long as that command runs
+(see [Open the debug console](debug-console.md)).
+
+There is no command yet to stop or remove the service, or to revert what
+`af setup` wrote; see [known limitations](../reference/known-limitations.md).
 
 If launchd or a systemd user session is unavailable, setup stops before agent
 configuration and prints a manual `af watch` command. Keep that process

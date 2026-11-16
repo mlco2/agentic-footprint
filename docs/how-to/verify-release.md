@@ -1,5 +1,8 @@
 # Verify a release
 
+No release has been published yet. This page describes what each release
+will contain and how to check it once the first one exists.
+
 Each GitHub release contains platform archives, `SHA256SUMS`, Sigstore bundles,
 and GitHub build provenance.
 
