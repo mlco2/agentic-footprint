@@ -101,6 +101,14 @@ jobs:
           Remove-Item -Recurse -Force $env:CARGO_TARGET_DIR
           cargo build --release --locked -p af-cli --target "${{ matrix.target }}"
           if ((Get-FileHash "$env:RUNNER_TEMP\af-first.exe").Hash -ne (Get-FileHash "$env:CARGO_TARGET_DIR\${{ matrix.target }}\release\af.exe").Hash) {
+            # Where they differ, for whoever has to find out why.
+            $a = [IO.File]::ReadAllBytes("$env:RUNNER_TEMP\af-first.exe")
+            $b = [IO.File]::ReadAllBytes("$env:CARGO_TARGET_DIR\${{ matrix.target }}\release\af.exe")
+            Write-Host "sizes: $($a.Length) and $($b.Length) bytes"
+            $shown = 0
+            for ($i = 0; $i -lt [Math]::Min($a.Length, $b.Length) -and $shown -lt 40; $i++) {
+              if ($a[$i] -ne $b[$i]) { Write-Host ("differs at 0x{0:X}" -f $i); $shown++ }
+            }
             throw 'release builds differ'
           }
           New-Item -ItemType Directory -Force release | Out-Null
