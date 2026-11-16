@@ -10,7 +10,7 @@
 //! watcher has no project directory to inspect, so a project-only setup is
 //! reported as not configured until its first event arrives.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -122,6 +122,172 @@ fn parse_ps_line(line: &str, now: SystemTime) -> Option<AgentProcess> {
         name,
         started: now.checked_sub(elapsed)?,
     })
+}
+
+/// What could be learned about one running agent process without its
+/// cooperation. Every field is `None` when it could not be read: a missing
+/// fact is never turned into a verdict.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct Inspection {
+    /// The process's working directory: the project it was started in.
+    pub(crate) cwd: Option<PathBuf>,
+    /// The Codex home the process really uses, whatever alias or variable
+    /// chose it: the directory of the state files it holds open.
+    pub(crate) codex_home: Option<PathBuf>,
+    /// The Codex session the process is writing, from its open rollout file.
+    pub(crate) codex_session: Option<String>,
+}
+
+/// `lsof -F pfn` output: a `p<pid>` line opens a process, then pairs of
+/// `f<descriptor>` and `n<name>` lines list its open files.
+fn parse_lsof(output: &str) -> BTreeMap<u32, Vec<(String, PathBuf)>> {
+    let mut by_pid: BTreeMap<u32, Vec<(String, PathBuf)>> = BTreeMap::new();
+    let mut pid = None;
+    let mut descriptor = "";
+    for line in output.lines() {
+        if let Some(value) = line.strip_prefix('p') {
+            pid = value.parse::<u32>().ok();
+            if let Some(pid) = pid {
+                by_pid.entry(pid).or_default();
+            }
+        } else if let Some(value) = line.strip_prefix('f') {
+            descriptor = value;
+        } else if let (Some(name), Some(pid)) = (line.strip_prefix('n'), pid) {
+            by_pid
+                .entry(pid)
+                .or_default()
+                .push((descriptor.to_string(), PathBuf::from(name)));
+        }
+    }
+    by_pid
+}
+
+/// Reads an [`Inspection`] out of a process's open files (descriptor,
+/// path). The working directory is the `cwd` descriptor. A Codex home is
+/// recognised by what Codex keeps open inside it: its rollout file under
+/// `sessions/`, or its `state_*.sqlite` database.
+fn inspection_from(files: &[(String, PathBuf)]) -> Inspection {
+    let mut inspection = Inspection {
+        cwd: files
+            .iter()
+            .find(|(descriptor, _)| descriptor == "cwd")
+            .map(|(_, path)| path.clone()),
+        ..Inspection::default()
+    };
+    for (_, path) in files {
+        let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        if let Some(stem) = name
+            .strip_prefix("rollout-")
+            .and_then(|rest| rest.strip_suffix(".jsonl"))
+        {
+            let home = path
+                .ancestors()
+                .find(|dir| dir.file_name().is_some_and(|name| name == "sessions"))
+                .and_then(Path::parent);
+            if let Some(home) = home {
+                // The rollout names the session being written: it wins
+                // over a database that only names the home.
+                inspection.codex_home = Some(home.to_path_buf());
+                inspection.codex_session = trailing_uuid(stem);
+            }
+        } else if name.starts_with("state_")
+            && name.ends_with(".sqlite")
+            && inspection.codex_home.is_none()
+        {
+            inspection.codex_home = path.parent().map(Path::to_path_buf);
+        }
+    }
+    inspection
+}
+
+/// The UUID a rollout file name ends with (`…T12-29-52-<uuid>`).
+fn trailing_uuid(stem: &str) -> Option<String> {
+    let start = stem.len().checked_sub(36)?;
+    let candidate = stem.get(start..)?;
+    let shaped = candidate.bytes().enumerate().all(|(index, byte)| {
+        if matches!(index, 8 | 13 | 18 | 23) {
+            byte == b'-'
+        } else {
+            byte.is_ascii_hexdigit()
+        }
+    });
+    shaped.then(|| candidate.to_string())
+}
+
+/// Inspects running processes of this user. Best effort by design: a tool
+/// that is missing, a process that is gone or one that may not be looked
+/// at simply yields no facts for it.
+pub(crate) fn inspect_processes(pids: &[u32]) -> BTreeMap<u32, Inspection> {
+    if pids.is_empty() {
+        return BTreeMap::new();
+    }
+    inspect_platform(pids)
+}
+
+/// macOS: one `lsof` for every process. Its exit status is not consulted:
+/// it is non-zero as soon as one listed pid is gone, with the others still
+/// printed.
+#[cfg(target_os = "macos")]
+fn inspect_platform(pids: &[u32]) -> BTreeMap<u32, Inspection> {
+    let list = pids
+        .iter()
+        .map(u32::to_string)
+        .collect::<Vec<_>>()
+        .join(",");
+    let Ok(output) = Command::new("lsof")
+        .args(["-a", "-p", &list, "-F", "pfn"])
+        .output()
+    else {
+        return BTreeMap::new();
+    };
+    parse_lsof(&String::from_utf8_lossy(&output.stdout))
+        .into_iter()
+        .map(|(pid, files)| (pid, inspection_from(&files)))
+        .collect()
+}
+
+/// Linux: `/proc/<pid>`, readable for the user's own processes.
+#[cfg(target_os = "linux")]
+fn inspect_platform(pids: &[u32]) -> BTreeMap<u32, Inspection> {
+    pids.iter()
+        .map(|&pid| {
+            let root = PathBuf::from(format!("/proc/{pid}"));
+            let mut files: Vec<(String, PathBuf)> = std::fs::read_link(root.join("cwd"))
+                .map(|cwd| ("cwd".to_string(), cwd))
+                .into_iter()
+                .collect();
+            if let Ok(entries) = std::fs::read_dir(root.join("fd")) {
+                files.extend(entries.flatten().filter_map(|entry| {
+                    let target = std::fs::read_link(entry.path()).ok()?;
+                    Some((entry.file_name().to_string_lossy().into_owned(), target))
+                }));
+            }
+            let mut inspection = inspection_from(&files);
+            if inspection.codex_home.is_none() {
+                // Linux lets a user read their own processes' environment.
+                inspection.codex_home =
+                    std::fs::read(root.join("environ"))
+                        .ok()
+                        .and_then(|environ| {
+                            environ
+                                .split(|byte| *byte == 0)
+                                .find_map(|entry| entry.strip_prefix(b"CODEX_HOME="))
+                                .filter(|value| !value.is_empty())
+                                .map(|value| {
+                                    PathBuf::from(String::from_utf8_lossy(value).into_owned())
+                                })
+                        });
+            }
+            (pid, inspection)
+        })
+        .collect()
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+fn inspect_platform(_pids: &[u32]) -> BTreeMap<u32, Inspection> {
+    BTreeMap::new()
 }
 
 /// `ps -o etime` elapsed time: `[[dd-]hh:]mm:ss`.
@@ -506,6 +672,75 @@ pub(crate) fn agent_row(facts: &AgentFacts, activity: Option<&Activity>) -> Valu
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const LSOF: &str = "p6363\nfcwd\nn/Users/u/oss/dcb\nftxt\nn/opt/claude\np74475\nfcwd\nn/p\nf20\nn/p/.codex/state_5.sqlite\nf21\nn/p/.codex/state_5.sqlite-wal\nf60\nn/p/.codex/sessions/2026/11/16/rollout-2026-11-16T12-29-52-01a1e41e-e5cc-7150-8e41-13fcbc72f747.jsonl\n";
+
+    #[test]
+    fn parse_lsof_groups_files_by_pid() {
+        let parsed = parse_lsof(LSOF);
+        assert_eq!(parsed.keys().copied().collect::<Vec<_>>(), [6363, 74475]);
+        assert_eq!(
+            parsed[&6363],
+            [
+                ("cwd".to_string(), PathBuf::from("/Users/u/oss/dcb")),
+                ("txt".to_string(), PathBuf::from("/opt/claude")),
+            ]
+        );
+        assert_eq!(parsed[&74475].len(), 4);
+    }
+
+    #[test]
+    fn inspection_finds_cwd_codex_home_and_session() {
+        let parsed = parse_lsof(LSOF);
+        assert_eq!(
+            inspection_from(&parsed[&74475]),
+            Inspection {
+                cwd: Some(PathBuf::from("/p")),
+                codex_home: Some(PathBuf::from("/p/.codex")),
+                codex_session: Some("01a1e41e-e5cc-7150-8e41-13fcbc72f747".to_string()),
+            }
+        );
+    }
+
+    #[test]
+    fn a_state_database_alone_names_the_codex_home() {
+        let files = [("20".to_string(), PathBuf::from("/h/.codex/state_5.sqlite"))];
+        let inspection = inspection_from(&files);
+        assert_eq!(inspection.codex_home, Some(PathBuf::from("/h/.codex")));
+        assert_eq!(inspection.codex_session, None);
+        assert_eq!(inspection.cwd, None);
+    }
+
+    #[test]
+    fn inspection_of_a_process_with_no_codex_files_has_no_home() {
+        let parsed = parse_lsof(LSOF);
+        assert_eq!(
+            inspection_from(&parsed[&6363]),
+            Inspection {
+                cwd: Some(PathBuf::from("/Users/u/oss/dcb")),
+                ..Inspection::default()
+            }
+        );
+    }
+
+    #[test]
+    fn a_rollout_name_without_a_uuid_gives_a_home_but_no_session() {
+        let files = [(
+            "9".to_string(),
+            PathBuf::from("/h/.codex/sessions/rollout-odd.jsonl"),
+        )];
+        let inspection = inspection_from(&files);
+        assert_eq!(inspection.codex_home, Some(PathBuf::from("/h/.codex")));
+        assert_eq!(inspection.codex_session, None);
+    }
+
+    #[test]
+    fn inspecting_no_process_or_a_dead_one_yields_nothing_and_does_not_panic() {
+        assert!(inspect_processes(&[]).is_empty());
+        // No such pid: whatever the platform, no facts are invented.
+        let inspected = inspect_processes(&[u32::MAX - 1]);
+        assert!(inspected.values().all(|i| *i == Inspection::default()));
+    }
 
     #[test]
     fn keep_start_times_absorbs_ps_jitter_but_not_a_reused_pid() {
