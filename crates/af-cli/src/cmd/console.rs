@@ -170,8 +170,15 @@ mod imp {
         let _ = client.set_read_timeout(Some(Duration::from_millis(200)));
         // The request is read before answering: closing a socket with
         // unread bytes resets it, and the answer is lost with them.
-        let mut request = [0u8; 8192];
-        let _ = client.read(&mut request);
+        // Up to the end of its head, however many pieces it arrives in.
+        let mut head = Vec::new();
+        let mut piece = [0u8; 2048];
+        while head.len() < 16 * 1024 && !head.windows(4).any(|w| w == b"\r\n\r\n") {
+            match client.read(&mut piece) {
+                Ok(n) if n > 0 => head.extend_from_slice(&piece[..n]),
+                _ => break,
+            }
+        }
         let _ = client.write_all(response.as_bytes());
         let _ = client.shutdown(Shutdown::Write);
     }
@@ -188,11 +195,10 @@ mod imp {
             stream
                 .set_read_timeout(Some(Duration::from_secs(3)))
                 .expect("timeout");
-            write!(
-                stream,
-                "GET {path} HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n"
-            )
-            .expect("write");
+            // One write: a request sent in pieces is a different test.
+            let request =
+                format!("GET {path} HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n");
+            stream.write_all(request.as_bytes()).expect("write");
             // Some clients close their sending half once the request is
             // out; the answer must still come back.
             stream.shutdown(Shutdown::Write).expect("half-close");
@@ -220,6 +226,29 @@ mod imp {
             let response = get(relay_to(&socket), "/debug/status");
             assert!(response.starts_with("HTTP/1.1 200"), "{response}");
             assert!(response.contains(r#""boot_id":"b7""#), "{response}");
+        }
+
+        #[test]
+        fn a_refusal_reaches_a_client_that_sends_its_request_in_pieces() {
+            let dir = tempfile::tempdir().expect("tempdir");
+            let addr = relay_to(&dir.path().join("console.sock"));
+            let mut stream = TcpStream::connect(addr).expect("connect");
+            stream
+                .set_read_timeout(Some(Duration::from_secs(3)))
+                .expect("timeout");
+            for piece in [
+                "GET /debug/status HTTP/1.1\r\n",
+                "Host: localhost\r\n",
+                "\r\n",
+            ] {
+                stream
+                    .write_all(piece.as_bytes())
+                    .expect("each piece is accepted");
+                std::thread::sleep(Duration::from_millis(30));
+            }
+            let mut response = Vec::new();
+            let _ = stream.read_to_end(&mut response);
+            assert!(String::from_utf8_lossy(&response).contains("collector_not_running"));
         }
 
         #[test]
