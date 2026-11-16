@@ -1,7 +1,16 @@
 # Debug API reference
 
 `af watch --debug` serves the embedded console and a loopback-only HTTP API.
-The default address is `127.0.0.1:9414`.
+The default address is `127.0.0.1:9414`. `af console` serves the same console
+and API for an `af watch` that is already running, without `--debug`: every
+`af watch` also answers these routes on `console.sock` in the state directory
+(owner-only), and `af console` relays a loopback port to it.
+
+Behind `af console`, a session nothing has described since a console attached
+answers `null` on `/debug/session` and `/debug/report`; asking is what makes
+the watcher publish it, and its `session` and `report` frames follow on the
+stream. The stream's `sessions` frame carries the whole `/debug/sessions`
+list when the watcher (re)lists its stored sessions.
 
 | Route | Description |
 |---|---|

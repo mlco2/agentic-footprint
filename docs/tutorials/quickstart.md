@@ -55,7 +55,8 @@ af report
 
 For a live diagnostic view:
 
-- with a macOS/Linux background receiver, run `af watch --debug --no-otlp`;
+- with a macOS/Linux background receiver, run `af console`: it attaches to
+  the receiver that is already running and stops when you press Ctrl-C;
 - with a foreground receiver, start it as `af watch --debug` instead.
 
 Open `http://127.0.0.1:9414/` in a browser.

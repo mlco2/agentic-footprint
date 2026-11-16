@@ -11,6 +11,7 @@ The release binary is named `af`.
 | `af report` | Ingest pending facts, update derived results, and print a report. |
 | `af replay` | Rebuild derived estimates and joins from retained raw facts. |
 | `af watch` | Run resident ingestion, sampling, estimation, and optional debugging. |
+| `af console` | Open the debug console of the `af watch` that is already running (macOS/Linux). |
 | `af doctor` | Diagnose why an agent's data is not arriving (read-only). |
 | `af self update` | Update af to the latest release, with its managed runtime. |
 | `af statusline` | Render read-only session impact values for Claude Code. |
@@ -26,6 +27,15 @@ address fails at startup with `af listens on loopback addresses only
 (127.0.0.1, ::1)`. It writes to the store once a minute, not per received
 batch; see
 [why writes are batched](../explanation/rebuild-architecture.md#why-writes-are-batched).
+
+`af console` serves the debug console on `--addr` (default
+`127.0.0.1:9414`, loopback only) by relaying to the running `af watch`, which
+it reaches over `console.sock`, a socket in the state directory that only your
+account can open. It starts no receiver and stores nothing. `af watch` builds
+what the console shows only while an `af console` (or a browser tab on it) is
+attached, and tells a console that attaches the last three minutes; older
+sessions are listed and loaded when selected. Beside a running receiver,
+`af watch --debug` exits and points to `af console`.
 
 `af setup` treats receiver health as a prerequisite: it does not inspect or
 propose agent-specific changes until the local OTLP receiver responds.

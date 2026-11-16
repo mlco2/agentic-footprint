@@ -75,8 +75,8 @@ configuration below. `af watch` refuses a non-loopback `--otlp-addr` or
 
 The installed launchd/systemd service runs without `--debug`. On macOS inspect
 `$AF_STATE_DIR/logs/`; on Linux use
-`journalctl --user -u agentic-footprint-watch.service`. Run a separate
-`af watch --debug --no-otlp` when only the debug UI is needed.
+`journalctl --user -u agentic-footprint-watch.service`. Run
+`af console` to open the debug UI on the running service.
 
 ## 2. Configure Codex
 

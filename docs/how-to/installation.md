@@ -211,8 +211,8 @@ On macOS, logs are written under `$AF_STATE_DIR/logs/`. On Linux, inspect them
 with `journalctl --user -u agentic-footprint-watch.service`. Both service
 definitions set a `077` umask, so the logs and every file the service creates
 are readable by your account only. The background
-service deliberately does not use `--debug`; run a separate foreground
-`af watch --debug --no-otlp` only when inspecting the debug UI.
+service deliberately does not use `--debug` and listens on no debug port; run
+`af console` to open the debug UI on it, for as long as that command runs.
 
 If launchd or a systemd user session is unavailable, setup stops before agent
 configuration and prints a manual `af watch` command. Keep that process
