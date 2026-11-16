@@ -126,7 +126,8 @@ fn python_runtime(state_dir: &Path) -> Value {
         ),
     };
     json!({
-        "ready": false,
+        // A warning (a dependency to upgrade) leaves the runtime usable.
+        "ready": finding.severity != af_sidecar::Severity::Error,
         "problem": finding.message,
         "fix": fix,
         "provisioner": provisioner,

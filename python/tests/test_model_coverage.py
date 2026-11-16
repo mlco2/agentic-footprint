@@ -73,7 +73,10 @@ def test_runtime_dependency_group_mirrors_the_manifest():
     expected = sorted(
         f"{name}{spec}" if spec[0] in "<>=!~" else f"{name}=={spec}"
         for name, spec in MANIFEST["packages"].items()
+    ) + sorted(
+        f"{name}>={floor}" for name, floor in MANIFEST.get("minimums", {}).items()
     )
+    expected.sort()
     assert runtime == expected
 
 

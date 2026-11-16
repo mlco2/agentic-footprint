@@ -6,6 +6,7 @@
 //! interpreter at `venv/bin/python` (unix) or `venv\Scripts\python.exe`
 //! (Windows) — see [`venv_interpreter`].
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -21,6 +22,39 @@ const MANIFEST_TOML: &str = include_str!("../../../python/manifest.toml");
 struct Manifest {
     python: PythonSection,
     packages: Packages,
+    /// Security floors for packages the three above bring with them:
+    /// name to the lowest version without a known vulnerability.
+    #[serde(default)]
+    minimums: BTreeMap<String, String>,
+}
+
+/// The first installed package below its security floor, as
+/// `(name, installed, floor)`, read from the `name version` lines the
+/// version check prints after the two runtime versions.
+fn below_minimum(
+    stdout: &str,
+    minimums: &BTreeMap<String, String>,
+) -> Option<(String, String, String)> {
+    stdout.lines().find_map(|line| {
+        let (name, installed) = line.trim().split_once(' ')?;
+        let floor = minimums.get(name)?;
+        let below = match (version_key(installed), version_key(floor)) {
+            (Some(have), Some(need)) => have < need,
+            // A version that cannot be compared is not vouched for.
+            _ => true,
+        };
+        below.then(|| (name.to_string(), installed.to_string(), floor.clone()))
+    })
+}
+
+/// Python that prints `name version` for each package with a security
+/// floor that is installed (one that is not installed has nothing to fix).
+fn minimums_script(minimums: &BTreeMap<String, String>) -> String {
+    let names: Vec<String> = minimums.keys().map(|name| format!("{name:?}")).collect();
+    format!(
+        "\nfor n in [{}]:\n    try:\n        print(n, m.version(n))\n    except m.PackageNotFoundError:\n        pass\n",
+        names.join(", ")
+    )
 }
 
 #[derive(Deserialize)]
@@ -262,11 +296,21 @@ pub fn meets_floors(versions: &RuntimeVersions) -> bool {
 }
 
 pub fn requirements_for(versions: &RuntimeVersions) -> Vec<String> {
-    vec![
+    let manifest = manifest();
+    let mut requirements = vec![
         requirement("ecologits", &versions.ecologits),
         requirement("codecarbon", &versions.codecarbon),
-        requirement("psutil", &manifest().packages.psutil),
-    ]
+        requirement("psutil", &manifest.packages.psutil),
+    ];
+    // Named, so that an environment that already has an older one is
+    // upgraded: an installer leaves a satisfied dependency alone.
+    requirements.extend(
+        manifest
+            .minimums
+            .iter()
+            .map(|(name, floor)| format!("{name}>={floor}")),
+    );
+    requirements
 }
 
 /// Provisions the managed venv at the versions it already has (when they
@@ -472,7 +516,8 @@ pub fn doctor(state_dir: &Path) -> Vec<DoctorFinding> {
 /// 2. its interpreter exists and is executable;
 /// 3. `import ecologits, codecarbon, psutil` succeeds and reports both
 ///    versions (one interpreter run);
-/// 4. those versions meet this binary's floors.
+/// 4. those versions meet this binary's floors;
+/// 5. no installed dependency is below its security floor.
 ///
 /// The check runs from `state_dir`, never from where `af` was started.
 pub fn runtime_status(state_dir: &Path) -> std::result::Result<RuntimeVersions, DoctorFinding> {
@@ -500,7 +545,10 @@ pub fn runtime_status(state_dir: &Path) -> std::result::Result<RuntimeVersions, 
     let output = isolated_python(&python, state_dir)
         .args([
             "-c",
-            &format!("import ecologits, codecarbon, psutil; {VERSIONS_SCRIPT}"),
+            &format!(
+                "import ecologits, codecarbon, psutil; {VERSIONS_SCRIPT}{}",
+                minimums_script(&manifest().minimums)
+            ),
         ])
         .output()
         .map_err(|err| {
@@ -534,6 +582,17 @@ pub fn runtime_status(state_dir: &Path) -> std::result::Result<RuntimeVersions, 
             ),
             "run `af python setup` to install at least the pinned versions",
         ));
+    }
+    if let Some((name, installed, floor)) = below_minimum(
+        &String::from_utf8_lossy(&output.stdout),
+        &manifest().minimums,
+    ) {
+        // The runtime works; it should not be left like this.
+        return Err(DoctorFinding {
+            severity: Severity::Warn,
+            message: format!("{name} {installed} has a known vulnerability, fixed in {floor}"),
+            fix_hint: "run `af python setup` to upgrade it".to_string(),
+        });
     }
     Ok(versions)
 }
@@ -606,7 +665,12 @@ mod tests {
         };
         assert_eq!(
             requirements_for(&versions),
-            ["ecologits==0.11.3", "codecarbon==3.3.1", "psutil>=6"]
+            [
+                "ecologits==0.11.3",
+                "codecarbon==3.3.1",
+                "psutil>=6",
+                "certifi>=2026.10.18"
+            ]
         );
     }
 
@@ -762,5 +826,32 @@ mod tests {
     fn doctor_reports_at_most_one_finding() {
         let dir = tempfile::tempdir().unwrap();
         assert_eq!(doctor(dir.path()).len(), 1, "the first problem only");
+    }
+    #[test]
+    fn a_dependency_with_a_security_floor_is_required_at_that_floor() {
+        let requirements = requirements_for(&floors());
+        assert!(
+            requirements.iter().any(|r| r == "certifi>=2026.10.18"),
+            "{requirements:?}"
+        );
+    }
+
+    #[test]
+    fn an_installed_dependency_below_its_security_floor_is_found() {
+        let minimums = BTreeMap::from([("certifi".to_string(), "2026.10.18".to_string())]);
+        assert_eq!(
+            below_minimum("0.11.2\n3.3.1\ncertifi 2026.7.22\n", &minimums),
+            Some((
+                "certifi".to_string(),
+                "2026.7.22".to_string(),
+                "2026.10.18".to_string()
+            ))
+        );
+        assert_eq!(
+            below_minimum("0.11.2\n3.3.1\ncertifi 2026.10.23\n", &minimums),
+            None
+        );
+        // Not installed: nothing to be vulnerable.
+        assert_eq!(below_minimum("0.11.2\n3.3.1\n", &minimums), None);
     }
 }

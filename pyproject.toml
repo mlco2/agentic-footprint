@@ -14,6 +14,8 @@ runtime = [
   "codecarbon==3.3.1",
   "ecologits==0.11.2",
   "psutil>=6",
+  # [minimums] in python/manifest.toml.
+  "certifi>=2026.10.18",
 ]
 
 [tool.uv]

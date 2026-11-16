@@ -15,3 +15,11 @@ version = "3.12"
 ecologits = "0.11.2"
 codecarbon = "3.3.1"
 psutil = ">=6"
+
+# Security floors for packages the three above bring with them: the lowest
+# version without a known vulnerability. `af python setup` and `af python
+# upgrade` install at least these, and `af doctor` / `af status` report an
+# environment that is below one.
+[minimums]
+# GHSA-6q48-6c7w-9gw2: certificates of compromised intermediates removed.
+certifi = "2026.10.18"
