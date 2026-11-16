@@ -318,9 +318,67 @@ export interface Snapshot {
   as_of_seq: number;
 }
 
+/** One coding agent's state, first match wins (server-side, see
+ * `crates/af-cli/src/cmd/agents.rs`):
+ * - `receiving`      at least one event from it since this watcher started
+ * - `needs_restart`  configured, and a running process predates the config
+ * - `waiting`        configured, nothing received yet
+ * - `misconfigured`  config present but will not reach this receiver (`detail`)
+ * - `not_configured` command installed, config does not export here
+ * - `not_installed`  no command, no config */
+export type AgentState = "receiving" | "needs_restart" | "waiting" | "misconfigured" | "not_configured" | "not_installed";
+
+export interface AgentProcessInfo {
+  pid: number;
+  started_at: string;
+  /** Started before the agent's configuration last changed. */
+  stale: boolean;
+}
+
+/** One row of `WatcherStatus.agents`. `receiving` is sticky for the watcher's
+ * lifetime; recency ("3s ago", "idle 12m") is derived from `last_event_at`
+ * by the console. */
+export interface AgentStatus {
+  id: string;
+  name: string;
+  state: AgentState;
+  detail: string | null;
+  /** A command to run when there is an obvious next step (`af setup`). */
+  action: string | null;
+  config_path: string | null;
+  /** `null` when processes could not be listed on the watcher's platform. */
+  processes: AgentProcessInfo[] | null;
+  sessions: number;
+  last_event_at: string | null;
+}
+
+/** GET /debug/status, and the `status` SSE frame (same body).
+ *
+ * Watcher-level, independent of any session: it is served from the first
+ * second of the process, which is what lets the console show something true
+ * before the first event. `boot_id` is fixed for one watcher process and
+ * differs for any other — a change means the history the console holds
+ * belongs to a process that no longer exists. */
+export interface WatcherStatus {
+  boot_id: string;
+  started_at: string;
+  af_version: string;
+  flush_interval_ms: number;
+  receiver: { endpoint: string | null; note: string | null };
+  agents: AgentStatus[];
+}
+
+/** The stream's heartbeat, sent after 15s of silence. Carries the boot id so
+ * a client that hears nothing else still notices a different process. */
+export interface PingFrame {
+  boot_id: string | null;
+}
+
 /** Named SSE event kinds streamed by GET /debug/stream (DATA-CONTRACT §2.3 table),
- * plus `reset`: a protocol-level frame (not part of the §2.3 data table) the
- * server sends when a client's Last-Event-ID is older than the replay buffer. */
+ * plus three protocol-level frames that are not ring frames (no `id:`, never
+ * replayed): `reset` (the client's cursor cannot be served — older than the
+ * replay buffer, or issued by another watcher process), `status` (first frame
+ * on every connection, then on change) and `ping` (heartbeat). */
 export type SseEventName =
   | "fact"
   | "decision"
@@ -331,7 +389,9 @@ export type SseEventName =
   | "report"
   | "health"
   | "session"
-  | "reset";
+  | "reset"
+  | "status"
+  | "ping";
 
 /** Empty payload for the `reset` frame — a signal, not data. */
 export type ResetFrame = Record<string, never>;
@@ -353,6 +413,8 @@ export interface SseFrameDataMap {
    * picker follows sessions live through these. */
   session: SessionInfo;
   reset: ResetFrame;
+  status: WatcherStatus;
+  ping: PingFrame;
 }
 
 /** One frame in the scenario/replay log or over the wire: `{atMs, event, data}`

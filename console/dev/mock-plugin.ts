@@ -9,6 +9,11 @@
 // Chaos toggles (dev-only, never present in a real af server):
 //   POST /debug/__mock/drop-sse — closes every currently-open SSE connection once.
 //   POST /debug/__mock/stall    — stop emitting frames for 10s without closing any connection.
+//   POST /debug/__mock/restart  — behave like a restarted watcher: new boot_id, every open
+//                                 stream closed, every cursor issued before now answered `reset`.
+//   POST /debug/__mock/empty?on=1|0 — a watcher that has no session yet: `/debug/session` is
+//                                 `null`, the snapshot is empty, the stream carries only
+//                                 `status` and `ping`. Turning it off publishes the session.
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { Connect, Plugin } from "vite";
 import { buildScenario } from "./scenario";
@@ -26,6 +31,7 @@ import type {
   SseFrameDataMap,
   WatchdogEntry,
   WatchdogFrame,
+  WatcherStatus,
 } from "../src/lib/types/debug";
 
 /** DATA-CONTRACT §2.3's `watchdog` SSE frame wraps the list as
@@ -192,12 +198,94 @@ function isStalled(): boolean {
   return Date.now() < stallUntilWallMs;
 }
 
+// --- watcher status ----------------------------------------------------------
+const HEARTBEAT_MS = 15_000;
+let bootCounter = 0;
+let bootId = newBootId();
+/** Cursors issued before the last mock restart: a real restarted watcher
+ * numbers its frames from zero, so it cannot serve them. The mock's own
+ * sequence is a function of wall time and keeps counting, so this floor is
+ * what stands in for "issued by another process". */
+let minValidCursor = 0;
+let emptyMode = false;
+const lastWriteWallMs = new Map<ServerResponse, number>();
+
+function newBootId(): string {
+  bootCounter += 1;
+  return `mock${SERVER_START_WALL_MS.toString(16)}${bootCounter.toString(16).padStart(4, "0")}`.slice(-16).padStart(16, "0");
+}
+
+/** The mock's `GET /debug/status` body: one agent in each state the
+ * onboarding view has to render differently. Pure, so it is testable. */
+export function buildStatus(boot: string, nowWallMs: number): WatcherStatus {
+  return {
+    boot_id: boot,
+    started_at: new Date(SERVER_START_WALL_MS).toISOString(),
+    af_version: "0.1.0",
+    flush_interval_ms: 60000,
+    receiver: { endpoint: "127.0.0.1:4318", note: null },
+    agents: [
+      {
+        id: "claude-code",
+        name: "Claude Code",
+        state: emptyMode ? "needs_restart" : "receiving",
+        detail: null,
+        action: emptyMode ? "restart claude" : null,
+        config_path: "~/.claude/settings.json",
+        processes: [{ pid: 6363, started_at: new Date(SERVER_START_WALL_MS - 3_600_000).toISOString(), stale: emptyMode }],
+        sessions: emptyMode ? 0 : 1,
+        last_event_at: emptyMode ? null : new Date(nowWallMs - 3_000).toISOString(),
+      },
+      {
+        id: "codex",
+        name: "Codex",
+        state: "waiting",
+        detail: null,
+        action: null,
+        config_path: "~/.codex/config.toml",
+        processes: [],
+        sessions: 0,
+        last_event_at: null,
+      },
+      {
+        id: "opencode",
+        name: "OpenCode",
+        state: "not_configured",
+        detail: null,
+        action: "af setup",
+        config_path: null,
+        processes: null,
+        sessions: 0,
+        last_event_at: null,
+      },
+    ],
+  };
+}
+
+/** Test and chaos-toggle entry points for the mock's watcher identity. */
+export const mockControl = {
+  bootId(): string {
+    return bootId;
+  },
+  /** A new watcher process, as far as any client can tell. */
+  restart(): string {
+    bootId = newBootId();
+    minValidCursor = currentSeq(virtualNowMs()) + 1;
+    for (const conn of connections) conn.end();
+    connections.clear();
+    connectionCursors.clear();
+    lastWriteWallMs.clear();
+    return bootId;
+  },
+};
+
 // --- SSE wire helpers --------------------------------------------------------
 function writeSseEvent(res: ServerResponse, event: string, data: unknown, id?: number): void {
   let out = `event: ${event}\n`;
   if (id !== undefined) out += `id: ${id}\n`;
   out += `data: ${JSON.stringify(data)}\n\n`;
   res.write(out);
+  lastWriteWallMs.set(res, Date.now());
 }
 
 function sendJson(res: ServerResponse, status: number, body: unknown): void {
@@ -231,7 +319,17 @@ const connectionCursors = new Map<ServerResponse, number>();
 setInterval(() => {
   if (isStalled()) return;
   const nowSeq = currentSeq(virtualNowMs());
+  const nowWallMs = Date.now();
   for (const res of connections) {
+    // Heartbeat: a connection that has been written nothing for a whole
+    // interval is told the watcher is still there.
+    if (nowWallMs - (lastWriteWallMs.get(res) ?? 0) >= HEARTBEAT_MS) {
+      writeSseEvent(res, "ping", { boot_id: bootId });
+    }
+    if (emptyMode) {
+      connectionCursors.set(res, nowSeq);
+      continue;
+    }
     const cursor = connectionCursors.get(res) ?? nowSeq;
     if (cursor >= nowSeq) continue;
     for (const { seq, frame } of framesBetween(cursor, nowSeq)) {
@@ -243,10 +341,18 @@ setInterval(() => {
 
 // --- request handling ---------------------------------------------------------
 function handleSession(res: ServerResponse): void {
+  if (emptyMode) return sendJson(res, 200, null);
   sendJson(res, 200, scenario.session satisfies SessionInfo);
 }
 
+function handleStatus(res: ServerResponse): void {
+  sendJson(res, 200, buildStatus(bootId, Date.now()));
+}
+
+const EMPTY_SNAPSHOT: Snapshot = { events: [], allocations: [], coverage_gaps: [], open_spans: [], watchdog: [], as_of_seq: -1 };
+
 function handleSnapshot(req: IncomingMessage, res: ServerResponse): void {
+  if (emptyMode) return sendJson(res, 200, EMPTY_SNAPSHOT);
   const windowMs = parseWindowSeconds(req.url ?? "");
   const nowVirtualMs = virtualNowMs();
   const windowed = framesInWindow(nowVirtualMs, windowMs);
@@ -315,6 +421,7 @@ export function handleReport(req: IncomingMessage, res: ServerResponse): void {
 }
 
 function handleHealth(res: ServerResponse): void {
+  if (emptyMode) return sendJson(res, 200, null);
   sendJson(res, 200, scenario.health satisfies HealthPayload);
 }
 
@@ -325,7 +432,20 @@ function handleStream(req: IncomingMessage, res: ServerResponse): void {
   res.setHeader("Connection", "keep-alive");
   res.flushHeaders();
 
+  // First on every connection, cursor or not: which watcher this is.
+  writeSseEvent(res, "status", buildStatus(bootId, Date.now()));
+
   const nowSeq = currentSeq(virtualNowMs());
+  if (emptyMode) {
+    connections.add(res);
+    connectionCursors.set(res, nowSeq);
+    req.on("close", () => {
+      connections.delete(res);
+      connectionCursors.delete(res);
+      lastWriteWallMs.delete(res);
+    });
+    return;
+  }
   const lastEventIdHeader = req.headers["last-event-id"];
   const lastEventIdFromHeader = Array.isArray(lastEventIdHeader) ? lastEventIdHeader[0] : lastEventIdHeader;
   const fromParam = parseFromParam(req.url ?? "");
@@ -335,7 +455,7 @@ function handleStream(req: IncomingMessage, res: ServerResponse): void {
   if (lastEventId !== undefined) {
     const lastId = Number(lastEventId);
     const retentionFrames = frames.length * 2; // ~2 loops of replay history
-    if (Number.isFinite(lastId) && lastId >= nowSeq - retentionFrames && lastId <= nowSeq) {
+    if (Number.isFinite(lastId) && lastId >= nowSeq - retentionFrames && lastId <= nowSeq && lastId >= minValidCursor) {
       for (const { seq, frame } of framesBetween(lastId, nowSeq)) {
         writeSseEvent(res, frame.event, frame.data, seq);
       }
@@ -361,6 +481,7 @@ function handleStream(req: IncomingMessage, res: ServerResponse): void {
   req.on("close", () => {
     connections.delete(res);
     connectionCursors.delete(res);
+    lastWriteWallMs.delete(res);
   });
 }
 
@@ -394,6 +515,27 @@ function attach(middlewares: Connect.Server): void {
       });
       return;
     }
+    if (path === "/debug/__mock/restart" && req.method === "POST") {
+      void drain(req).then(() => sendJson(res, 200, { boot_id: mockControl.restart() }));
+      return;
+    }
+    if (path === "/debug/__mock/empty" && req.method === "POST") {
+      void drain(req).then(() => {
+        const on = /[?&]on=1\b/.test(url);
+        const wasEmpty = emptyMode;
+        emptyMode = on;
+        const nowSeq = currentSeq(virtualNowMs());
+        for (const conn of connections) {
+          // Leaving the empty state is the watcher's first session: every
+          // open stream learns of it, as a real pass would publish it.
+          if (wasEmpty && !on) writeSseEvent(conn, "session", scenario.session, nowSeq);
+          writeSseEvent(conn, "status", buildStatus(bootId, Date.now()));
+        }
+        sendJson(res, 200, { empty: emptyMode });
+      });
+      return;
+    }
+    if (path === "/debug/status") return handleStatus(res);
     if (path === "/debug/session") return handleSession(res);
     if (path === "/debug/snapshot") return handleSnapshot(req, res);
     if (path === "/debug/report") return handleReport(req, res);

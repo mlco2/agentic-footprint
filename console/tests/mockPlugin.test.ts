@@ -70,3 +70,34 @@ describe("handleReport — ?level= validation (dev-aid honesty)", () => {
     expect((body() as { level: string }).level).toBe("Session");
   });
 });
+
+// --- /debug/status, boot id (watcher status contract) ----------------------
+import { buildStatus, mockControl } from "../dev/mock-plugin";
+import type { AgentState, WatcherStatus } from "../src/lib/types/debug";
+
+describe("mock watcher status", () => {
+  it("serves a status with every contract field and one agent in each onboarding-relevant state", () => {
+    const status: WatcherStatus = buildStatus("boot-a", Date.parse("2026-11-16T09:00:00.000Z"));
+    expect(status.boot_id).toBe("boot-a");
+    expect(status.af_version).toMatch(/^\d+\.\d+\.\d+/);
+    expect(status.flush_interval_ms).toBe(60000);
+    expect(status.receiver.endpoint).toBe("127.0.0.1:4318");
+    expect(Date.parse(status.started_at)).not.toBeNaN();
+    const states = status.agents.map((agent) => agent.state);
+    const expected: AgentState[] = ["receiving", "waiting", "not_configured"];
+    for (const state of expected) expect(states).toContain(state);
+    for (const agent of status.agents) {
+      expect(agent.id).toBeTruthy();
+      expect(agent.name).toBeTruthy();
+      if (agent.state === "receiving") expect(agent.last_event_at).not.toBeNull();
+      else expect(agent.last_event_at).toBeNull();
+    }
+  });
+
+  it("a restart yields a different boot_id", () => {
+    const before = mockControl.bootId();
+    const after = mockControl.restart();
+    expect(after).not.toBe(before);
+    expect(mockControl.bootId()).toBe(after);
+  });
+});
