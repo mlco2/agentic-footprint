@@ -419,50 +419,153 @@ fn read_config(path: &Path) -> Result<Option<String>, UserConfig> {
 }
 
 fn inspect_claude_file(path: &Path, logs_endpoint: &str) -> UserConfig {
-    let contents = match read_config(path) {
-        Ok(Some(contents)) => contents,
-        Ok(None) => return UserConfig::Absent,
-        Err(unreadable) => return unreadable,
-    };
-    let misconfigured = |detail: String| UserConfig::Misconfigured {
+    claude_config_from(&[path.to_path_buf()], logs_endpoint).0
+}
+
+/// The Claude Code configuration a process started in `project` loads: the
+/// user scope, then the project's two scopes on top (`None`: a process
+/// whose directory is unknown, or no process at all — the user scope
+/// alone). Second value: when that configuration last changed, to tell
+/// which processes started before it.
+pub(crate) fn claude_config_for(
+    home: &Path,
+    project: Option<&Path>,
+    logs_endpoint: &str,
+) -> (UserConfig, Option<SystemTime>) {
+    let mut scopes = vec![setup::claude_user_settings(home)];
+    if let Some(project) = project {
+        for name in ["settings.json", "settings.local.json"] {
+            let path = project.join(".claude").join(name);
+            // A process started in the home directory: one file, not two.
+            if !scopes.contains(&path) {
+                scopes.push(path);
+            }
+        }
+    }
+    claude_config_from(&scopes, logs_endpoint)
+}
+
+/// Judges Claude Code settings files layered lowest precedence first: an
+/// `env` key set in a later file wins, hooks add up.
+fn claude_config_from(scopes: &[PathBuf], logs_endpoint: &str) -> (UserConfig, Option<SystemTime>) {
+    let misconfigured = |path: &Path, detail: String| UserConfig::Misconfigured {
         path: path.to_path_buf(),
         detail,
     };
-    let settings: Value = match serde_json::from_str(&contents) {
-        Ok(settings) => settings,
-        Err(error) => return misconfigured(format!("not valid JSON: {error}")),
-    };
-    if !setup::claude_settings_set_otel(&settings) {
-        return UserConfig::Absent;
+    // Each variable with the file that has the last word on it.
+    let mut env: BTreeMap<String, (String, PathBuf)> = BTreeMap::new();
+    let mut has_af_hook = false;
+    let mut hooks_disabled: Option<PathBuf> = None;
+    // Only files that take part in telemetry age the configuration: an
+    // edit to a project's permissions does not make its processes stale.
+    let mut modified: Option<SystemTime> = None;
+    for path in scopes {
+        let contents = match read_config(path) {
+            Ok(Some(contents)) => contents,
+            Ok(None) => continue,
+            Err(unreadable) => return (unreadable, modified),
+        };
+        let settings: Value = match serde_json::from_str(&contents) {
+            Ok(settings) => settings,
+            Err(error) => {
+                return (
+                    misconfigured(path, format!("not valid JSON: {error}")),
+                    modified,
+                )
+            }
+        };
+        let mut takes_part = false;
+        if settings.get("disableAllHooks").and_then(Value::as_bool) == Some(true) {
+            hooks_disabled = Some(path.clone());
+            takes_part = true;
+        }
+        for (key, value) in settings
+            .get("env")
+            .and_then(Value::as_object)
+            .into_iter()
+            .flatten()
+        {
+            if key.starts_with("OTEL_") || key == "CLAUDE_CODE_ENABLE_TELEMETRY" {
+                let value = value.as_str().unwrap_or_default().to_string();
+                env.insert(key.clone(), (value, path.clone()));
+                takes_part = true;
+            }
+        }
+        let hook_here = settings
+            .get("hooks")
+            .and_then(Value::as_object)
+            .is_some_and(|hooks| {
+                hooks
+                    .values()
+                    .filter_map(Value::as_array)
+                    .flatten()
+                    .filter_map(setup::hook_entry_command)
+                    .any(setup::is_managed_af_hook)
+            });
+        has_af_hook |= hook_here;
+        if takes_part || hook_here {
+            let changed = std::fs::metadata(path)
+                .and_then(|meta| meta.modified())
+                .ok();
+            modified = modified.max(changed);
+        }
     }
+
+    // The file a reader should open: the last one to set an OTEL variable.
+    let Some(otel_path) = scopes
+        .iter()
+        .rev()
+        .find(|path| {
+            env.iter()
+                .any(|(key, (_, from))| key.starts_with("OTEL_") && from == *path)
+        })
+        .cloned()
+    else {
+        return (UserConfig::Absent, modified);
+    };
     // What `af setup` writes: the base endpoint, without `/v1/logs`.
     let expected = setup::logs_base_endpoint(logs_endpoint).unwrap_or(logs_endpoint);
-    let exported = settings
-        .pointer("/env/OTEL_EXPORTER_OTLP_ENDPOINT")
-        .and_then(Value::as_str);
-    if exported != Some(expected) {
-        return misconfigured(match exported {
-            Some(other) => format!("exports telemetry to {other}, not to {expected}"),
-            None => format!("sets OTEL variables but no endpoint; expected {expected}"),
-        });
-    }
-    let has_af_hook = settings
-        .get("hooks")
-        .and_then(Value::as_object)
-        .is_some_and(|hooks| {
-            hooks
-                .values()
-                .filter_map(Value::as_array)
-                .flatten()
-                .filter_map(setup::hook_entry_command)
-                .any(setup::is_managed_af_hook)
-        });
-    if !has_af_hook {
-        return misconfigured("exports telemetry but the af hook is not registered".to_string());
-    }
-    UserConfig::Configured {
-        path: path.to_path_buf(),
-    }
+    let config = match env.get("OTEL_EXPORTER_OTLP_ENDPOINT") {
+        Some((exported, from)) if exported != expected => misconfigured(
+            from,
+            format!("exports telemetry to {exported}, not to {expected}"),
+        ),
+        None => misconfigured(
+            &otel_path,
+            format!("sets OTEL variables but no endpoint; expected {expected}"),
+        ),
+        Some(_) => match (env.get("CLAUDE_CODE_ENABLE_TELEMETRY"), hooks_disabled) {
+            (Some((value, from)), _) if value != "1" => misconfigured(
+                from,
+                format!(
+                    "sets CLAUDE_CODE_ENABLE_TELEMETRY to {value}, which switches telemetry off"
+                ),
+            ),
+            (_, Some(from)) => misconfigured(
+                &from,
+                "sets disableAllHooks, so the af hook cannot run".to_string(),
+            ),
+            _ if !has_af_hook => misconfigured(
+                &otel_path,
+                "exports telemetry but the af hook is not registered".to_string(),
+            ),
+            _ => UserConfig::Configured { path: otel_path },
+        },
+    };
+    (config, modified)
+}
+
+/// The Codex configuration of one Codex home (`<home>/config.toml`), and
+/// when it last changed.
+pub(crate) fn codex_config_for(
+    codex_home: &Path,
+    logs_endpoint: &str,
+) -> (UserConfig, Option<SystemTime>) {
+    let path = codex_home.join("config.toml");
+    let modified = std::fs::metadata(&path)
+        .and_then(|meta| meta.modified())
+        .ok();
+    (inspect_codex_file(&path, logs_endpoint), modified)
 }
 
 fn inspect_codex_file(path: &Path, logs_endpoint: &str) -> UserConfig {
@@ -893,6 +996,146 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("settings.json");
         assert_eq!(inspect_claude_file(&path, ENDPOINT), UserConfig::Absent);
+    }
+
+    /// A home with user-scope Claude settings and a project next to it.
+    fn claude_scopes_fixture(user: Option<&str>) -> (tempfile::TempDir, PathBuf, PathBuf) {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let home = dir.path().join("home");
+        let project = dir.path().join("project");
+        std::fs::create_dir_all(home.join(".claude")).unwrap();
+        std::fs::create_dir_all(project.join(".claude")).unwrap();
+        if let Some(user) = user {
+            std::fs::write(home.join(".claude/settings.json"), user).unwrap();
+        }
+        (dir, home, project)
+    }
+
+    const GOOD_HOOK: &str = "/usr/local/bin/af hook";
+
+    #[test]
+    fn project_local_scope_disabling_telemetry_is_misconfigured() {
+        let (_dir, home, project) = claude_scopes_fixture(Some(&claude_settings(
+            "http://127.0.0.1:4318",
+            Some(GOOD_HOOK),
+        )));
+        assert!(matches!(
+            claude_config_for(&home, None, ENDPOINT).0,
+            UserConfig::Configured { .. }
+        ));
+        let local = project.join(".claude/settings.local.json");
+        std::fs::write(&local, r#"{"env":{"CLAUDE_CODE_ENABLE_TELEMETRY":"0"}}"#).unwrap();
+        let (config, _) = claude_config_for(&home, Some(&project), ENDPOINT);
+        let UserConfig::Misconfigured { path, detail } = config else {
+            panic!("expected misconfigured, got {config:?}");
+        };
+        assert_eq!(path, local, "the file that switches it off");
+        assert!(detail.contains("CLAUDE_CODE_ENABLE_TELEMETRY"), "{detail}");
+    }
+
+    #[test]
+    fn project_scope_supplies_the_config_the_user_scope_lacks() {
+        let (_dir, home, project) = claude_scopes_fixture(None);
+        assert_eq!(
+            claude_config_for(&home, Some(&project), ENDPOINT).0,
+            UserConfig::Absent
+        );
+        let settings = project.join(".claude/settings.json");
+        std::fs::write(
+            &settings,
+            claude_settings("http://127.0.0.1:4318", Some(GOOD_HOOK)),
+        )
+        .unwrap();
+        let (config, modified) = claude_config_for(&home, Some(&project), ENDPOINT);
+        assert_eq!(config, UserConfig::Configured { path: settings });
+        assert!(modified.is_some(), "the loaded file's time, for staleness");
+        assert_eq!(
+            claude_config_for(&home, None, ENDPOINT).0,
+            UserConfig::Absent,
+            "a process elsewhere does not load this project's settings"
+        );
+    }
+
+    #[test]
+    fn a_later_scope_overrides_the_endpoint_of_an_earlier_one() {
+        let (_dir, home, project) = claude_scopes_fixture(Some(&claude_settings(
+            "http://127.0.0.1:4318",
+            Some(GOOD_HOOK),
+        )));
+        let settings = project.join(".claude/settings.json");
+        std::fs::write(
+            &settings,
+            r#"{"env":{"OTEL_EXPORTER_OTLP_ENDPOINT":"http://collector:4318"}}"#,
+        )
+        .unwrap();
+        let (config, _) = claude_config_for(&home, Some(&project), ENDPOINT);
+        let UserConfig::Misconfigured { path, detail } = config else {
+            panic!("expected misconfigured, got {config:?}");
+        };
+        assert_eq!(path, settings);
+        assert!(detail.contains("http://collector:4318"), "{detail}");
+    }
+
+    #[test]
+    fn disable_all_hooks_in_any_scope_is_misconfigured() {
+        let (_dir, home, project) = claude_scopes_fixture(Some(&claude_settings(
+            "http://127.0.0.1:4318",
+            Some(GOOD_HOOK),
+        )));
+        let local = project.join(".claude/settings.local.json");
+        std::fs::write(&local, r#"{"disableAllHooks":true}"#).unwrap();
+        let (config, _) = claude_config_for(&home, Some(&project), ENDPOINT);
+        let UserConfig::Misconfigured { path, detail } = config else {
+            panic!("expected misconfigured, got {config:?}");
+        };
+        assert_eq!(path, local);
+        assert!(detail.contains("disableAllHooks"), "{detail}");
+    }
+
+    #[test]
+    fn an_unrelated_project_file_neither_configures_nor_ages_the_config() {
+        let (_dir, home, project) = claude_scopes_fixture(Some(&claude_settings(
+            "http://127.0.0.1:4318",
+            Some(GOOD_HOOK),
+        )));
+        let (_, before) = claude_config_for(&home, None, ENDPOINT);
+        std::fs::write(
+            project.join(".claude/settings.local.json"),
+            r#"{"permissions":{"allow":["Bash(ls:*)"]}}"#,
+        )
+        .unwrap();
+        let (config, after) = claude_config_for(&home, Some(&project), ENDPOINT);
+        assert_eq!(
+            config,
+            UserConfig::Configured {
+                path: home.join(".claude/settings.json")
+            }
+        );
+        assert_eq!(
+            after, before,
+            "editing permissions does not make processes stale"
+        );
+    }
+
+    #[test]
+    fn codex_home_without_config_is_absent() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (config, modified) = codex_config_for(dir.path(), ENDPOINT);
+        assert_eq!(config, UserConfig::Absent);
+        assert_eq!(modified, None);
+        std::fs::write(
+            dir.path().join("config.toml"),
+            setup::append_codex_otel("", ENDPOINT),
+        )
+        .unwrap();
+        let (config, modified) = codex_config_for(dir.path(), ENDPOINT);
+        assert_eq!(
+            config,
+            UserConfig::Configured {
+                path: dir.path().join("config.toml")
+            }
+        );
+        assert!(modified.is_some());
     }
 
     #[test]

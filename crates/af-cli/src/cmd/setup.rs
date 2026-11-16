@@ -761,7 +761,7 @@ pub(crate) fn codex_otel_state(contents: &str, endpoint: &str) -> CodexOtel {
     }
 }
 
-fn append_codex_otel(existing: &str, endpoint: &str) -> String {
+pub(crate) fn append_codex_otel(existing: &str, endpoint: &str) -> String {
     let mut contents = existing.to_string();
     if !contents.is_empty() && !contents.ends_with('\n') {
         contents.push('\n');
