@@ -181,6 +181,12 @@ pub struct DebugState {
     /// not erase the others (the single-`Option` this replaced did exactly
     /// that). Bounded by [`SESSION_CAP`] in first-publication order.
     sessions: std::collections::BTreeMap<String, Value>,
+    /// One row per session known to the store, for the picker: what there
+    /// is to say about a session nobody has rebuilt since a console
+    /// attached. A `session` frame for the same id supersedes its row.
+    summaries: std::collections::BTreeMap<String, Value>,
+    /// How many streams are open right now — see [`DebugState::attached`].
+    attached: usize,
     session_order: VecDeque<String>,
     /// Session-level reports by `session_id`, same shape and bound. Full
     /// report payloads live only here; the frame ring and subscriber queues
@@ -249,6 +255,8 @@ impl DebugState {
             next_seq: 0,
             frames: VecDeque::new(),
             sessions: std::collections::BTreeMap::new(),
+            summaries: std::collections::BTreeMap::new(),
+            attached: 0,
             session_order: VecDeque::new(),
             reports: std::collections::BTreeMap::new(),
             pending_report_evictions: VecDeque::new(),
@@ -407,7 +415,10 @@ impl DebugState {
                 let issued = last < self.next_seq as i64;
                 let in_ring = oldest
                     .map(|oldest| last.saturating_add(1) >= oldest)
-                    .unwrap_or(true);
+                    // An empty ring holds nothing to replay: only a
+                    // client already at the head is up to date. Frames
+                    // dropped while nobody was attached are gone.
+                    .unwrap_or(last.saturating_add(1) >= self.next_seq as i64);
                 let replayable = issued && in_ring;
                 if replayable {
                     Replay::Frames(
@@ -531,24 +542,60 @@ impl DebugState {
     }
 
     /// The picker's list: one summary row per known session, latest first.
+    /// How many streams are open: whether anyone is watching. The watcher
+    /// does its diagnostic work only while this is not zero.
+    pub fn attached(&self) -> usize {
+        self.attached
+    }
+
+    /// Replaces the picker's rows for sessions that have no `session`
+    /// frame yet. Each row has the shape of a `/debug/sessions` element.
+    pub fn set_session_summaries(&mut self, rows: Vec<Value>) {
+        self.summaries = rows
+            .into_iter()
+            .filter_map(|row| {
+                let id = row.get("session_id")?.as_str()?.to_string();
+                Some((id, row))
+            })
+            .collect();
+    }
+
+    /// Forgets the frame log, once nobody is attached. Sequence numbers
+    /// keep counting, so a cursor issued before this is answered `reset`.
+    pub fn drop_history(&mut self) {
+        self.frames.clear();
+    }
+
     fn session_list(&self) -> Value {
+        let summarised = self
+            .summaries
+            .iter()
+            .filter(|(id, _)| !self.sessions.contains_key(*id))
+            .map(|(_, row)| row.clone());
+        let mut listed: Vec<Value> = summarised.collect();
         let mut rows: Vec<&Value> = self.sessions.values().collect();
         rows.sort_by_key(|value| {
             std::cmp::Reverse(value.get("t_last").and_then(Value::as_str).unwrap_or(""))
         });
-        Value::Array(
-            rows.into_iter()
-                .map(|session| {
-                    json!({
-                        "session_id": session.get("session_id"),
-                        "agent_app": session.pointer("/session_meta/agent_app"),
-                        "t_start": session.get("t_start"),
-                        "t_last": session.get("t_last"),
-                        "events": session.get("events"),
-                    })
-                })
-                .collect(),
-        )
+        listed.extend(rows.into_iter().map(|session| {
+            json!({
+                "session_id": session.get("session_id"),
+                "agent_app": session.pointer("/session_meta/agent_app"),
+                "t_start": session.get("t_start"),
+                "t_last": session.get("t_last"),
+                "events": session.get("events"),
+            })
+        }));
+        listed.sort_by(|a, b| {
+            let last = |row: &Value| {
+                row.get("t_last")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string()
+            };
+            last(b).cmp(&last(a))
+        });
+        Value::Array(listed)
     }
 
     /// The seq the next published frame will carry.
@@ -571,7 +618,10 @@ impl DebugState {
 /// line later — a second, optional spelling of the mandatory path, whose
 /// only possible contribution was for the two to fall out of step.
 pub struct DebugServer {
-    addr: SocketAddr,
+    /// `None` for a server on a Unix socket.
+    addr: Option<SocketAddr>,
+    /// The socket file to remove on the way out, for a server on one.
+    socket: Option<std::path::PathBuf>,
     server: Arc<Server>,
     state: Arc<Mutex<DebugState>>,
     thread: Option<JoinHandle<()>>,
@@ -583,8 +633,10 @@ pub struct DebugServer {
 }
 
 impl DebugServer {
+    /// The TCP address served. Panics for a server on a Unix socket,
+    /// which has none: callers that bind one do not ask.
     pub fn addr(&self) -> SocketAddr {
-        self.addr
+        self.addr.expect("this debug server is on a Unix socket")
     }
 
     pub fn state(&self) -> Arc<Mutex<DebugState>> {
@@ -603,6 +655,9 @@ impl DebugServer {
             state.disconnect_all();
         }
         self.server.unblock();
+        if let Some(socket) = self.socket.take() {
+            let _ = std::fs::remove_file(socket);
+        }
         let Some(thread) = self.thread.take() else {
             return;
         };
@@ -648,8 +703,44 @@ pub fn serve(addr: SocketAddr, state: Arc<Mutex<DebugState>>) -> Result<DebugSer
         .server_addr()
         .to_ip()
         .context("debug server is not bound to an IP address")?;
-    let server = Arc::new(server);
+    Ok(run(server, state, Some(bound), None))
+}
 
+/// Serves the same routes on a Unix socket at `path`, readable and
+/// writable by its owner only: the way a console attaches to a collector
+/// that listens on no TCP port.
+///
+/// A socket file nobody answers on — what a collector that died leaves
+/// behind — is replaced. One that answers belongs to a running collector,
+/// and is left alone.
+#[cfg(unix)]
+pub fn serve_unix(path: &std::path::Path, state: Arc<Mutex<DebugState>>) -> Result<DebugServer> {
+    use std::os::unix::fs::PermissionsExt;
+    if path.exists() {
+        if std::os::unix::net::UnixStream::connect(path).is_ok() {
+            anyhow::bail!(
+                "{} is already served by a running collector",
+                path.display()
+            );
+        }
+        std::fs::remove_file(path)
+            .with_context(|| format!("remove the stale socket {}", path.display()))?;
+    }
+    let server = Server::http_unix(path)
+        .map_err(|err| anyhow::anyhow!("failed to bind {}: {err}", path.display()))?;
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
+        .with_context(|| format!("restrict {}", path.display()))?;
+    Ok(run(server, state, None, Some(path.to_path_buf())))
+}
+
+/// Starts the accept thread for an already-bound server.
+fn run(
+    server: Server,
+    state: Arc<Mutex<DebugState>>,
+    addr: Option<SocketAddr>,
+    socket: Option<std::path::PathBuf>,
+) -> DebugServer {
+    let server = Arc::new(server);
     let thread_server = Arc::clone(&server);
     let thread_state = Arc::clone(&state);
     let (finished_tx, finished) = mpsc::channel::<()>();
@@ -659,14 +750,14 @@ pub fn serve(addr: SocketAddr, state: Arc<Mutex<DebugState>>) -> Result<DebugSer
         }
         let _ = finished_tx.send(());
     });
-
-    Ok(DebugServer {
-        addr: bound,
+    DebugServer {
+        addr,
+        socket,
         server,
         state,
         thread: Some(thread),
         finished,
-    })
+    }
 }
 
 /// Accept-thread entry point: bound concurrency, then move the whole
@@ -911,8 +1002,11 @@ fn stream(request: Request, state: &Arc<Mutex<DebugState>>, query: &str) {
         };
         let hello = state.status_frame();
         let (replay, rx) = state.subscribe(cursor);
+        state.attached += 1;
         (hello, replay, rx, state.heartbeat)
     };
+    // Counted for as long as this function runs, however it returns.
+    let _attached = Attached(Arc::clone(state));
 
     // The response is written by hand rather than through
     // `Request::respond`. tiny_http's chunked encoder buffers 8 KiB before
@@ -978,6 +1072,17 @@ fn stream(request: Request, state: &Arc<Mutex<DebugState>>, query: &str) {
     }
     let _ = writer.write_all(b"0\r\n\r\n");
     let _ = writer.flush();
+}
+
+/// One open stream, counted in [`DebugState::attached`] until dropped.
+struct Attached(Arc<Mutex<DebugState>>);
+
+impl Drop for Attached {
+    fn drop(&mut self) {
+        if let Ok(mut state) = self.0.lock() {
+            state.attached = state.attached.saturating_sub(1);
+        }
+    }
 }
 
 /// The heartbeat event: no `id`, never in the ring. It carries the boot id
@@ -1841,6 +1946,126 @@ mod tests {
 
     fn shared(state: DebugState) -> Arc<Mutex<DebugState>> {
         Arc::new(Mutex::new(state))
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_api_is_served_over_a_private_unix_socket() {
+        use std::os::unix::fs::PermissionsExt;
+        use std::os::unix::net::UnixStream;
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("console.sock");
+        let state = shared(DebugState::default());
+        state.lock().unwrap().set_status(json!({"boot_id": "b1"}));
+        let server = serve_unix(&path, Arc::clone(&state)).expect("serve on the socket");
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "the socket is the owner's alone");
+
+        let mut stream = UnixStream::connect(&path).expect("connect");
+        stream
+            .write_all(
+                b"GET /debug/status HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
+            )
+            .unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        let mut response = Vec::new();
+        let _ = stream.read_to_end(&mut response);
+        let response = String::from_utf8_lossy(&response);
+        assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+        assert!(response.contains(r#""boot_id":"b1""#), "{response}");
+
+        drop(server);
+        assert!(!path.exists(), "the socket file goes with the server");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_stale_socket_file_is_replaced_and_a_live_one_is_refused() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("console.sock");
+        // What a collector that died without cleaning up leaves behind.
+        drop(std::os::unix::net::UnixListener::bind(&path).expect("bind"));
+        assert!(path.exists());
+        let first = serve_unix(&path, shared(DebugState::default())).expect("stale file replaced");
+        let second = serve_unix(&path, shared(DebugState::default()));
+        let error = second
+            .err()
+            .expect("a live collector's socket is not taken over");
+        assert!(format!("{error:#}").contains("already"), "{error:#}");
+        drop(first);
+    }
+
+    #[test]
+    fn attached_counts_live_streams() {
+        let state = shared(DebugState::with_limits_and_heartbeat(
+            RING_CAPACITY,
+            CONNECTION_QUEUE,
+            Duration::from_millis(40),
+        ));
+        let server = start_test_server_with(Arc::clone(&state));
+        assert_eq!(state.lock().unwrap().attached(), 0);
+
+        let mut one = open_stream(server.addr, "/debug/stream");
+        let mut two = open_stream(server.addr, "/debug/stream");
+        read_events(&mut one, Duration::from_millis(150));
+        read_events(&mut two, Duration::from_millis(50));
+        assert_eq!(state.lock().unwrap().attached(), 2);
+
+        // One leaves: the heartbeat's failed write is what notices.
+        drop(one);
+        let deadline = std::time::Instant::now() + Duration::from_secs(3);
+        while state.lock().unwrap().attached() != 1 && std::time::Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert_eq!(
+            state.lock().unwrap().attached(),
+            1,
+            "the other is still attached"
+        );
+        drop(two);
+        while state.lock().unwrap().attached() != 0 && std::time::Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert_eq!(state.lock().unwrap().attached(), 0);
+    }
+
+    #[test]
+    fn session_summaries_fill_the_picker_until_a_session_frame_replaces_them() {
+        let mut state = DebugState::default();
+        state.set_session_summaries(vec![
+            json!({"session_id": "s1", "agent_app": null, "t_start": "2026-01-01T00:00:00.000Z", "t_last": "2026-01-01T00:01:00.000Z", "events": 3}),
+            json!({"session_id": "s2", "agent_app": null, "t_start": "2026-01-02T00:00:00.000Z", "t_last": "2026-01-02T00:01:00.000Z", "events": 9}),
+        ]);
+        let list = state.session_list();
+        assert_eq!(list[0]["session_id"], "s2", "most recent first");
+        assert_eq!(list[1]["events"], 3);
+
+        state.publish(
+            "session",
+            json!({"session_id": "s1", "t_start": "2026-01-01T00:00:00.000Z", "t_last": "2026-01-03T00:00:00.000Z", "events": 5, "session_meta": {"agent_app": {"name": "codex"}}}),
+            0,
+        );
+        let list = state.session_list();
+        assert_eq!(list.as_array().unwrap().len(), 2);
+        assert_eq!(list[0]["session_id"], "s1");
+        assert_eq!(list[0]["events"], 5);
+        assert_eq!(list[0]["agent_app"]["name"], "codex");
+    }
+
+    #[test]
+    fn dropping_history_resets_any_earlier_cursor() {
+        let mut state = DebugState::default();
+        state.publish("decision", json!({"kind": "attr"}), 0);
+        state.publish("decision", json!({"kind": "attr"}), 0);
+        state.drop_history();
+        assert_eq!(state.frames_of("decision"), 0);
+        let (replay, _rx) = state.subscribe(Some(0));
+        assert!(
+            matches!(replay, Replay::Reset),
+            "frames it asks for are gone"
+        );
     }
 
     #[test]
