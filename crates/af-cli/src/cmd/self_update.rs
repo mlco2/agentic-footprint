@@ -306,13 +306,34 @@ fn replace_binary(current: &Path, staged: &Path) -> Result<()> {
         std::fs::set_permissions(staged, std::fs::Permissions::from_mode(0o755))?;
     }
     #[cfg(windows)]
-    {
-        let old = current.with_extension("exe.old");
-        let _ = std::fs::remove_file(&old);
-        std::fs::rename(current, &old)
-            .with_context(|| format!("move aside {}", current.display()))?;
-    }
+    return replace_by_moving_aside(current, staged);
+    #[cfg(not(windows))]
     std::fs::rename(staged, current).with_context(|| format!("replace {}", current.display()))
+}
+
+/// The Windows replacement: `current` is moved aside to `.old`, then
+/// `staged` takes its place. If that second step fails the old binary is
+/// put back, so a failed update never leaves no `af` at all.
+#[cfg(any(windows, test))]
+fn replace_by_moving_aside(current: &Path, staged: &Path) -> Result<()> {
+    let old = current.with_extension("exe.old");
+    let _ = std::fs::remove_file(&old);
+    std::fs::rename(current, &old).with_context(|| format!("move aside {}", current.display()))?;
+    let Err(err) = std::fs::rename(staged, current) else {
+        return Ok(());
+    };
+    match std::fs::rename(&old, current) {
+        Ok(()) => Err(anyhow::Error::new(err).context(format!(
+            "replace {} (the previous version was put back)",
+            current.display()
+        ))),
+        Err(restore) => Err(anyhow::Error::new(err).context(format!(
+            "replace {}; the previous version could not be put back ({restore}) and is at {}: \
+             rename it back, or run the installer again",
+            current.display(),
+            old.display()
+        ))),
+    }
 }
 
 /// Runs `exe python upgrade` (the new binary's, after a swap) and relays
@@ -581,5 +602,26 @@ mod tests {
         assert!(receipt_is_for(&receipt, &real));
         assert!(receipt_is_for(&receipt, &link));
         assert!(!receipt_is_for(&receipt, &dir.path().join("other")));
+    }
+    #[test]
+    fn a_replacement_that_fails_puts_the_previous_binary_back() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let current = dir.path().join("af.exe");
+        std::fs::write(&current, b"old").unwrap();
+
+        // The staged file is missing: the second step fails.
+        let err = replace_by_moving_aside(&current, &dir.path().join("missing")).unwrap_err();
+        assert!(format!("{err:#}").contains("put back"), "{err:#}");
+        assert_eq!(std::fs::read(&current).unwrap(), b"old");
+        assert!(!dir.path().join("af.exe.old").exists());
+
+        let staged = dir.path().join("staged");
+        std::fs::write(&staged, b"new").unwrap();
+        replace_by_moving_aside(&current, &staged).unwrap();
+        assert_eq!(std::fs::read(&current).unwrap(), b"new");
+        assert_eq!(
+            std::fs::read(dir.path().join("af.exe.old")).unwrap(),
+            b"old"
+        );
     }
 }

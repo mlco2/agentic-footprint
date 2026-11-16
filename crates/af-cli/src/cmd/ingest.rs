@@ -215,78 +215,87 @@ fn ingest_files_in(
             continue;
         }
 
-        let tail_started = Instant::now();
-        let result = tail(file, offset)?;
-        metrics.tail_duration += tail_started.elapsed();
-        metrics.validation_duration += result.validation_duration;
-        metrics.files_opened += 1;
-        metrics.bytes_read += result.bytes_read;
-        metrics.complete_lines += result.complete_lines;
-        metrics.partial_lines += usize::from(result.partial_line);
-        metrics.events_parsed += result.events.len();
-        metrics.opaque_events_parsed += result.opaque_events.len();
+        // A backlog is read a bounded piece at a time (`TailResult::more`),
+        // each piece stored and its offset recorded before the next.
+        let mut offset = offset;
+        let final_offset = loop {
+            let tail_started = Instant::now();
+            let result = tail(file, offset)?;
+            metrics.tail_duration += tail_started.elapsed();
+            metrics.validation_duration += result.validation_duration;
+            metrics.files_opened += 1;
+            metrics.bytes_read += result.bytes_read;
+            metrics.complete_lines += result.complete_lines;
+            metrics.partial_lines += usize::from(result.partial_line);
+            metrics.events_parsed += result.events.len();
+            metrics.opaque_events_parsed += result.opaque_events.len();
 
-        if result.events.is_empty() {
-            metrics.empty_insert_batches += 1;
-        }
-        let insert_started = Instant::now();
-        let inserted = store.insert_events(&result.events)?;
-        metrics.insert_duration += insert_started.elapsed();
-        metrics.events_inserted += inserted;
-        metrics.events_deduplicated += result.events.len().saturating_sub(inserted);
-        ingested += inserted;
-        events.extend(result.events);
-
-        let opaque_inserted = store.insert_opaque_events(&result.opaque_events)?;
-        metrics.opaque_events_inserted += opaque_inserted;
-        opaque += opaque_inserted;
-
-        // Recorded in the store's bounded reject ring, never copied to disk:
-        // a raw line is whatever a collector wrote, and a file per reject
-        // had neither a quota nor private permissions.
-        let mut reject_rows = Vec::with_capacity(result.rejected.len());
-        if !result.rejected.is_empty() {
-            let ts = crate::cmd::now_rfc3339();
-            let origin = file
-                .path
-                .file_name()
-                .map(|name| name.to_string_lossy().into_owned())
-                .unwrap_or_else(|| file.path.display().to_string());
-            for entry in &result.rejected {
-                let reason = entry.reason.to_string();
-                reject_rows.push(af_store::RejectRow {
-                    ts: ts.clone(),
-                    source: format!("spool:{}", file.collector),
-                    reason: reason.clone(),
-                    attribute_keys: Vec::new(),
-                    bytes: entry.line.len() as u64,
-                });
-                rejects.push(RejectRecord {
-                    ts: ts.clone(),
-                    reason,
-                    origin: origin.clone(),
-                    line: entry.line_number,
-                    byte_offset: entry.byte_offset,
-                    raw: entry.line.clone(),
-                });
+            if result.events.is_empty() {
+                metrics.empty_insert_batches += 1;
             }
-        }
-        store.insert_rejects(&reject_rows)?;
-        rejected += reject_rows.len();
+            let insert_started = Instant::now();
+            let inserted = store.insert_events(&result.events)?;
+            metrics.insert_duration += insert_started.elapsed();
+            metrics.events_inserted += inserted;
+            metrics.events_deduplicated += result.events.len().saturating_sub(inserted);
+            ingested += inserted;
+            events.extend(result.events);
 
-        if result.new_offset != offset {
-            let offset_started = Instant::now();
-            store.set_offset(&file.collector, &file.session_id, result.new_offset)?;
-            metrics.offset_duration += offset_started.elapsed();
-            metrics.offset_writes += 1;
-        } else {
-            metrics.unchanged_offset_writes_skipped += 1;
-        }
+            let opaque_inserted = store.insert_opaque_events(&result.opaque_events)?;
+            metrics.opaque_events_inserted += opaque_inserted;
+            opaque += opaque_inserted;
+
+            // Recorded in the store's bounded reject ring, never copied to disk:
+            // a raw line is whatever a collector wrote, and a file per reject
+            // had neither a quota nor private permissions.
+            let mut reject_rows = Vec::with_capacity(result.rejected.len());
+            if !result.rejected.is_empty() {
+                let ts = crate::cmd::now_rfc3339();
+                let origin = file
+                    .path
+                    .file_name()
+                    .map(|name| name.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| file.path.display().to_string());
+                for entry in &result.rejected {
+                    let reason = entry.reason.to_string();
+                    reject_rows.push(af_store::RejectRow {
+                        ts: ts.clone(),
+                        source: format!("spool:{}", file.collector),
+                        reason: reason.clone(),
+                        attribute_keys: Vec::new(),
+                        bytes: entry.line.len() as u64,
+                    });
+                    rejects.push(RejectRecord {
+                        ts: ts.clone(),
+                        reason,
+                        origin: origin.clone(),
+                        line: entry.line_number,
+                        byte_offset: entry.byte_offset,
+                        raw: entry.line.clone(),
+                    });
+                }
+            }
+            store.insert_rejects(&reject_rows)?;
+            rejected += reject_rows.len();
+
+            if result.new_offset != offset {
+                let offset_started = Instant::now();
+                store.set_offset(&file.collector, &file.session_id, result.new_offset)?;
+                metrics.offset_duration += offset_started.elapsed();
+                metrics.offset_writes += 1;
+            } else {
+                metrics.unchanged_offset_writes_skipped += 1;
+            }
+            if !result.more {
+                break result.new_offset;
+            }
+            offset = result.new_offset;
+        };
         file_states.push(IngestFileState {
             collector: file.collector.clone(),
             session_id: file.session_id.clone(),
             path: file.path.clone(),
-            offset: result.new_offset,
+            offset: final_offset,
         });
     }
 

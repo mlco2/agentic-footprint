@@ -39,7 +39,19 @@ pub struct TailResult {
     pub partial_line: bool,
     /// Wall time spent validating complete non-empty records.
     pub validation_duration: Duration,
+    /// Whether the file has more to give right now: call again from
+    /// `new_offset`. One call reads at most [`MAX_READ_BYTES`], so a large
+    /// backlog arrives in pieces.
+    pub more: bool,
 }
+
+/// The most one [`tail`] call reads into memory, and so the longest line it
+/// accepts: a backlog of any size is read this much at a time, and a longer
+/// line is rejected, not buffered.
+pub const MAX_READ_BYTES: u64 = 8 * 1024 * 1024;
+
+/// How much of an oversized line a reject keeps, to recognise it by.
+const OVERSIZED_SAMPLE_BYTES: usize = 256;
 
 /// One line that failed to parse, located precisely enough to be found
 /// again by hand.
@@ -76,7 +88,15 @@ pub struct RejectedLine {
 ///
 /// If `from_offset` is beyond the file's current length, tailing restarts
 /// from 0 and [`TailResult::truncated`] is set — see its docs.
+///
+/// At most [`MAX_READ_BYTES`] are read; [`TailResult::more`] says whether
+/// to call again.
 pub fn tail(file: &SpoolFile, from_offset: u64) -> io::Result<TailResult> {
+    tail_at_most(file, from_offset, MAX_READ_BYTES)
+}
+
+/// [`tail`] with its read limit given (tests use a small one).
+pub fn tail_at_most(file: &SpoolFile, from_offset: u64, max_read: u64) -> io::Result<TailResult> {
     let mut f = File::open(&file.path)?;
     let len = f.metadata()?.len();
 
@@ -88,7 +108,7 @@ pub fn tail(file: &SpoolFile, from_offset: u64) -> io::Result<TailResult> {
 
     f.seek(SeekFrom::Start(start_offset))?;
     let mut buf = Vec::new();
-    f.read_to_end(&mut buf)?;
+    Read::by_ref(&mut f).take(max_read).read_to_end(&mut buf)?;
 
     let mut events = Vec::new();
     let mut opaque_events = Vec::new();
@@ -130,6 +150,33 @@ pub fn tail(file: &SpoolFile, from_offset: u64) -> io::Result<TailResult> {
         }
     }
 
+    let read_end = start_offset + buf.len() as u64;
+    let mut new_offset = start_offset + consumed as u64;
+    let mut partial_line = consumed < buf.len();
+    let mut more = false;
+    if read_end < len {
+        if consumed > 0 {
+            // The rest, starting with the line this read cut, is next.
+            more = true;
+        } else if let Some(newline) = next_newline(&mut f, read_end)? {
+            // A whole read without a newline: a line longer than the
+            // limit. It is passed over, not kept; what follows it is next.
+            let sample = &buf[..buf.len().min(OVERSIZED_SAMPLE_BYTES)];
+            rejected.push(RejectedLine {
+                line: format!("{}…", String::from_utf8_lossy(sample)),
+                reason: RejectReason::Json(format!("line longer than {max_read} bytes")),
+                byte_offset: start_offset,
+                line_number: lines_in_buf + 1,
+            });
+            lines_in_buf += 1;
+            new_offset = newline + 1;
+            partial_line = false;
+            more = new_offset < len;
+        }
+        // Else it is not finished yet: left where it is, like any partial
+        // line, and looked at again when the file has grown.
+    }
+
     if !rejected.is_empty() && start_offset > 0 {
         let preceding = count_lines_before(&mut f, start_offset)?;
         for entry in &mut rejected {
@@ -140,14 +187,32 @@ pub fn tail(file: &SpoolFile, from_offset: u64) -> io::Result<TailResult> {
     Ok(TailResult {
         events,
         opaque_events,
-        new_offset: start_offset + consumed as u64,
+        new_offset,
         rejected,
         truncated,
         bytes_read: buf.len() as u64,
         complete_lines: lines_in_buf,
-        partial_line: consumed < buf.len(),
+        partial_line,
         validation_duration,
+        more,
     })
+}
+
+/// The offset of the first newline at or after `from`, read in chunks.
+fn next_newline(f: &mut File, from: u64) -> io::Result<Option<u64>> {
+    f.seek(SeekFrom::Start(from))?;
+    let mut chunk = vec![0u8; 64 * 1024];
+    let mut at = from;
+    loop {
+        let read = f.read(&mut chunk)?;
+        if read == 0 {
+            return Ok(None);
+        }
+        if let Some(pos) = chunk[..read].iter().position(|&b| b == b'\n') {
+            return Ok(Some(at + pos as u64));
+        }
+        at += read as u64;
+    }
 }
 
 /// Counts newline-terminated lines in `[0, upto)` of `f`.

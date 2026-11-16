@@ -8,7 +8,7 @@
 
 mod tail;
 
-pub use tail::{tail, RejectedLine, TailResult};
+pub use tail::{tail, tail_at_most, RejectedLine, TailResult, MAX_READ_BYTES};
 
 use std::path::{Path, PathBuf};
 

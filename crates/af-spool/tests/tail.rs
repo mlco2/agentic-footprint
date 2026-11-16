@@ -4,7 +4,7 @@ use std::io::Write;
 use std::path::PathBuf;
 
 use af_events::RejectReason;
-use af_spool::{scan, spool_file_from_path, tail};
+use af_spool::{scan, spool_file_from_path, tail, tail_at_most};
 
 mod common;
 use common::{event_id, spool_file, valid_line};
@@ -228,4 +228,90 @@ fn targeted_path_accepts_an_alias_of_the_same_spool_directory() {
     let parsed = spool_file_from_path(&spool, &notified).expect("aliased direct child");
     assert_eq!(parsed.collector, "collector");
     assert_eq!(parsed.session_id, "session");
+}
+
+#[test]
+fn a_backlog_is_read_in_bounded_pieces_that_together_lose_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = spool_file(dir.path(), "claude-code", "sess-1");
+    let mut f = fs::File::create(&file.path).unwrap();
+    for i in 0..5 {
+        writeln!(f, "{}", valid_line(&format!("evt-{i}"))).unwrap();
+    }
+    drop(f);
+    let line = valid_line("evt-0").len() as u64 + 1;
+
+    // Room for one line and part of the next.
+    let limit = line + line / 2;
+    let (mut offset, mut seen, mut calls) = (0, Vec::new(), 0);
+    loop {
+        let result = tail_at_most(&file, offset, limit).unwrap();
+        assert!(
+            result.bytes_read <= limit,
+            "never more than the limit at once"
+        );
+        seen.extend(result.events.iter().map(|event| event.event_id.clone()));
+        offset = result.new_offset;
+        calls += 1;
+        if !result.more {
+            break;
+        }
+    }
+    assert_eq!(calls, 5);
+    assert_eq!(
+        seen,
+        (0..5)
+            .map(|i| event_id(&format!("evt-{i}")))
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(offset, fs::metadata(&file.path).unwrap().len());
+}
+
+#[test]
+fn a_line_longer_than_the_limit_is_rejected_and_the_next_one_still_read() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = spool_file(dir.path(), "claude-code", "sess-1");
+    let mut f = fs::File::create(&file.path).unwrap();
+    writeln!(f, "{}", valid_line("evt-before")).unwrap();
+    let before = valid_line("evt-before").len() as u64 + 1;
+    writeln!(f, "{}", "x".repeat(5000)).unwrap();
+    writeln!(f, "{}", valid_line("evt-after")).unwrap();
+    drop(f);
+
+    let limit = 1000;
+    let first = tail_at_most(&file, 0, limit).unwrap();
+    assert_eq!(first.events.len(), 1);
+    assert!(first.more);
+
+    let second = tail_at_most(&file, first.new_offset, limit).unwrap();
+    assert_eq!(second.rejected.len(), 1);
+    assert_eq!(second.rejected[0].byte_offset, before);
+    assert_eq!(second.rejected[0].line_number, 2);
+    assert!(
+        second.rejected[0].line.len() < 1000,
+        "the oversized line itself is not kept"
+    );
+    assert!(second.rejected[0]
+        .reason
+        .to_string()
+        .contains("longer than"));
+    assert_eq!(second.new_offset, before + 5001);
+    assert!(second.more);
+
+    let third = tail_at_most(&file, second.new_offset, limit).unwrap();
+    assert_eq!(third.events[0].event_id, event_id("evt-after"));
+    assert!(!third.more);
+}
+
+#[test]
+fn an_unfinished_line_longer_than_the_limit_is_left_for_later() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = spool_file(dir.path(), "claude-code", "sess-1");
+    fs::write(&file.path, "x".repeat(5000)).unwrap();
+
+    let result = tail_at_most(&file, 0, 1000).unwrap();
+    assert_eq!(result.new_offset, 0);
+    assert!(result.rejected.is_empty());
+    assert!(result.partial_line);
+    assert!(!result.more, "nothing a second call could do now");
 }
