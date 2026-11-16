@@ -669,7 +669,8 @@ mod tests {
                 "ecologits==0.11.3",
                 "codecarbon==3.3.1",
                 "psutil>=6",
-                "certifi>=2026.10.18"
+                "certifi>=2026.10.18",
+                "joserfc>=1.7.6"
             ]
         );
     }

@@ -23,3 +23,5 @@ psutil = ">=6"
 [minimums]
 # GHSA-6q48-6c7w-9gw2: certificates of compromised intermediates removed.
 certifi = "2026.10.18"
+# GHSA-9pg5-8c7x-5hfx: compact-JWS size limits checked after splitting.
+joserfc = "1.7.6"

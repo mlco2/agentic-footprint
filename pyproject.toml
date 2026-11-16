@@ -16,6 +16,7 @@ runtime = [
   "psutil>=6",
   # [minimums] in python/manifest.toml.
   "certifi>=2026.10.18",
+  "joserfc>=1.7.6",
 ]
 
 [tool.uv]
