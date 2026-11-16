@@ -79,6 +79,16 @@ const SESSION_CAP: usize = 256;
 /// frame exists to avoid.
 const CONNECTION_QUEUE: usize = 1024;
 
+/// How long a stream stays silent before the server writes a `ping` event.
+///
+/// Two jobs. The client cannot tell a quiet watcher from a dead connection
+/// without it — a flush is a minute apart by default and an idle watcher
+/// publishes nothing — so it treats three missed pings as a lost stream.
+/// And the write is how the server notices a client that vanished during a
+/// quiet period: until something is written, a closed socket and an idle
+/// one look the same, and the handler thread waits on its channel forever.
+const HEARTBEAT: Duration = Duration::from_secs(15);
+
 /// How long [`DebugServer::stop`] waits for the accept thread before
 /// detaching it. Shutdown continues either way: a thread still blocked on a
 /// client that will not read must not become the reason `af watch` refuses
@@ -202,6 +212,8 @@ pub struct DebugState {
     /// tens of frames instead of tens of thousands.
     ring_capacity: usize,
     queue_capacity: usize,
+    /// How long a stream may stay silent before it is sent a `ping`.
+    heartbeat: Duration,
 }
 
 impl Default for DebugState {
@@ -223,6 +235,16 @@ enum Replay {
 
 impl DebugState {
     pub fn with_limits(ring_capacity: usize, queue_capacity: usize) -> Self {
+        Self::with_limits_and_heartbeat(ring_capacity, queue_capacity, HEARTBEAT)
+    }
+
+    /// [`DebugState::with_limits`] with the heartbeat interval too, so a
+    /// test can watch pings without waiting [`HEARTBEAT`] for each.
+    pub fn with_limits_and_heartbeat(
+        ring_capacity: usize,
+        queue_capacity: usize,
+        heartbeat: Duration,
+    ) -> Self {
         DebugState {
             next_seq: 0,
             frames: VecDeque::new(),
@@ -238,6 +260,7 @@ impl DebugState {
             connections: Vec::new(),
             ring_capacity: ring_capacity.max(1),
             queue_capacity: queue_capacity.max(1),
+            heartbeat,
         }
     }
 
@@ -369,9 +392,17 @@ impl DebugState {
         let replay = match cursor {
             Some(last) => {
                 let oldest = self.frames.front().map(|frame| frame.seq as i64);
-                let replayable = oldest
+                // Two ways a cursor cannot be served. Older than the ring:
+                // the frames after it are gone. Ahead of the head: this
+                // process never issued it, so it belongs to an earlier
+                // watcher — sequence numbers restart at zero with the
+                // process, and answering "you are up to date" would leave
+                // that client holding another process's history for good.
+                let issued = last < self.next_seq as i64;
+                let in_ring = oldest
                     .map(|oldest| last.saturating_add(1) >= oldest)
                     .unwrap_or(true);
+                let replayable = issued && in_ring;
                 if replayable {
                     Replay::Frames(
                         self.frames
@@ -853,7 +884,8 @@ fn snapshot(state: &DebugState, window_ms: i64) -> Value {
 /// response body is a blocking reader fed by an `mpsc` channel that
 /// [`DebugState::publish`] writes into. The thread ends when the channel's
 /// senders are dropped (shutdown) or the client goes away (the write
-/// fails).
+/// fails) — and a `ping` every [`HEARTBEAT`] of silence guarantees there is
+/// a write to fail.
 fn stream(request: Request, state: &Arc<Mutex<DebugState>>, query: &str) {
     let cursor = request
         .headers()
@@ -866,14 +898,14 @@ fn stream(request: Request, state: &Arc<Mutex<DebugState>>, query: &str) {
     // The status frame and the subscription are taken under one lock, so a
     // status set concurrently is either this first frame or arrives down
     // the channel — never missed.
-    let (hello, replay, rx) = {
+    let (hello, replay, rx, heartbeat) = {
         let Ok(mut state) = state.lock() else {
             respond_json(request, 500, json!({"error": "state_poisoned"}));
             return;
         };
         let hello = state.status_frame();
         let (replay, rx) = state.subscribe(cursor);
-        (hello, replay, rx)
+        (hello, replay, rx, state.heartbeat)
     };
 
     // The response is written by hand rather than through
@@ -921,7 +953,16 @@ fn stream(request: Request, state: &Arc<Mutex<DebugState>>, query: &str) {
         Replay::Reset => write_chunk(&mut writer, &sse_bytes("reset", &json!({}), None)).is_ok(),
     };
     if replayed {
-        while let Ok(bytes) = rx.recv() {
+        loop {
+            let bytes = match rx.recv_timeout(heartbeat) {
+                Ok(bytes) => bytes,
+                // Nothing to say for a whole interval: say so. See
+                // [`HEARTBEAT`] for the two things this write is for.
+                Err(mpsc::RecvTimeoutError::Timeout) => ping_frame(state),
+                // The senders are gone: the server is shutting down, or
+                // this connection fell too far behind and was dropped.
+                Err(mpsc::RecvTimeoutError::Disconnected) => break,
+            };
             if write_chunk(&mut writer, &bytes).is_err() {
                 // The client went away. Dropping `rx` here makes the next
                 // publish see a disconnected sender and reap it.
@@ -931,6 +972,18 @@ fn stream(request: Request, state: &Arc<Mutex<DebugState>>, query: &str) {
     }
     let _ = writer.write_all(b"0\r\n\r\n");
     let _ = writer.flush();
+}
+
+/// The heartbeat event: no `id`, never in the ring. It carries the boot id
+/// so even a client that hears nothing else learns when the process behind
+/// its connection is not the one it bootstrapped from.
+fn ping_frame(state: &Arc<Mutex<DebugState>>) -> Vec<u8> {
+    let boot_id = state
+        .lock()
+        .ok()
+        .and_then(|state| state.status.as_ref()?.get("boot_id").cloned())
+        .unwrap_or(Value::Null);
+    sse_bytes("ping", &json!({ "boot_id": boot_id }), None)
 }
 
 /// `?from=` / `Last-Event-ID` → a cursor. Signed, so [`EMPTY_CURSOR`] (`-1`,
@@ -1868,5 +1921,97 @@ mod tests {
         assert!(frames
             .iter()
             .all(|bytes| !bytes.starts_with(b"event: status")));
+    }
+
+    #[test]
+    fn a_cursor_ahead_of_the_head_is_reset() {
+        let mut state = DebugState::with_limits(16, 8);
+        for i in 0..3 {
+            state.publish("fact", json!({"i": i}), i);
+        }
+        // Caught up exactly: nothing to replay, and nothing wrong.
+        assert!(replayed_ids(&state.subscribe(Some(2)).0).is_empty());
+        // A cursor this process never issued comes from another process —
+        // a restarted watcher. "Up to date" would be a lie.
+        assert!(matches!(state.subscribe(Some(3)).0, Replay::Reset));
+        assert!(matches!(state.subscribe(Some(193_933)).0, Replay::Reset));
+    }
+
+    #[test]
+    fn a_cursor_on_an_empty_ring_is_reset_unless_it_is_the_empty_cursor() {
+        let mut state = DebugState::with_limits(16, 8);
+        assert!(replayed_ids(&state.subscribe(Some(EMPTY_CURSOR)).0).is_empty());
+        assert!(matches!(state.subscribe(Some(0)).0, Replay::Reset));
+        assert!(matches!(state.subscribe(Some(97_163)).0, Replay::Reset));
+    }
+
+    fn heartbeat_state(heartbeat: Duration) -> DebugState {
+        let mut state =
+            DebugState::with_limits_and_heartbeat(RING_CAPACITY, CONNECTION_QUEUE, heartbeat);
+        state.set_status(json!({"boot_id": "b1"}));
+        state
+    }
+
+    #[test]
+    fn a_quiet_stream_gets_a_ping_with_the_boot_id() {
+        let server = start_test_server_with(shared(heartbeat_state(Duration::from_millis(50))));
+        let mut stream = open_stream(server.addr, "/debug/stream");
+        let events = read_events(&mut stream, Duration::from_millis(400));
+        let pings: Vec<&WireEvent> = events.iter().filter(|e| e.event == "ping").collect();
+        assert!(
+            pings.len() >= 2,
+            "expected at least two pings, got {events:?}"
+        );
+        for ping in pings {
+            assert_eq!(ping.data["boot_id"], "b1");
+            assert_eq!(ping.id, None, "a ping is not a ring frame");
+        }
+    }
+
+    #[test]
+    fn a_ping_without_a_status_carries_a_null_boot_id() {
+        let state = DebugState::with_limits_and_heartbeat(16, 8, Duration::from_millis(50));
+        let server = start_test_server_with(shared(state));
+        let mut stream = open_stream(server.addr, "/debug/stream");
+        let events = read_events(&mut stream, Duration::from_millis(300));
+        let ping = events.iter().find(|e| e.event == "ping").expect("a ping");
+        assert_eq!(ping.data["boot_id"], Value::Null);
+    }
+
+    #[test]
+    fn pings_stop_while_frames_flow() {
+        let state = shared(heartbeat_state(Duration::from_millis(400)));
+        let server = start_test_server_with(Arc::clone(&state));
+        let mut stream = open_stream(server.addr, "/debug/stream");
+        let publisher = std::thread::spawn(move || {
+            for i in 0..12 {
+                std::thread::sleep(Duration::from_millis(50));
+                state.lock().unwrap().publish("fact", json!({"i": i}), i);
+            }
+        });
+        let events = read_events(&mut stream, Duration::from_millis(600));
+        publisher.join().unwrap();
+        assert!(events.iter().filter(|e| e.event == "fact").count() >= 8);
+        assert!(
+            events.iter().all(|e| e.event != "ping"),
+            "a stream that is carrying frames needs no heartbeat: {events:?}"
+        );
+    }
+
+    #[test]
+    fn a_vanished_client_is_reaped_by_the_heartbeat() {
+        let server = start_test_server_with(shared(heartbeat_state(Duration::from_millis(50))));
+        let mut stream = open_stream(server.addr, "/debug/stream");
+        // Wait for the stream to be established, then vanish without a word.
+        let events = read_events(&mut stream, Duration::from_millis(150));
+        assert_eq!(events[0].event, "status");
+        drop(stream);
+        // Nothing is ever published: only the heartbeat's failed write can
+        // end the handler.
+        let finished = server
+            .done
+            .recv_timeout(Duration::from_secs(3))
+            .expect("the stream handler ends once its client is gone");
+        assert_eq!(finished, "/debug/stream");
     }
 }
