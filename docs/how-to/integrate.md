@@ -77,9 +77,8 @@ check. It can take a few seconds; do not run it on a thread that must stay respo
   `models_not_estimated` so a reader knows what is left out.
 - Each impact is a range (`min`, `max`) from a model of remote inference. It
   is not a measurement. Read `unit` from the document.
-- `af status` does not say that data is arriving: a configured agent is
-  reported as `waiting`. Use `collector.last_event_at` and the call counts in
-  `af summary` for that.
+- In `af status` an agent is `receiving` when the store has an event from it
+  in the last 24 hours; `last_event_at` says when the latest one was.
 - `collector.running` is `null` on Windows.
 - When `python.ready` is `false` in `af status`, tokens are recorded but no
   impact is estimated: every call stays `pending`. Show `python.fix`.

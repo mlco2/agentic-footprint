@@ -27,15 +27,20 @@ pub fn run(state_dir: &Path) -> Result<i32> {
 /// The status document. `home` is where agents keep their user
 /// configuration; without one, agents are reported from events alone.
 pub fn build(state_dir: &Path, home: Option<&Path>) -> Value {
+    build_at(state_dir, home, super::now_ms())
+}
+
+fn build_at(state_dir: &Path, home: Option<&Path>, now_ms: i64) -> Value {
     let endpoint =
         service::installed_endpoint().unwrap_or_else(|| super::DEFAULT_LOGS_ENDPOINT.to_string());
     // Why the receiver does not answer is for a person to read: another
     // program on the port, an older af, nothing at all.
     let reachable = service::receiver_reachable(&endpoint);
+    let heard = recent_activity(state_dir, now_ms);
     let agent_rows: Vec<Value> = match home {
         Some(home) => agents::detect_live(home, &endpoint, &mut BTreeMap::new(), &BTreeMap::new())
             .iter()
-            .map(|facts| agents::agent_row_in(facts, None, home))
+            .map(|facts| agents::agent_row_in(facts, heard.get(&facts.agent), home))
             .collect(),
         None => Vec::new(),
     };
@@ -63,6 +68,44 @@ pub fn build(state_dir: &Path, home: Option<&Path>) -> Value {
         "python": python_runtime(state_dir),
         "agents": agent_rows,
     })
+}
+
+/// An agent heard from within this long is `receiving`.
+const RECEIVING_WINDOW_MS: i64 = 24 * 60 * 60 * 1000;
+
+/// What the store holds from each agent over the last
+/// [`RECEIVING_WINDOW_MS`]: its sessions and the time of its last event.
+/// The collector has this in memory; a status asked of the store cannot
+/// know when the collector started, hence the window. Read-only; a missing
+/// or unreadable store is no activity.
+fn recent_activity(state_dir: &Path, now_ms: i64) -> BTreeMap<agents::AgentId, agents::Activity> {
+    let mut heard: BTreeMap<agents::AgentId, agents::Activity> = BTreeMap::new();
+    let db = state_dir.join("state.db");
+    let from_ms = now_ms - RECEIVING_WINDOW_MS;
+    // A day's margin as text, then the instants compared parsed.
+    let bound = af_core::rfc3339_ms(from_ms - RECEIVING_WINDOW_MS).unwrap_or_default();
+    let rows = db
+        .is_file()
+        .then(|| af_store::Store::open_read_only(&db).ok())
+        .flatten()
+        .and_then(|store| store.sessions_with_events_since(&bound).ok())
+        .unwrap_or_default();
+    for (collector, session, ts) in rows {
+        let (Some(agent), Some(at)) = (
+            agents::agent_for_collector(&collector),
+            af_core::parse_ts(&ts),
+        ) else {
+            continue;
+        };
+        if !(from_ms..=now_ms).contains(&at) {
+            continue;
+        }
+        let activity = heard.entry(agent).or_default();
+        let last = activity.sessions.entry(session).or_insert(at);
+        *last = (*last).max(at);
+        activity.last_event_at_ms = activity.last_event_at_ms.max(Some(at));
+    }
+    heard
 }
 
 /// The managed Python runtime the impact estimates need. Without it tokens
@@ -147,5 +190,61 @@ mod tests {
     fn without_a_home_directory_no_agent_is_guessed() {
         let dir = tempfile::tempdir().expect("tempdir");
         assert_eq!(build(dir.path(), None)["agents"], json!([]));
+    }
+    /// 2026-11-16T12:00:00Z.
+    const NOON: i64 = 1_794_830_400_000;
+
+    fn event(id: &str, session: &str, at_ms: i64, collector: &str) -> af_events::Envelope {
+        use af_events::{fixtures, Collector, Payload};
+        let mut event = fixtures::envelope(
+            id,
+            session,
+            &af_core::rfc3339_ms(at_ms).expect("ts"),
+            Payload::LlmCall(fixtures::llm_call()),
+        );
+        event.collector = Collector {
+            name: collector.to_string(),
+            version: "1".to_string(),
+        };
+        event
+    }
+
+    #[test]
+    fn an_agent_heard_from_in_the_last_day_is_receiving() {
+        let hour = 3_600_000;
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut store = af_store::Store::open(&dir.path().join("state.db")).expect("open");
+        store
+            .insert_events(&[
+                event("e1", "s1", NOON - 3 * hour, "otlp-cc"),
+                event("e2", "s1", NOON - hour, "otlp-cc"),
+                event("e3", "s2", NOON - 2 * hour, "cc-hooks"),
+                // More than a day ago: codex is not receiving now.
+                event("e4", "s3", NOON - 25 * hour, "codex"),
+            ])
+            .expect("insert");
+        drop(store);
+
+        let status = build_at(dir.path(), Some(&dir.path().join("home")), NOON);
+        let agent = |id: &str| {
+            status["agents"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|agent| agent["id"] == id)
+                .unwrap_or_else(|| panic!("no {id}"))
+                .clone()
+        };
+        let claude = agent("claude-code");
+        assert_eq!(claude["state"], "receiving");
+        assert_eq!(claude["sessions"], 2, "both of its collectors count");
+        assert_eq!(
+            claude["last_event_at"],
+            af_core::rfc3339_ms(NOON - hour).unwrap()
+        );
+        let codex = agent("codex");
+        assert_ne!(codex["state"], "receiving");
+        assert_eq!(codex["sessions"], 0);
+        assert!(codex["last_event_at"].is_null());
     }
 }

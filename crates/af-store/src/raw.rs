@@ -82,6 +82,27 @@ impl Store {
         Ok(events)
     }
 
+    /// For each collector and session with an event whose stored timestamp
+    /// is at or after `from` **as text**: `(collector, session, timestamps)`,
+    /// the timestamps as stored. Text order is not time order across
+    /// precisions (see [`Self::llm_calls_with_ts_between`]): pass a bound
+    /// earlier than the instant meant and compare parsed values.
+    pub fn sessions_with_events_since(&self, from: &str) -> Result<Vec<(String, String, String)>> {
+        let mut stmt = self.0.prepare(
+            "SELECT DISTINCT json_extract(json, '$.collector.name'), session_id, ts
+             FROM raw_events
+             WHERE ts >= ?1 AND json_extract(json, '$.collector.name') IS NOT NULL",
+        )?;
+        let rows = stmt.query_map([from], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        })?;
+        Ok(rows.collect::<std::result::Result<_, _>>()?)
+    }
+
     /// The latest timestamp of any stored event, as stored.
     pub fn last_event_ts(&self) -> Result<Option<String>> {
         Ok(self

@@ -85,13 +85,13 @@ are cut an hour away from local midnight. Calls within an hour of midnight on
 those days can be counted in the neighbouring day, and the period then starts
 an hour away from local midnight.
 
-## `af status` does not know whether data is arriving
+## `receiving` in `af status` covers the last 24 hours
 
-`af status` reads configuration and the process table. It reports a
-configured agent as `waiting` whether or not its events are being received.
-The running collector knows, and says so in the debug console and on
-`GET /debug/status`. `af summary` shows the last stored event under
-`collector.last_event_at`.
+`af status` reads the store, not the running collector: an agent is
+`receiving` when it has a stored event in the last 24 hours. An agent that
+stopped sending within that time is still reported as `receiving`. The
+running collector reports what it has received since it started, in the
+debug console and on `GET /debug/status`.
 
 ## Results lag by up to a minute
 

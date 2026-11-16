@@ -121,7 +121,7 @@ for a reason other than `pending`, largest token total first.
 | `model` | string | As in `by_model`. |
 | `reason` | string | The estimator's status for those calls, for example `unknown_model`. |
 | `calls` | integer | Calls of this model unestimated for a lasting reason. |
-| `tokens` | integer | The model's token total for the period, as in its `by_model` element. |
+| `tokens` | integer | The tokens of those calls only (a model can be partly estimated). |
 
 These calls and tokens are counted everywhere else in the document. Their
 impacts are in no `remote` sum.
@@ -340,8 +340,8 @@ a running collector with no reachable receiver.
 | `action` | string or null | A command or instruction that addresses the state, for example `af setup` or `restart claude`. `null` when the state was read from a process, whose row carries its own. |
 | `config_path` | string or null | The user-scope configuration file that carries telemetry configuration; `null` when there is none. |
 | `processes` | array or null | One row per running process of the agent; `null` where processes cannot be listed (Windows). |
-| `sessions` | integer | Always `0` in `af status`; see the note below. |
-| `last_event_at` | string or null | Always `null` in `af status`; see the note below. |
+| `sessions` | integer | Sessions with an event in the last 24 hours. |
+| `last_event_at` | string or null | The agent's most recent event in the last 24 hours, else `null`. |
 
 Each element of `processes`:
 
@@ -356,13 +356,13 @@ Each element of `processes`:
 | `detail` | string or null | The reason for the state, when there is one. |
 | `action` | string or null | What addresses it, for example `af setup --agents codex --project /path/to/project`. |
 | `session_id` | string or null | The agent session tied to this process, when known. |
-| `last_event_at` | string or null | Always `null` in `af status`. |
+| `last_event_at` | string or null | The most recent event of this process's session in the last 24 hours, when the session is known. |
 
 ### Agent states
 
 | State | Meaning | Where |
 |---|---|---|
-| `receiving` | An event from this agent has arrived. | Watcher status only. |
+| `receiving` | An event from this agent has arrived (`af status`: in the last 24 hours). | Agent and process. |
 | `needs_restart` | Configured, but the process started before the configuration last changed, so it has not loaded it. Restart the agent. | Agent and process. |
 | `misconfigured` | Telemetry configuration is present but will not reach this receiver. `detail` says why. | Agent and process. |
 | `not_configured` | Installed or running, with no telemetry configuration. Run `af setup`. | Agent and process. |
@@ -375,15 +375,13 @@ order `needs_restart`, `misconfigured`, `not_configured`, `waiting`. With no
 process that says one of these, it comes from the user-scope configuration
 file and `PATH`.
 
-!!! note "`af status` does not report `receiving`"
-    `af status` reads configuration files and the process table. It does not
-    know which events the running collector has received, so a configured
-    agent that is sending data is reported as `waiting`, with `sessions` at
-    `0` and `last_event_at` at `null`. The running collector reports
-    `receiving`, session counts and last-event times in its own status, on
-    [`GET /debug/status`](debug-api.md#watcher-status). To learn from
-    `af status` and `af summary` alone whether data is arriving, read
-    `collector.last_event_at` and the call counts in `af summary`.
+!!! note "What `receiving` means in `af status`"
+    `af status` reads the store: an agent with a stored event in the last 24
+    hours is `receiving`, with `sessions` and `last_event_at` counted over
+    those 24 hours. An agent used yesterday and misconfigured since is still
+    `receiving` until the 24 hours have passed. The running collector reports
+    what it has received since it started, on
+    [`GET /debug/status`](debug-api.md#watcher-status).
 
 ### Example
 

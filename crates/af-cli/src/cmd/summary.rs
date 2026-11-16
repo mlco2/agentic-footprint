@@ -109,6 +109,8 @@ struct Figures {
     /// Calls with no summable estimate, by why: the estimator's status, or
     /// `pending` when it has not stored one yet.
     unestimated: BTreeMap<String, u64>,
+    /// The tokens of those calls, by the same reasons.
+    unestimated_tokens: BTreeMap<String, u64>,
 }
 
 impl Figures {
@@ -116,6 +118,7 @@ impl Figures {
         let Payload::LlmCall(call) = &event.payload else {
             return;
         };
+        let before = self.total_tokens();
         self.calls += 1;
         self.sessions.insert(event.session_id.clone());
         self.input += call.usage.input_tokens.unwrap_or(0);
@@ -131,10 +134,10 @@ impl Figures {
                 self.estimates.push(estimate.clone())
             }
             (_, status) => {
-                *self
-                    .unestimated
-                    .entry(status.unwrap_or("pending").to_string())
-                    .or_default() += 1
+                let reason = status.unwrap_or("pending").to_string();
+                *self.unestimated_tokens.entry(reason.clone()).or_default() +=
+                    self.total_tokens() - before;
+                *self.unestimated.entry(reason).or_default() += 1
             }
         }
     }
@@ -311,14 +314,21 @@ pub fn build(
                         .unestimated
                         .keys()
                         .find(|reason| reason.as_str() != "pending")?;
+                    // Of those calls only: a model can be partly estimated.
+                    let tokens: u64 = figures
+                        .unestimated_tokens
+                        .iter()
+                        .filter(|(reason, _)| reason.as_str() != "pending")
+                        .map(|(_, tokens)| tokens)
+                        .sum();
                     Some((
-                        figures.total_tokens(),
+                        tokens,
                         json!({
                             "agent": agent,
                             "model": model,
                             "reason": reason,
                             "calls": calls,
-                            "tokens": figures.total_tokens(),
+                            "tokens": tokens,
                         }),
                     ))
                 })
@@ -573,5 +583,43 @@ mod tests {
         let (_dir, store) = store_with(&events, &[]);
         let summary = build(Some(&store), Period::Today, NOON, 0).expect("build");
         assert_eq!(summary["by_agent"][0]["agent"], "other");
+    }
+    #[test]
+    fn a_partly_estimated_model_reports_only_the_tokens_of_its_unestimated_calls() {
+        let hour = 3_600_000;
+        let (_dir, store) = store_with(
+            &[
+                call(
+                    "p1",
+                    "s1",
+                    NOON - hour,
+                    "otlp-cc",
+                    "claude-opus-5-5",
+                    tokens(1000, 100, 0),
+                ),
+                call(
+                    "p2",
+                    "s1",
+                    NOON - 2 * hour,
+                    "otlp-cc",
+                    "claude-opus-5-5",
+                    tokens(30, 3, 0),
+                ),
+            ],
+            &[
+                estimate("p1", (0.001, 0.002)),
+                ImpactEstimate {
+                    event_id: "p2".to_string(),
+                    methodology_version: "test".to_string(),
+                    json: json!({"id": 2, "status": "unknown_model"}),
+                },
+            ],
+        );
+        let summary = build(Some(&store), Period::Today, NOON, 0).expect("build");
+        assert_eq!(
+            summary["models_not_estimated"],
+            json!([{"agent": "claude-code", "model": "claude-opus-5-5", "reason": "unknown_model", "calls": 1, "tokens": 33}]),
+            "the estimated call's 1100 tokens are not among the missing ones"
+        );
     }
 }
