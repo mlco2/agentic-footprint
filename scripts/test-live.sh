@@ -28,10 +28,16 @@ fi
 case "$suite" in
     all)
         cargo test -p af-cli --test live_claude_code -- --ignored --nocapture --test-threads=1 "$@"
-        cargo test -p af-cli --test live_opencode -- --ignored --nocapture --test-threads=1 "$@"
+        cargo test -p af-cli --features experimental-opencode --test live_opencode \
+            -- --ignored --nocapture --test-threads=1 "$@"
         exec cargo test -p af-cli --test live_codex -- --ignored --nocapture --test-threads=1 "$@"
         ;;
-    claude-code|opencode|codex)
+    opencode)
+        # `af collect opencode` only exists with this feature.
+        exec cargo test -p af-cli --features experimental-opencode --test live_opencode \
+            -- --ignored --nocapture --test-threads=1 "$@"
+        ;;
+    claude-code|codex)
         exec cargo test -p af-cli --test "live_$(printf '%s' "$suite" | tr '-' '_')" \
             -- --ignored --nocapture --test-threads=1 "$@"
         ;;
