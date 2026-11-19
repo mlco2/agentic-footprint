@@ -56,9 +56,32 @@ The fixture is hand-written from Pi's documented event shapes
 and the metadata `capture-events.ts` records. It should be replaced by a
 capture of a real Pi session.
 
+## Live check
+
+Checked against a real Pi 0.73.1 session on 17 Nov 2026 (provider
+`openai-codex`, model `gpt-5.6-luna`, prompt: run `ls`, read a file,
+answer). Pi fired three assistant `message_end`s, each repeated in its
+`turn_end`; the spool held exactly 1 `session_meta`, 3 `llm_call` and 2
+`action_span` (`bash` → `bash`, `read` → `file_op`), all valid, and
+`af report` ingested 6 events with 0 rejected. A provider error (an
+unsupported model) produced one `llm_call` with `status: "error"`, zero
+tokens and its duration.
+
+What the live run showed that the fixture did not:
+
+- With `openai-codex`, `responseModel` is absent, so `model_id_served` is
+  omitted; reasoning tokens are not reported.
+- Codex tool call IDs look like `call_…|fc_…`; `span_id` keeps them as is,
+  and the `event_id` drops the `|`.
+- An errored message has no `responseId`; its `event_id` falls back to the
+  message timestamp.
+- Pi 0.73.1's built-in `openai-codex` model list is out of date: every listed
+  model is refused for a ChatGPT account (`400 … not supported when using
+  Codex with a ChatGPT account`). Pass a current one explicitly, e.g.
+  `--model openai-codex/gpt-5.6-luna`.
+
 ## Known gaps
 
-- Not yet checked against a live Pi session (needs a provider login).
 - Compaction and branch summarisation call the model; whether they fire an
   assistant `message_end` is unverified, so their tokens may be missed.
 - Whether each retried provider attempt gets its own `message_end` is
