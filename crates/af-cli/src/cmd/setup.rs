@@ -13,9 +13,7 @@ use super::DEFAULT_LOGS_ENDPOINT;
 const CLAUDE_HOOK: &str = include_str!("../../../../collectors/claude-code/af-hook.sh");
 /// The Pi collector extension, installed into Pi's global extensions
 /// directory, where Pi loads every `*.ts` file at startup.
-#[cfg(feature = "experimental-pi")]
 pub(crate) const PI_EXTENSION: &str = include_str!("../../../../collectors/pi/af-collector.ts");
-#[cfg(feature = "experimental-pi")]
 const PI_EXTENSION_FILE: &str = "agentic-footprint.ts";
 const CLAUDE_EVENTS: &[&str] = &[
     "SessionStart",
@@ -30,11 +28,11 @@ const CLAUDE_EVENTS: &[&str] = &[
 pub struct Args {
     #[cfg_attr(
         feature = "experimental-opencode",
-        arg(long, help = "Comma-separated agents: codex,claude-code,opencode")
+        arg(long, help = "Comma-separated agents: codex,claude-code,opencode,pi")
     )]
     #[cfg_attr(
         not(feature = "experimental-opencode"),
-        arg(long, help = "Comma-separated agents: codex,claude-code")
+        arg(long, help = "Comma-separated agents: codex,claude-code,pi")
     )]
     agents: Option<String>,
     /// Project directory whose project-local agent settings should be configured.
@@ -63,7 +61,6 @@ enum Agent {
     ClaudeCode,
     #[cfg(feature = "experimental-opencode")]
     OpenCode,
-    #[cfg(feature = "experimental-pi")]
     Pi,
 }
 
@@ -74,7 +71,6 @@ impl Agent {
             Self::ClaudeCode => "Claude Code",
             #[cfg(feature = "experimental-opencode")]
             Self::OpenCode => "OpenCode",
-            #[cfg(feature = "experimental-pi")]
             Self::Pi => "Pi",
         }
     }
@@ -85,7 +81,6 @@ impl Agent {
             Self::ClaudeCode => "claude",
             #[cfg(feature = "experimental-opencode")]
             Self::OpenCode => "opencode",
-            #[cfg(feature = "experimental-pi")]
             Self::Pi => "pi",
         }
     }
@@ -114,21 +109,10 @@ enum Plan {
 
 #[derive(Debug)]
 enum Change {
-    Codex {
-        path: PathBuf,
-        contents: String,
-    },
-    ClaudeHook {
-        path: PathBuf,
-    },
-    ClaudeSettings {
-        path: PathBuf,
-        contents: String,
-    },
-    #[cfg(feature = "experimental-pi")]
-    PiExtension {
-        path: PathBuf,
-    },
+    Codex { path: PathBuf, contents: String },
+    ClaudeHook { path: PathBuf },
+    ClaudeSettings { path: PathBuf, contents: String },
+    PiExtension { path: PathBuf },
 }
 
 impl Change {
@@ -136,7 +120,6 @@ impl Change {
         match self {
             Self::Codex { .. } => Agent::Codex,
             Self::ClaudeHook { .. } | Self::ClaudeSettings { .. } => Agent::ClaudeCode,
-            #[cfg(feature = "experimental-pi")]
             Self::PiExtension { .. } => Agent::Pi,
         }
     }
@@ -150,7 +133,6 @@ impl Change {
             Self::ClaudeSettings { path, .. } => {
                 format!("merge hooks and OTLP environment into {}", path.display())
             }
-            #[cfg(feature = "experimental-pi")]
             Self::PiExtension { path } => {
                 format!("install the collector extension at {}", path.display())
             }
@@ -346,17 +328,11 @@ fn print_plans(plans: &[Plan]) {
 }
 
 fn selected_agents(raw: Option<&str>) -> Result<BTreeSet<Agent>> {
-    let all = vec![Agent::Codex, Agent::ClaudeCode];
+    let all = vec![Agent::Codex, Agent::ClaudeCode, Agent::Pi];
     #[cfg(feature = "experimental-opencode")]
     let all = {
         let mut all = all;
         all.push(Agent::OpenCode);
-        all
-    };
-    #[cfg(feature = "experimental-pi")]
-    let all = {
-        let mut all = all;
-        all.push(Agent::Pi);
         all
     };
     let Some(raw) = raw else {
@@ -373,9 +349,8 @@ fn selected_agents(raw: Option<&str>) -> Result<BTreeSet<Agent>> {
             "claude" | "claude-code" => Agent::ClaudeCode,
             #[cfg(feature = "experimental-opencode")]
             "opencode" => Agent::OpenCode,
-            #[cfg(feature = "experimental-pi")]
             "pi" => Agent::Pi,
-            _ => bail!("unknown agent {value:?}; expected codex or claude-code"),
+            _ => bail!("unknown agent {value:?}; expected codex, claude-code or pi"),
         };
         selected.insert(agent);
     }
@@ -415,7 +390,6 @@ fn inspect(
                 detail: "detected; start its server and use `af collect opencode` per session"
                     .to_string(),
             }),
-            #[cfg(feature = "experimental-pi")]
             Agent::Pi => plans.push(inspect_pi(&pi_extension_path(&home))),
         }
     }
@@ -426,7 +400,6 @@ fn inspect(
 /// expanded, as Pi does), else `~/.pi/agent`. Mirrors `getAgentDir()` in
 /// Pi's `config.js`. Takes the variable's value so tests need not touch the
 /// process environment.
-#[cfg(feature = "experimental-pi")]
 fn pi_agent_dir(home: &Path, env_dir: Option<std::ffi::OsString>) -> PathBuf {
     match env_dir.filter(|value| !value.is_empty()) {
         Some(value) => {
@@ -442,7 +415,6 @@ fn pi_agent_dir(home: &Path, env_dir: Option<std::ffi::OsString>) -> PathBuf {
 
 /// Where `af setup` installs the Pi collector: Pi's global extensions
 /// directory, so every Pi session in every project loads it.
-#[cfg(feature = "experimental-pi")]
 pub(crate) fn pi_extension_path(home: &Path) -> PathBuf {
     pi_agent_dir(home, env::var_os("PI_CODING_AGENT_DIR"))
         .join("extensions")
@@ -452,7 +424,6 @@ pub(crate) fn pi_extension_path(home: &Path) -> PathBuf {
 /// Whether the installed extension is this build's collector. An older or
 /// edited copy is replaced (after a backup) rather than reported as a
 /// conflict: the file is af's own, under an af-owned name.
-#[cfg(feature = "experimental-pi")]
 fn inspect_pi(path: &Path) -> Plan {
     if fs::read_to_string(path).ok().as_deref() == Some(PI_EXTENSION) {
         Plan::Ready {
@@ -980,7 +951,6 @@ fn apply_change(change: &Change) -> Result<()> {
             write_config(path, CLAUDE_HOOK.as_bytes())?;
             make_executable(path)
         }
-        #[cfg(feature = "experimental-pi")]
         Change::PiExtension { path } => write_config(path, PI_EXTENSION.as_bytes()),
     }
 }
@@ -1370,7 +1340,6 @@ mod tests {
         assert!(selected.contains(&Agent::OpenCode));
     }
 
-    #[cfg(feature = "experimental-pi")]
     #[test]
     fn pi_is_selectable_and_its_agent_dir_follows_pi() {
         assert!(selected_agents(Some("pi")).unwrap().contains(&Agent::Pi));
@@ -1391,7 +1360,6 @@ mod tests {
         );
     }
 
-    #[cfg(feature = "experimental-pi")]
     #[test]
     fn pi_extension_is_installed_then_ready_and_an_old_copy_is_replaced() {
         let dir = tempfile::tempdir().unwrap();

@@ -1,14 +1,13 @@
 # Pi collector
 
-Pi collection is experimental. `af-collector.ts` is a Pi extension that turns
+`af-collector.ts` is a Pi extension that turns
 Pi's in-process lifecycle events into Contract #1 facts and appends them to
 `$AF_STATE_DIR/spool/pi.<session-id>.jsonl`, the same file transport the
 Claude Code hook and the OpenCode collector use. `af watch` / `af report`
 ingest the spool; nothing is estimated in the extension.
 
-`af` recognises the `pi` collector as the Pi agent (in `af status` and
-`af summary`) only in a build with `--features experimental-pi`. Without it,
-Pi's events are still ingested and counted, under "Other".
+`af` recognises the `pi` collector as the Pi agent in `af status` and
+`af summary`.
 
 ## Event boundaries
 
@@ -31,8 +30,6 @@ results. Every handler is wrapped so a collector failure can never break a
 Pi turn; failures are appended to `$AF_STATE_DIR/tmp/pi-collector-errors.log`.
 
 ## Use it
-
-In a build with `--features experimental-pi`:
 
 ```sh
 af setup --agents pi

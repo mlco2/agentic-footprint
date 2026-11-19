@@ -109,7 +109,6 @@ status line and the debug console can be that far behind a live session; see
 
 ## Supported agents
 
-The default build configures Claude Code and Codex. Other integrations are
-experimental and are not part of the default binary: OpenCode
-(`--features experimental-opencode`) and Pi (`--features experimental-pi`,
-see [Pi](../how-to/pi.md)).
+The default build configures Claude Code, Codex and [Pi](../how-to/pi.md).
+OpenCode is experimental and not part of the default binary
+(`--features experimental-opencode`).

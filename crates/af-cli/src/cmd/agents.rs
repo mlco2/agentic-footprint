@@ -372,14 +372,12 @@ pub(crate) enum AgentId {
     Codex,
     #[cfg(feature = "experimental-opencode")]
     OpenCode,
-    #[cfg(feature = "experimental-pi")]
     Pi,
 }
 
 /// Collector name of the Pi extension (`collectors/pi/af-collector.ts`) and
 /// the prefix of its spool files. The collector is TypeScript running inside
 /// Pi, so there is no Rust module to own this constant.
-#[cfg(feature = "experimental-pi")]
 pub(crate) const PI_COLLECTOR_NAME: &str = "pi";
 
 impl AgentId {
@@ -389,7 +387,6 @@ impl AgentId {
             AgentId::Codex,
             #[cfg(feature = "experimental-opencode")]
             AgentId::OpenCode,
-            #[cfg(feature = "experimental-pi")]
             AgentId::Pi,
         ]
     }
@@ -401,7 +398,6 @@ impl AgentId {
             AgentId::Codex => "codex",
             #[cfg(feature = "experimental-opencode")]
             AgentId::OpenCode => "opencode",
-            #[cfg(feature = "experimental-pi")]
             AgentId::Pi => "pi",
         }
     }
@@ -412,7 +408,6 @@ impl AgentId {
             AgentId::Codex => "Codex",
             #[cfg(feature = "experimental-opencode")]
             AgentId::OpenCode => "OpenCode",
-            #[cfg(feature = "experimental-pi")]
             AgentId::Pi => "Pi",
         }
     }
@@ -424,7 +419,6 @@ impl AgentId {
             AgentId::Codex => "codex",
             #[cfg(feature = "experimental-opencode")]
             AgentId::OpenCode => "opencode",
-            #[cfg(feature = "experimental-pi")]
             AgentId::Pi => "pi",
         }
     }
@@ -443,7 +437,6 @@ pub(crate) fn agent_for_collector(collector: &str) -> Option<AgentId> {
         "codex" => Some(AgentId::Codex),
         #[cfg(feature = "experimental-opencode")]
         super::opencode::COLLECTOR_NAME => Some(AgentId::OpenCode),
-        #[cfg(feature = "experimental-pi")]
         PI_COLLECTOR_NAME => Some(AgentId::Pi),
         other if other.starts_with("otlp-codex") => Some(AgentId::Codex),
         _ => None,
@@ -476,7 +469,6 @@ pub(crate) fn inspect_user_config(agent: AgentId, home: &Path, logs_endpoint: &s
         AgentId::OpenCode => UserConfig::Absent,
         // The collector is an extension `af setup` installs into Pi's global
         // extensions directory; its presence is the configuration.
-        #[cfg(feature = "experimental-pi")]
         AgentId::Pi => inspect_pi_extension(&setup::pi_extension_path(home)),
     }
 }
@@ -715,7 +707,6 @@ pub(crate) fn codex_config_for(
 /// Pi is configured when `af setup`'s extension is in Pi's global
 /// extensions directory; a copy from another af version still collects but
 /// should be refreshed.
-#[cfg(feature = "experimental-pi")]
 fn inspect_pi_extension(path: &Path) -> UserConfig {
     match read_config(path) {
         Ok(None) => UserConfig::Absent,
@@ -951,7 +942,6 @@ fn judge_process(
         }
         #[cfg(feature = "experimental-opencode")]
         AgentId::OpenCode => None,
-        #[cfg(feature = "experimental-pi")]
         AgentId::Pi => None,
     };
     let Some((config, modified)) = judged else {
@@ -2519,7 +2509,6 @@ mod tests {
         );
     }
 
-    #[cfg(feature = "experimental-pi")]
     #[test]
     fn pi_is_recognised_from_its_spool_and_configured_by_its_extension() {
         assert_eq!(agent_for_collector("pi"), Some(AgentId::Pi));

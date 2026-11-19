@@ -10,8 +10,7 @@ AF_BIN="$REPO_ROOT/target/debug/af"
 STATE_DIR="$(mktemp -d)"
 trap 'rm -rf "$STATE_DIR"' EXIT
 
-# `af` only knows Pi as an agent with this feature (see crates/af-cli/Cargo.toml).
-(cd "$REPO_ROOT" && cargo build -p af-cli --features experimental-pi -q)
+(cd "$REPO_ROOT" && cargo build -p af-cli -q)
 
 # Node >= 23.6 runs the TypeScript directly; there is no build step.
 node --test "$SCRIPT_DIR/af-collector.test.ts" >/dev/null

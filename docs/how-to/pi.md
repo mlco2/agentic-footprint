@@ -8,16 +8,16 @@ own process, and `af` collects through one: `collectors/pi/af-collector.ts`
 subscribes to Pi's lifecycle events and appends Contract #1 facts to the
 spool, where `af watch` ingests them like any other collector.
 
-Pi support is experimental. It exists only in an `af` built with
-`--features experimental-pi`; the default binary, the release builds and
-`install.sh` do not include it yet.
+Pi support is part of the default `af` build. The v0.1.0 release predates it;
+releases built after it include it.
 
-## 1. Build `af` with Pi support
+## 1. Install `af`
 
-From the repository root:
+Install `af` as described in [Install and configure](installation.md), or,
+for manual development, from the repository root:
 
 ```sh
-cargo build -p af-cli --features experimental-pi
+cargo build -p af-cli
 export AF_BIN="$PWD/target/debug/af"
 ```
 
