@@ -227,7 +227,10 @@ export function createCollector(options: CollectorOptions = {}) {
   }
 
   function closeSpan(sessionId: string, toolCallId: string, open: OpenSpan, status: Status): void {
-    const span = fact("action_span", sessionId, `pi-span-${sessionId}-${sanitizeId(toolCallId)}`, {
+    // The start time is part of the ID: providers may reuse tool call IDs
+    // across turns (or send none), and the store keeps one fact per event_id.
+    const startMs = Date.parse(open.tStart);
+    const span = fact("action_span", sessionId, `pi-span-${sessionId}-${sanitizeId(toolCallId)}-${startMs}`, {
       span_id: toolCallId,
       tool_name: open.toolName,
       tool_kind: toolKind(open.toolName),
@@ -247,7 +250,9 @@ export function createCollector(options: CollectorOptions = {}) {
       openSpans.set(sid, openSpans.get(sid) ?? new Map());
       // Stable ID: a resumed session re-fires session_start, and the store
       // ignores an event_id it already holds, so this is counted once.
-      append(fact("session_meta", sid, `pi-session-${sid}`, { agent_app: { name: "pi" }, os: osName() }));
+      // The prefix keeps the ID at the schema's 16-character minimum for
+      // short `--session-id` values.
+      append(fact("session_meta", sid, `pi-session-meta-${sid}`, { agent_app: { name: "pi" }, os: osName() }));
     },
 
     before_provider_request(_event, ctx) {
@@ -266,7 +271,10 @@ export function createCollector(options: CollectorOptions = {}) {
 
       const started = requestStartedAt.get(sid);
       requestStartedAt.delete(sid);
-      const key = message.responseId ?? `${message.timestamp ?? now().getTime()}`;
+      // The timestamp is always part of the key: providers reuse responseId
+      // (Ollama's is `chatcmpl-<0..998>`), and the store keeps one fact per
+      // event_id. It is persisted on the message, so the ID stays stable.
+      const key = `${message.responseId ?? "noid"}-${message.timestamp ?? now().getTime()}`;
 
       const payload: Record<string, unknown> = {
         provider: message.provider,
@@ -291,6 +299,10 @@ export function createCollector(options: CollectorOptions = {}) {
       if (!sid || typeof id !== "string" || typeof name !== "string") return;
       const spans = openSpans.get(sid) ?? new Map<string, OpenSpan>();
       openSpans.set(sid, spans);
+      // Never overwrite an open span: a provider that reuses IDs (or sends
+      // none) would otherwise lose the first one.
+      const previous = spans.get(id);
+      if (previous) closeSpan(sid, id, previous, "unknown");
       spans.set(id, { toolName: name, tStart: now().toISOString() });
     },
 

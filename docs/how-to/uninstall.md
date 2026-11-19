@@ -69,6 +69,12 @@ Leave any of these that you set yourself for another telemetry receiver.
 `[otel]` table that follows the comment
 `# agentic-footprint: native Codex OTLP logs.`
 
+**Pi** (experimental builds only): the collector extension
+`agentic-footprint.ts` in Pi's extensions directory
+(`$PI_CODING_AGENT_DIR/extensions/`, or `~/.pi/agent/extensions/`), and any
+`agentic-footprint.ts.bak.*` copies beside it. Until it is removed, every Pi
+session keeps appending to the spool with nothing reading it.
+
 Restart the agents afterwards: a running session keeps the configuration it
 started with.
 

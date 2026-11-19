@@ -190,3 +190,46 @@ test("mapping helpers", () => {
     thought_tokens: 2,
   });
 });
+
+test("two model calls sharing a provider responseId stay two llm_calls (Ollama reuses chatcmpl-N)", () => {
+  const pi = fakePi();
+  pi.fire("message_end", assistant({ responseId: "chatcmpl-123", timestamp: 1_000 }));
+  pi.fire("message_end", assistant({ responseId: "chatcmpl-123", timestamp: 2_000 }));
+  const ids = pi.facts().filter((f) => f.type === "llm_call").map((f) => f.event_id);
+  assert.equal(ids.length, 2);
+  assert.equal(new Set(ids).size, 2);
+});
+
+test("an llm_call event_id is stable for the same message (a replay deduplicates)", () => {
+  const first = fakePi();
+  first.fire("message_end", assistant({ responseId: "chatcmpl-7", timestamp: 1_000 }));
+  const second = fakePi();
+  second.fire("message_end", assistant({ responseId: "chatcmpl-7", timestamp: 1_000 }), 5_000);
+  assert.equal(first.facts()[0].event_id, second.facts()[0].event_id);
+});
+
+test("a tool call ID reused in a later turn stays two action_spans", () => {
+  const pi = fakePi();
+  pi.fire("tool_execution_start", { toolCallId: "call_0", toolName: "bash" });
+  pi.fire("tool_execution_end", { toolCallId: "call_0", isError: false });
+  pi.fire("tool_execution_start", { toolCallId: "call_0", toolName: "read" });
+  pi.fire("tool_execution_end", { toolCallId: "call_0", isError: false });
+  const spans = pi.facts().filter((f) => f.type === "action_span");
+  assert.deepEqual(spans.map((s) => s.payload.tool_name), ["bash", "read"]);
+  assert.equal(new Set(spans.map((s) => s.event_id)).size, 2);
+});
+
+test("a second start with an open tool call ID closes the first as unknown instead of overwriting it", () => {
+  const pi = fakePi();
+  pi.fire("tool_execution_start", { toolCallId: "", toolName: "bash" });
+  pi.fire("tool_execution_start", { toolCallId: "", toolName: "read" });
+  pi.fire("tool_execution_end", { toolCallId: "", isError: false });
+  const spans = pi.facts().filter((f) => f.type === "action_span");
+  assert.deepEqual(spans.map((s) => [s.payload.tool_name, s.payload.status]), [["bash", "unknown"], ["read", "ok"]]);
+});
+
+test("a short session ID still gives a session_meta event_id of at least 16 characters", () => {
+  const pi = fakePi("a");
+  pi.fire("session_start");
+  assert.ok(pi.facts()[0].event_id.length >= 16);
+});

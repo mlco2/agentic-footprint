@@ -24,16 +24,22 @@ const CLAUDE_EVENTS: &[&str] = &[
     "SessionEnd",
 ];
 
+/// The names `--agents` accepts in this build.
+const AGENT_NAMES: &[&str] = &[
+    "codex",
+    "claude-code",
+    #[cfg(feature = "experimental-opencode")]
+    "opencode",
+    "pi",
+];
+
+fn agents_help() -> String {
+    format!("Comma-separated agents: {}", AGENT_NAMES.join(","))
+}
+
 #[derive(Debug, Clone, clap::Args)]
 pub struct Args {
-    #[cfg_attr(
-        feature = "experimental-opencode",
-        arg(long, help = "Comma-separated agents: codex,claude-code,opencode,pi")
-    )]
-    #[cfg_attr(
-        not(feature = "experimental-opencode"),
-        arg(long, help = "Comma-separated agents: codex,claude-code,pi")
-    )]
+    #[arg(long, help = agents_help())]
     agents: Option<String>,
     /// Project directory whose project-local agent settings should be configured.
     #[arg(long, default_value = ".")]
@@ -350,7 +356,10 @@ fn selected_agents(raw: Option<&str>) -> Result<BTreeSet<Agent>> {
             #[cfg(feature = "experimental-opencode")]
             "opencode" => Agent::OpenCode,
             "pi" => Agent::Pi,
-            _ => bail!("unknown agent {value:?}; expected codex, claude-code or pi"),
+            _ => bail!(
+                "unknown agent {value:?}; expected one of: {}",
+                AGENT_NAMES.join(", ")
+            ),
         };
         selected.insert(agent);
     }
@@ -1388,5 +1397,11 @@ mod tests {
             .collect();
         assert_eq!(backups.len(), 1);
         assert!(!backups[0].ends_with(".ts"));
+    }
+
+    #[test]
+    fn unknown_agent_error_and_help_name_every_agent_of_the_build() {
+        let err = selected_agents(Some("nope")).unwrap_err().to_string();
+        assert!(err.contains("pi") && err.contains("claude-code"), "{err}");
     }
 }
