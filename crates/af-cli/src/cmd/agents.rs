@@ -372,7 +372,13 @@ pub(crate) enum AgentId {
     Codex,
     #[cfg(feature = "experimental-opencode")]
     OpenCode,
+    Pi,
 }
+
+/// Collector name of the Pi extension (`collectors/pi/af-collector.ts`) and
+/// the prefix of its spool files. The collector is TypeScript running inside
+/// Pi, so there is no Rust module to own this constant.
+pub(crate) const PI_COLLECTOR_NAME: &str = "pi";
 
 impl AgentId {
     pub(crate) fn all() -> Vec<AgentId> {
@@ -381,6 +387,7 @@ impl AgentId {
             AgentId::Codex,
             #[cfg(feature = "experimental-opencode")]
             AgentId::OpenCode,
+            AgentId::Pi,
         ]
     }
 
@@ -391,6 +398,7 @@ impl AgentId {
             AgentId::Codex => "codex",
             #[cfg(feature = "experimental-opencode")]
             AgentId::OpenCode => "opencode",
+            AgentId::Pi => "pi",
         }
     }
 
@@ -400,6 +408,7 @@ impl AgentId {
             AgentId::Codex => "Codex",
             #[cfg(feature = "experimental-opencode")]
             AgentId::OpenCode => "OpenCode",
+            AgentId::Pi => "Pi",
         }
     }
 
@@ -410,6 +419,7 @@ impl AgentId {
             AgentId::Codex => "codex",
             #[cfg(feature = "experimental-opencode")]
             AgentId::OpenCode => "opencode",
+            AgentId::Pi => "pi",
         }
     }
 }
@@ -427,6 +437,7 @@ pub(crate) fn agent_for_collector(collector: &str) -> Option<AgentId> {
         "codex" => Some(AgentId::Codex),
         #[cfg(feature = "experimental-opencode")]
         super::opencode::COLLECTOR_NAME => Some(AgentId::OpenCode),
+        PI_COLLECTOR_NAME => Some(AgentId::Pi),
         other if other.starts_with("otlp-codex") => Some(AgentId::Codex),
         _ => None,
     }
@@ -456,6 +467,9 @@ pub(crate) fn inspect_user_config(agent: AgentId, home: &Path, logs_endpoint: &s
         // No config file and no OTLP path: collected per session.
         #[cfg(feature = "experimental-opencode")]
         AgentId::OpenCode => UserConfig::Absent,
+        // The collector is an extension `af setup` installs into Pi's global
+        // extensions directory; its presence is the configuration.
+        AgentId::Pi => inspect_pi_extension(&setup::pi_extension_path(home)),
     }
 }
 
@@ -690,6 +704,23 @@ pub(crate) fn codex_config_for(
     (inspect_codex_file(&path, logs_endpoint), modified)
 }
 
+/// Pi is configured when `af setup`'s extension is in Pi's global
+/// extensions directory; a copy from another af version still collects but
+/// should be refreshed.
+fn inspect_pi_extension(path: &Path) -> UserConfig {
+    match read_config(path) {
+        Ok(None) => UserConfig::Absent,
+        Ok(Some(contents)) if contents == setup::PI_EXTENSION => UserConfig::Configured {
+            path: path.to_path_buf(),
+        },
+        Ok(Some(_)) => UserConfig::Misconfigured {
+            path: path.to_path_buf(),
+            detail: "the collector extension is from another af version".to_string(),
+        },
+        Err(unreadable) => unreadable,
+    }
+}
+
 fn inspect_codex_file(path: &Path, logs_endpoint: &str) -> UserConfig {
     let contents = match read_config(path) {
         Ok(Some(contents)) => contents,
@@ -911,6 +942,7 @@ fn judge_process(
         }
         #[cfg(feature = "experimental-opencode")]
         AgentId::OpenCode => None,
+        AgentId::Pi => None,
     };
     let Some((config, modified)) = judged else {
         return;
@@ -2475,6 +2507,39 @@ mod tests {
             agent_row(&opencode(false), Some(&active()))["state"],
             "receiving"
         );
+    }
+
+    #[test]
+    fn pi_is_recognised_from_its_spool_and_configured_by_its_extension() {
+        assert_eq!(agent_for_collector("pi"), Some(AgentId::Pi));
+        assert_eq!(AgentId::Pi.name(), "Pi");
+
+        let dir = tempfile::tempdir().unwrap();
+        let extension = dir.path().join("extensions").join("agentic-footprint.ts");
+        let pi = |installed| AgentFacts {
+            agent: AgentId::Pi,
+            installed,
+            config: inspect_pi_extension(&extension),
+            processes: None,
+        };
+
+        // Installed, extension missing: af setup installs it.
+        let row = agent_row(&pi(true), None);
+        assert_eq!(row["state"], "not_configured");
+        assert_eq!(row["action"], "af setup");
+        assert_eq!(agent_row(&pi(false), None)["state"], "not_installed");
+
+        // This build's extension: waiting for the first Pi session.
+        std::fs::create_dir_all(extension.parent().unwrap()).unwrap();
+        std::fs::write(&extension, setup::PI_EXTENSION).unwrap();
+        assert_eq!(agent_row(&pi(true), None)["state"], "waiting");
+        assert_eq!(agent_row(&pi(true), Some(&active()))["state"], "receiving");
+
+        // A copy from another af version: refresh it with af setup.
+        std::fs::write(&extension, "// older collector\n").unwrap();
+        let row = agent_row(&pi(true), None);
+        assert_eq!(row["state"], "misconfigured");
+        assert_eq!(row["action"], "af setup");
     }
 
     #[test]
