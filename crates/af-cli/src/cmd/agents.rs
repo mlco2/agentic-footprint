@@ -474,10 +474,10 @@ pub(crate) fn inspect_user_config(agent: AgentId, home: &Path, logs_endpoint: &s
         // No config file and no OTLP path: collected per session.
         #[cfg(feature = "experimental-opencode")]
         AgentId::OpenCode => UserConfig::Absent,
-        // The collector is an extension Pi loads (`pi --extension …`); there
-        // is no af-owned config to inspect yet.
+        // The collector is an extension `af setup` installs into Pi's global
+        // extensions directory; its presence is the configuration.
         #[cfg(feature = "experimental-pi")]
-        AgentId::Pi => UserConfig::Absent,
+        AgentId::Pi => inspect_pi_extension(&setup::pi_extension_path(home)),
     }
 }
 
@@ -710,6 +710,24 @@ pub(crate) fn codex_config_for(
         .and_then(|meta| meta.modified())
         .ok();
     (inspect_codex_file(&path, logs_endpoint), modified)
+}
+
+/// Pi is configured when `af setup`'s extension is in Pi's global
+/// extensions directory; a copy from another af version still collects but
+/// should be refreshed.
+#[cfg(feature = "experimental-pi")]
+fn inspect_pi_extension(path: &Path) -> UserConfig {
+    match read_config(path) {
+        Ok(None) => UserConfig::Absent,
+        Ok(Some(contents)) if contents == setup::PI_EXTENSION => UserConfig::Configured {
+            path: path.to_path_buf(),
+        },
+        Ok(Some(_)) => UserConfig::Misconfigured {
+            path: path.to_path_buf(),
+            detail: "the collector extension is from another af version".to_string(),
+        },
+        Err(unreadable) => unreadable,
+    }
 }
 
 fn inspect_codex_file(path: &Path, logs_endpoint: &str) -> UserConfig {
@@ -1251,13 +1269,6 @@ fn global_state(facts: &AgentFacts) -> (&'static str, Option<String>) {
         }
         #[cfg(feature = "experimental-opencode")]
         (_, false) if facts.agent == AgentId::OpenCode => ("not_installed", None),
-        #[cfg(feature = "experimental-pi")]
-        (_, true) if facts.agent == AgentId::Pi => (
-            "waiting",
-            Some("pi --extension collectors/pi/af-collector.ts".to_string()),
-        ),
-        #[cfg(feature = "experimental-pi")]
-        (_, false) if facts.agent == AgentId::Pi => ("not_installed", None),
         (UserConfig::Configured { .. }, _) if has_stale => (
             "needs_restart",
             Some(format!("restart {}", facts.agent.command())),
@@ -2510,23 +2521,36 @@ mod tests {
 
     #[cfg(feature = "experimental-pi")]
     #[test]
-    fn pi_is_recognised_from_its_spool_and_has_three_states() {
+    fn pi_is_recognised_from_its_spool_and_configured_by_its_extension() {
+        assert_eq!(agent_for_collector("pi"), Some(AgentId::Pi));
+        assert_eq!(AgentId::Pi.name(), "Pi");
+
+        let dir = tempfile::tempdir().unwrap();
+        let extension = dir.path().join("extensions").join("agentic-footprint.ts");
         let pi = |installed| AgentFacts {
             agent: AgentId::Pi,
             installed,
-            config: UserConfig::Absent,
+            config: inspect_pi_extension(&extension),
             processes: None,
         };
-        assert_eq!(agent_for_collector("pi"), Some(AgentId::Pi));
-        assert_eq!(AgentId::Pi.name(), "Pi");
-        let waiting = agent_row(&pi(true), None);
-        assert_eq!(waiting["state"], "waiting");
-        assert_eq!(
-            waiting["action"],
-            "pi --extension collectors/pi/af-collector.ts"
-        );
+
+        // Installed, extension missing: af setup installs it.
+        let row = agent_row(&pi(true), None);
+        assert_eq!(row["state"], "not_configured");
+        assert_eq!(row["action"], "af setup");
         assert_eq!(agent_row(&pi(false), None)["state"], "not_installed");
-        assert_eq!(agent_row(&pi(false), Some(&active()))["state"], "receiving");
+
+        // This build's extension: waiting for the first Pi session.
+        std::fs::create_dir_all(extension.parent().unwrap()).unwrap();
+        std::fs::write(&extension, setup::PI_EXTENSION).unwrap();
+        assert_eq!(agent_row(&pi(true), None)["state"], "waiting");
+        assert_eq!(agent_row(&pi(true), Some(&active()))["state"], "receiving");
+
+        // A copy from another af version: refresh it with af setup.
+        std::fs::write(&extension, "// older collector\n").unwrap();
+        let row = agent_row(&pi(true), None);
+        assert_eq!(row["state"], "misconfigured");
+        assert_eq!(row["action"], "af setup");
     }
 
     #[test]

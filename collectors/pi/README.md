@@ -32,12 +32,28 @@ Pi turn; failures are appended to `$AF_STATE_DIR/tmp/pi-collector-errors.log`.
 
 ## Use it
 
+In a build with `--features experimental-pi`:
+
+```sh
+af setup --agents pi
+```
+
+detects `pi` on `PATH` and installs the collector (embedded in `af`) as
+`agentic-footprint.ts` in Pi's global extensions directory,
+`$PI_CODING_AGENT_DIR/extensions/` or `~/.pi/agent/extensions/`, where Pi
+loads it for every session. Rerunning setup replaces a copy from another af
+version (after a backup); `af setup --check` and `af status` report whether
+it is installed (`not_configured`, `waiting`, `receiving`, or
+`misconfigured` for an outdated copy).
+
+Like the Claude Code hook, the extension writes to `$AF_STATE_DIR` when Pi's
+environment sets it, otherwise to af's default state directory.
+
+Without setup, load it for one run:
+
 ```sh
 pi --extension /absolute/path/to/collectors/pi/af-collector.ts
 ```
-
-or copy `af-collector.ts` into Pi's global extensions directory
-(`~/.pi/agent/extensions/`). `af setup` does not install it yet.
 
 ## Tests
 

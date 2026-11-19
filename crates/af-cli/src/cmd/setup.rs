@@ -11,6 +11,12 @@ use serde_json::{json, Map, Value};
 use super::DEFAULT_LOGS_ENDPOINT;
 
 const CLAUDE_HOOK: &str = include_str!("../../../../collectors/claude-code/af-hook.sh");
+/// The Pi collector extension, installed into Pi's global extensions
+/// directory, where Pi loads every `*.ts` file at startup.
+#[cfg(feature = "experimental-pi")]
+pub(crate) const PI_EXTENSION: &str = include_str!("../../../../collectors/pi/af-collector.ts");
+#[cfg(feature = "experimental-pi")]
+const PI_EXTENSION_FILE: &str = "agentic-footprint.ts";
 const CLAUDE_EVENTS: &[&str] = &[
     "SessionStart",
     "PreToolUse",
@@ -57,6 +63,8 @@ enum Agent {
     ClaudeCode,
     #[cfg(feature = "experimental-opencode")]
     OpenCode,
+    #[cfg(feature = "experimental-pi")]
+    Pi,
 }
 
 impl Agent {
@@ -66,6 +74,8 @@ impl Agent {
             Self::ClaudeCode => "Claude Code",
             #[cfg(feature = "experimental-opencode")]
             Self::OpenCode => "OpenCode",
+            #[cfg(feature = "experimental-pi")]
+            Self::Pi => "Pi",
         }
     }
 
@@ -75,6 +85,8 @@ impl Agent {
             Self::ClaudeCode => "claude",
             #[cfg(feature = "experimental-opencode")]
             Self::OpenCode => "opencode",
+            #[cfg(feature = "experimental-pi")]
+            Self::Pi => "pi",
         }
     }
 }
@@ -102,9 +114,21 @@ enum Plan {
 
 #[derive(Debug)]
 enum Change {
-    Codex { path: PathBuf, contents: String },
-    ClaudeHook { path: PathBuf },
-    ClaudeSettings { path: PathBuf, contents: String },
+    Codex {
+        path: PathBuf,
+        contents: String,
+    },
+    ClaudeHook {
+        path: PathBuf,
+    },
+    ClaudeSettings {
+        path: PathBuf,
+        contents: String,
+    },
+    #[cfg(feature = "experimental-pi")]
+    PiExtension {
+        path: PathBuf,
+    },
 }
 
 impl Change {
@@ -112,6 +136,8 @@ impl Change {
         match self {
             Self::Codex { .. } => Agent::Codex,
             Self::ClaudeHook { .. } | Self::ClaudeSettings { .. } => Agent::ClaudeCode,
+            #[cfg(feature = "experimental-pi")]
+            Self::PiExtension { .. } => Agent::Pi,
         }
     }
 
@@ -123,6 +149,10 @@ impl Change {
             }
             Self::ClaudeSettings { path, .. } => {
                 format!("merge hooks and OTLP environment into {}", path.display())
+            }
+            #[cfg(feature = "experimental-pi")]
+            Self::PiExtension { path } => {
+                format!("install the collector extension at {}", path.display())
             }
         }
     }
@@ -323,6 +353,12 @@ fn selected_agents(raw: Option<&str>) -> Result<BTreeSet<Agent>> {
         all.push(Agent::OpenCode);
         all
     };
+    #[cfg(feature = "experimental-pi")]
+    let all = {
+        let mut all = all;
+        all.push(Agent::Pi);
+        all
+    };
     let Some(raw) = raw else {
         return Ok(all.into_iter().collect());
     };
@@ -337,6 +373,8 @@ fn selected_agents(raw: Option<&str>) -> Result<BTreeSet<Agent>> {
             "claude" | "claude-code" => Agent::ClaudeCode,
             #[cfg(feature = "experimental-opencode")]
             "opencode" => Agent::OpenCode,
+            #[cfg(feature = "experimental-pi")]
+            "pi" => Agent::Pi,
             _ => bail!("unknown agent {value:?}; expected codex or claude-code"),
         };
         selected.insert(agent);
@@ -377,9 +415,55 @@ fn inspect(
                 detail: "detected; start its server and use `af collect opencode` per session"
                     .to_string(),
             }),
+            #[cfg(feature = "experimental-pi")]
+            Agent::Pi => plans.push(inspect_pi(&pi_extension_path(&home))),
         }
     }
     Ok(plans)
+}
+
+/// Pi's agent directory: `$PI_CODING_AGENT_DIR` (with a leading `~`
+/// expanded, as Pi does), else `~/.pi/agent`. Mirrors `getAgentDir()` in
+/// Pi's `config.js`. Takes the variable's value so tests need not touch the
+/// process environment.
+#[cfg(feature = "experimental-pi")]
+fn pi_agent_dir(home: &Path, env_dir: Option<std::ffi::OsString>) -> PathBuf {
+    match env_dir.filter(|value| !value.is_empty()) {
+        Some(value) => {
+            let value = PathBuf::from(value);
+            match value.strip_prefix("~") {
+                Ok(rest) => home.join(rest),
+                Err(_) => value,
+            }
+        }
+        None => home.join(".pi").join("agent"),
+    }
+}
+
+/// Where `af setup` installs the Pi collector: Pi's global extensions
+/// directory, so every Pi session in every project loads it.
+#[cfg(feature = "experimental-pi")]
+pub(crate) fn pi_extension_path(home: &Path) -> PathBuf {
+    pi_agent_dir(home, env::var_os("PI_CODING_AGENT_DIR"))
+        .join("extensions")
+        .join(PI_EXTENSION_FILE)
+}
+
+/// Whether the installed extension is this build's collector. An older or
+/// edited copy is replaced (after a backup) rather than reported as a
+/// conflict: the file is af's own, under an af-owned name.
+#[cfg(feature = "experimental-pi")]
+fn inspect_pi(path: &Path) -> Plan {
+    if fs::read_to_string(path).ok().as_deref() == Some(PI_EXTENSION) {
+        Plan::Ready {
+            agent: Agent::Pi,
+            detail: format!("collector extension installed at {}", path.display()),
+        }
+    } else {
+        Plan::Change(Change::PiExtension {
+            path: path.to_path_buf(),
+        })
+    }
 }
 
 fn inspect_codex(path: &Path, endpoint: &str) -> Result<Plan> {
@@ -896,6 +980,8 @@ fn apply_change(change: &Change) -> Result<()> {
             write_config(path, CLAUDE_HOOK.as_bytes())?;
             make_executable(path)
         }
+        #[cfg(feature = "experimental-pi")]
+        Change::PiExtension { path } => write_config(path, PI_EXTENSION.as_bytes()),
     }
 }
 
@@ -1282,5 +1368,57 @@ mod tests {
     fn experimental_agent_selection_accepts_opencode() {
         let selected = selected_agents(Some("opencode")).unwrap();
         assert!(selected.contains(&Agent::OpenCode));
+    }
+
+    #[cfg(feature = "experimental-pi")]
+    #[test]
+    fn pi_is_selectable_and_its_agent_dir_follows_pi() {
+        assert!(selected_agents(Some("pi")).unwrap().contains(&Agent::Pi));
+        assert!(selected_agents(None).unwrap().contains(&Agent::Pi));
+        let home = Path::new("/home/u");
+        assert_eq!(pi_agent_dir(home, None), home.join(".pi").join("agent"));
+        assert_eq!(
+            pi_agent_dir(home, Some("".into())),
+            home.join(".pi").join("agent")
+        );
+        assert_eq!(
+            pi_agent_dir(home, Some("/opt/pi".into())),
+            PathBuf::from("/opt/pi")
+        );
+        assert_eq!(
+            pi_agent_dir(home, Some("~/custom/pi".into())),
+            home.join("custom").join("pi")
+        );
+    }
+
+    #[cfg(feature = "experimental-pi")]
+    #[test]
+    fn pi_extension_is_installed_then_ready_and_an_old_copy_is_replaced() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("extensions").join(PI_EXTENSION_FILE);
+
+        let plan = inspect_pi(&path);
+        assert_eq!(plan_kind(&plan), "change");
+        let Plan::Change(change) = plan else {
+            unreachable!()
+        };
+        apply_change(&change).unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), PI_EXTENSION);
+        assert_eq!(plan_kind(&inspect_pi(&path)), "ready");
+
+        std::fs::write(&path, "// older collector\n").unwrap();
+        let Plan::Change(change) = inspect_pi(&path) else {
+            panic!("an old copy must be replaced")
+        };
+        apply_change(&change).unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), PI_EXTENSION);
+        // The old copy is backed up under a name Pi does not load (*.ts only).
+        let backups: Vec<_> = std::fs::read_dir(path.parent().unwrap())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+            .filter(|name| name.contains(".bak."))
+            .collect();
+        assert_eq!(backups.len(), 1);
+        assert!(!backups[0].ends_with(".ts"));
     }
 }
