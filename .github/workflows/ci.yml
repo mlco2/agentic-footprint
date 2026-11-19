@@ -149,6 +149,10 @@ jobs:
           cargo run --locked -q -p af-cli -- setup --help > /tmp/af-setup-help
           ! grep -qi opencode /tmp/af-setup-help
       - run: cargo test -p af-cli --features experimental-opencode
+      # The fixture script builds its own af with experimental-opencode; it
+      # was broken for a while without CI noticing.
+      - name: OpenCode collector fixture tests
+        run: collectors/opencode/test_collector.sh
       - name: claude-code hook collector tests
         run: collectors/claude-code/test_hooks.sh
       - name: statusline bar tests
