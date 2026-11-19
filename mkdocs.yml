@@ -66,6 +66,7 @@ nav:
       - Install and configure: how-to/installation.md
       - Claude Code: how-to/claude-code.md
       - Codex: how-to/codex.md
+      - Pi (experimental): how-to/pi.md
       - Open the debug console: how-to/debug-console.md
       - Use af from another program: how-to/integrate.md
       - Verify releases: how-to/verify-release.md
