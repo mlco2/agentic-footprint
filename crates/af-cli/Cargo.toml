@@ -17,6 +17,12 @@ experimental-opencode = []
 name = "af"
 path = "src/main.rs"
 
+# `af collect opencode` only exists with this feature; without it the live
+# test compiled, its collector exited at once, and the test timed out.
+[[test]]
+name = "live_opencode"
+required-features = ["experimental-opencode"]
+
 [dependencies]
 clap.workspace = true
 anyhow.workspace = true

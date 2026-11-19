@@ -41,7 +41,7 @@ collectors/opencode/test_collector.sh
 
 # Compile every manual live test without running it.
 cargo test -p af-cli --test live_claude_code --no-run
-cargo test -p af-cli --test live_opencode --no-run
+cargo test -p af-cli --features experimental-opencode --test live_opencode --no-run
 cargo test -p af-cli --test live_codex --no-run
 ```
 

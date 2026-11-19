@@ -2,12 +2,52 @@ mod common;
 
 use common::live::{spooled_session_id, state_dir, wait_until, LiveWatch};
 use serde_json::Value;
+use std::io::Read;
 use std::net::{SocketAddr, TcpListener, TcpStream};
+use std::ops::{Deref, DerefMut};
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::time::Duration;
 
 const SETTLE: Duration = Duration::from_secs(60);
+
+/// A child process killed when the test ends, panics included: dropping a
+/// bare `Child` leaves it running, so a failed run used to leak the
+/// OpenCode server and a collector reconnecting forever.
+struct KillOnDrop(Child);
+
+impl Deref for KillOnDrop {
+    type Target = Child;
+    fn deref(&self) -> &Child {
+        &self.0
+    }
+}
+
+impl DerefMut for KillOnDrop {
+    fn deref_mut(&mut self) -> &mut Child {
+        &mut self.0
+    }
+}
+
+impl Drop for KillOnDrop {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+/// Panics with the collector's exit status and stderr if it has exited, so
+/// an early failure (missing subcommand, bad flag, cursor error) is reported
+/// as itself instead of a 60s timeout.
+fn assert_collector_alive(capture: &mut Child) {
+    if let Ok(Some(status)) = capture.try_wait() {
+        let mut stderr = String::new();
+        if let Some(mut pipe) = capture.stderr.take() {
+            let _ = pipe.read_to_string(&mut stderr);
+        }
+        panic!("OpenCode collector exited early ({status}); stderr:\n{stderr}");
+    }
+}
 
 #[test]
 #[ignore = "live: starts OpenCode and may use a real provider — run scripts/test-live.sh opencode"]
@@ -21,7 +61,7 @@ fn durable_sse_reaches_debug_console() {
     .expect("write fixture");
     let watch = LiveWatch::start(dir.path(), &["--no-sidecars"]);
     let addr = free_addr();
-    let mut server = start_server(project.path(), addr);
+    let server = KillOnDrop(start_server(project.path(), addr));
 
     wait_until(SETTLE, "OpenCode server", || {
         TcpStream::connect(addr).ok().map(|_| ())
@@ -32,20 +72,22 @@ fn durable_sse_reaches_debug_console() {
         .expect("OpenCode session id")
         .to_string();
 
-    let mut capture = Command::new(env!("CARGO_BIN_EXE_af"))
-        .env("AF_STATE_DIR", dir.path())
-        .args(["collect", "opencode"])
-        .args(["--url", &format!("http://{addr}"), "--session-id", &sid])
-        .args(["--directory", &project.path().to_string_lossy()])
-        // OpenCode's cursor is exclusive. Starting after sequence 0 replays
-        // every post-create durable event, so a fast step start cannot race
-        // the collector process startup.
-        .args(["--after", "0"])
-        .args(["--pid", &server.id().to_string()])
-        .stdout(Stdio::null())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("spawn OpenCode collector");
+    let mut capture = KillOnDrop(
+        Command::new(env!("CARGO_BIN_EXE_af"))
+            .env("AF_STATE_DIR", dir.path())
+            .args(["collect", "opencode"])
+            .args(["--url", &format!("http://{addr}"), "--session-id", &sid])
+            .args(["--directory", &project.path().to_string_lossy()])
+            // OpenCode's cursor is exclusive. Starting after sequence 0 replays
+            // every post-create durable event, so a fast step start cannot race
+            // the collector process startup.
+            .args(["--after", "0"])
+            .args(["--pid", &server.id().to_string()])
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("spawn OpenCode collector"),
+    );
 
     post_json(
         addr,
@@ -55,6 +97,7 @@ fn durable_sse_reaches_debug_console() {
     );
 
     wait_until(SETTLE, "OpenCode llm_call spool event", || {
+        assert_collector_alive(&mut capture);
         let path = dir
             .path()
             .join("spool")
@@ -81,10 +124,8 @@ fn durable_sse_reaches_debug_console() {
         })
     });
 
-    let _ = capture.kill();
-    let _ = capture.wait();
-    let _ = server.kill();
-    let _ = server.wait();
+    drop(capture);
+    drop(server);
     watch.terminate();
 }
 
@@ -124,8 +165,10 @@ fn start_server(project: &Path, addr: SocketAddr) -> Child {
             &addr.port().to_string(),
         ])
         .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
+        // Never read: a piped stream would block a chatty server once the
+        // pipe buffer filled.
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
         .spawn()
         .expect("spawn OpenCode server")
 }
