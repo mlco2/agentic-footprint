@@ -12,6 +12,7 @@ description = "Environmental impact measurement and attribution for coding agent
 [features]
 default = []
 experimental-opencode = []
+experimental-pi = []
 
 [[bin]]
 name = "af"

@@ -372,7 +372,15 @@ pub(crate) enum AgentId {
     Codex,
     #[cfg(feature = "experimental-opencode")]
     OpenCode,
+    #[cfg(feature = "experimental-pi")]
+    Pi,
 }
+
+/// Collector name of the Pi extension (`collectors/pi/af-collector.ts`) and
+/// the prefix of its spool files. The collector is TypeScript running inside
+/// Pi, so there is no Rust module to own this constant.
+#[cfg(feature = "experimental-pi")]
+pub(crate) const PI_COLLECTOR_NAME: &str = "pi";
 
 impl AgentId {
     pub(crate) fn all() -> Vec<AgentId> {
@@ -381,6 +389,8 @@ impl AgentId {
             AgentId::Codex,
             #[cfg(feature = "experimental-opencode")]
             AgentId::OpenCode,
+            #[cfg(feature = "experimental-pi")]
+            AgentId::Pi,
         ]
     }
 
@@ -391,6 +401,8 @@ impl AgentId {
             AgentId::Codex => "codex",
             #[cfg(feature = "experimental-opencode")]
             AgentId::OpenCode => "opencode",
+            #[cfg(feature = "experimental-pi")]
+            AgentId::Pi => "pi",
         }
     }
 
@@ -400,6 +412,8 @@ impl AgentId {
             AgentId::Codex => "Codex",
             #[cfg(feature = "experimental-opencode")]
             AgentId::OpenCode => "OpenCode",
+            #[cfg(feature = "experimental-pi")]
+            AgentId::Pi => "Pi",
         }
     }
 
@@ -410,6 +424,8 @@ impl AgentId {
             AgentId::Codex => "codex",
             #[cfg(feature = "experimental-opencode")]
             AgentId::OpenCode => "opencode",
+            #[cfg(feature = "experimental-pi")]
+            AgentId::Pi => "pi",
         }
     }
 }
@@ -427,6 +443,8 @@ pub(crate) fn agent_for_collector(collector: &str) -> Option<AgentId> {
         "codex" => Some(AgentId::Codex),
         #[cfg(feature = "experimental-opencode")]
         super::opencode::COLLECTOR_NAME => Some(AgentId::OpenCode),
+        #[cfg(feature = "experimental-pi")]
+        PI_COLLECTOR_NAME => Some(AgentId::Pi),
         other if other.starts_with("otlp-codex") => Some(AgentId::Codex),
         _ => None,
     }
@@ -456,6 +474,10 @@ pub(crate) fn inspect_user_config(agent: AgentId, home: &Path, logs_endpoint: &s
         // No config file and no OTLP path: collected per session.
         #[cfg(feature = "experimental-opencode")]
         AgentId::OpenCode => UserConfig::Absent,
+        // The collector is an extension Pi loads (`pi --extension …`); there
+        // is no af-owned config to inspect yet.
+        #[cfg(feature = "experimental-pi")]
+        AgentId::Pi => UserConfig::Absent,
     }
 }
 
@@ -911,6 +933,8 @@ fn judge_process(
         }
         #[cfg(feature = "experimental-opencode")]
         AgentId::OpenCode => None,
+        #[cfg(feature = "experimental-pi")]
+        AgentId::Pi => None,
     };
     let Some((config, modified)) = judged else {
         return;
@@ -1227,6 +1251,13 @@ fn global_state(facts: &AgentFacts) -> (&'static str, Option<String>) {
         }
         #[cfg(feature = "experimental-opencode")]
         (_, false) if facts.agent == AgentId::OpenCode => ("not_installed", None),
+        #[cfg(feature = "experimental-pi")]
+        (_, true) if facts.agent == AgentId::Pi => (
+            "waiting",
+            Some("pi --extension collectors/pi/af-collector.ts".to_string()),
+        ),
+        #[cfg(feature = "experimental-pi")]
+        (_, false) if facts.agent == AgentId::Pi => ("not_installed", None),
         (UserConfig::Configured { .. }, _) if has_stale => (
             "needs_restart",
             Some(format!("restart {}", facts.agent.command())),
@@ -2475,6 +2506,27 @@ mod tests {
             agent_row(&opencode(false), Some(&active()))["state"],
             "receiving"
         );
+    }
+
+    #[cfg(feature = "experimental-pi")]
+    #[test]
+    fn pi_is_recognised_from_its_spool_and_has_three_states() {
+        let pi = |installed| AgentFacts {
+            agent: AgentId::Pi,
+            installed,
+            config: UserConfig::Absent,
+            processes: None,
+        };
+        assert_eq!(agent_for_collector("pi"), Some(AgentId::Pi));
+        assert_eq!(AgentId::Pi.name(), "Pi");
+        let waiting = agent_row(&pi(true), None);
+        assert_eq!(waiting["state"], "waiting");
+        assert_eq!(
+            waiting["action"],
+            "pi --extension collectors/pi/af-collector.ts"
+        );
+        assert_eq!(agent_row(&pi(false), None)["state"], "not_installed");
+        assert_eq!(agent_row(&pi(false), Some(&active()))["state"], "receiving");
     }
 
     #[test]
