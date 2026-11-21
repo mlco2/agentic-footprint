@@ -349,7 +349,12 @@ fn setup_with_uv(
     exclude_newer: Option<&str>,
 ) -> Result<()> {
     let venv_status = uv(workdir)
-        .args(["venv", "--python", &manifest.python.version])
+        .args([
+            "venv",
+            "--allow-existing",
+            "--python",
+            &manifest.python.version,
+        ])
         .arg(venv)
         .status()
         .context("failed to run `uv venv`")?;
