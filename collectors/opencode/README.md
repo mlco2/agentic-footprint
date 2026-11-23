@@ -1,9 +1,26 @@
 # OpenCode collector
 
-OpenCode collection is experimental: `af collect opencode` exists only in a
-build with `--features experimental-opencode`, and there is no user guide for
-it yet. The live test procedure is in
+OpenCode collection is experimental: it exists only in a build with
+`--features experimental-opencode`, and there is no user guide for it yet.
+The live test procedure is in
 [`docs/contributing/testing-live.md`](../../docs/contributing/testing-live.md).
+
+There are two collectors:
+
+- **The plugin** (`af-plugin.ts`, temporary), which `af setup` installs as
+  `agentic-footprint.ts` in OpenCode's global plugin directory
+  (`$XDG_CONFIG_HOME/opencode/plugin/`, default `~/.config/opencode/plugin/`).
+  It turns OpenCode's bus events into facts: `session.created` →
+  `session_meta`, each `step-finish` part → one `llm_call` (provider and
+  model from its assistant message), each completed or failed tool part →
+  one `action_span`. It reads no prompts, text, tool inputs, outputs or
+  error messages. Checked live on OpenCode 1.19.5 (`opencode run`). A model
+  call that fails before its step finishes is not counted. Tests:
+  `node --test collectors/opencode/af-plugin.test.ts`.
+- **`af collect opencode`** (below), which follows OpenCode's durable
+  per-session event stream. Released OpenCode (1.19.5) only writes that
+  stream for sessions created through `/api/session`, not for the TUI's or
+  `opencode run`'s sessions, so the plugin is what collects in practice.
 
 `af collect opencode` subscribes to OpenCode's durable per-session SSE route
 and appends raw Contract #1 facts to

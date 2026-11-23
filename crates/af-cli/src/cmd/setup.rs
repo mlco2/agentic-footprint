@@ -11,6 +11,15 @@ use serde_json::{json, Map, Value};
 use super::DEFAULT_LOGS_ENDPOINT;
 
 const CLAUDE_HOOK: &str = include_str!("../../../../collectors/claude-code/af-hook.sh");
+/// The OpenCode collector plugin, installed into OpenCode's global plugin
+/// directory, where OpenCode loads every file at startup. It writes facts
+/// from OpenCode's bus events (temporary: released OpenCode sessions do not
+/// write the durable stream `af collect opencode` reads).
+#[cfg(feature = "experimental-opencode")]
+pub(crate) const OPENCODE_PLUGIN: &str =
+    include_str!("../../../../collectors/opencode/af-plugin.ts");
+#[cfg(feature = "experimental-opencode")]
+const OPENCODE_PLUGIN_FILE: &str = "agentic-footprint.ts";
 const CLAUDE_EVENTS: &[&str] = &[
     "SessionStart",
     "PreToolUse",
@@ -81,30 +90,29 @@ impl Agent {
 
 #[derive(Debug)]
 enum Plan {
-    Ready {
-        agent: Agent,
-        detail: String,
-    },
+    Ready { agent: Agent, detail: String },
     Change(Change),
-    Conflict {
-        agent: Agent,
-        detail: String,
-    },
-    #[cfg(feature = "experimental-opencode")]
-    Guidance {
-        agent: Agent,
-        detail: String,
-    },
-    Missing {
-        agent: Agent,
-    },
+    Conflict { agent: Agent, detail: String },
+    Missing { agent: Agent },
 }
 
 #[derive(Debug)]
 enum Change {
-    Codex { path: PathBuf, contents: String },
-    ClaudeHook { path: PathBuf },
-    ClaudeSettings { path: PathBuf, contents: String },
+    Codex {
+        path: PathBuf,
+        contents: String,
+    },
+    ClaudeHook {
+        path: PathBuf,
+    },
+    ClaudeSettings {
+        path: PathBuf,
+        contents: String,
+    },
+    #[cfg(feature = "experimental-opencode")]
+    OpenCodePlugin {
+        path: PathBuf,
+    },
 }
 
 impl Change {
@@ -112,6 +120,8 @@ impl Change {
         match self {
             Self::Codex { .. } => Agent::Codex,
             Self::ClaudeHook { .. } | Self::ClaudeSettings { .. } => Agent::ClaudeCode,
+            #[cfg(feature = "experimental-opencode")]
+            Self::OpenCodePlugin { .. } => Agent::OpenCode,
         }
     }
 
@@ -123,6 +133,10 @@ impl Change {
             }
             Self::ClaudeSettings { path, .. } => {
                 format!("merge hooks and OTLP environment into {}", path.display())
+            }
+            #[cfg(feature = "experimental-opencode")]
+            Self::OpenCodePlugin { path } => {
+                format!("install the collector plugin at {}", path.display())
             }
         }
     }
@@ -308,8 +322,6 @@ fn print_plans(plans: &[Plan]) {
                 println!("  • {:<12} {}", change.agent().name(), change.description())
             }
             Plan::Conflict { agent, detail } => println!("  ! {:<12} {detail}", agent.name()),
-            #[cfg(feature = "experimental-opencode")]
-            Plan::Guidance { agent, detail } => println!("  → {:<12} {detail}", agent.name()),
             Plan::Missing { agent } => println!("  – {:<12} not installed", agent.name()),
         }
     }
@@ -372,14 +384,47 @@ fn inspect(
                 plans.extend(inspect_claude(state_dir, &home, project, global, endpoint)?)
             }
             #[cfg(feature = "experimental-opencode")]
-            Agent::OpenCode => plans.push(Plan::Guidance {
-                agent: Agent::OpenCode,
-                detail: "detected; start its server and use `af collect opencode` per session"
-                    .to_string(),
-            }),
+            Agent::OpenCode => plans.push(inspect_opencode(&opencode_plugin_path(&home))),
         }
     }
     Ok(plans)
+}
+
+/// OpenCode's global config directory: `$XDG_CONFIG_HOME/opencode`, else
+/// `~/.config/opencode` (OpenCode resolves it with xdg-basedir, on every
+/// platform). Takes the variable's value so tests need not touch the
+/// process environment.
+#[cfg(feature = "experimental-opencode")]
+fn opencode_config_dir(home: &Path, xdg_config_home: Option<std::ffi::OsString>) -> PathBuf {
+    match xdg_config_home.filter(|value| !value.is_empty()) {
+        Some(value) => PathBuf::from(value).join("opencode"),
+        None => home.join(".config").join("opencode"),
+    }
+}
+
+/// Where `af setup` installs the OpenCode plugin: the global plugin
+/// directory, so every OpenCode session in every project loads it.
+#[cfg(feature = "experimental-opencode")]
+pub(crate) fn opencode_plugin_path(home: &Path) -> PathBuf {
+    opencode_config_dir(home, env::var_os("XDG_CONFIG_HOME"))
+        .join("plugin")
+        .join(OPENCODE_PLUGIN_FILE)
+}
+
+/// Whether the installed plugin is this build's. An older or edited copy is
+/// replaced after a backup: the file is af's own, under an af-owned name.
+#[cfg(feature = "experimental-opencode")]
+fn inspect_opencode(path: &Path) -> Plan {
+    if fs::read_to_string(path).ok().as_deref() == Some(OPENCODE_PLUGIN) {
+        Plan::Ready {
+            agent: Agent::OpenCode,
+            detail: format!("collector plugin installed at {}", path.display()),
+        }
+    } else {
+        Plan::Change(Change::OpenCodePlugin {
+            path: path.to_path_buf(),
+        })
+    }
 }
 
 fn inspect_codex(path: &Path, endpoint: &str) -> Result<Plan> {
@@ -896,12 +941,28 @@ fn apply_change(change: &Change) -> Result<()> {
             write_config(path, CLAUDE_HOOK.as_bytes())?;
             make_executable(path)
         }
+        #[cfg(feature = "experimental-opencode")]
+        Change::OpenCodePlugin { path } => {
+            // OpenCode loads every file in plugin/, and a stray backup there
+            // hangs it at startup: back up into the config directory above.
+            let backups = path
+                .parent()
+                .and_then(Path::parent)
+                .unwrap_or(Path::new("."));
+            write_config_with_backup_in(path, OPENCODE_PLUGIN.as_bytes(), backups)
+        }
     }
 }
 
 fn write_config(path: &Path, bytes: &[u8]) -> Result<()> {
+    write_config_with_backup_in(path, bytes, path.parent().unwrap_or(Path::new(".")))
+}
+
+/// Like [`write_config`], with the backup of an existing file in
+/// `backup_dir` instead of beside it.
+fn write_config_with_backup_in(path: &Path, bytes: &[u8], backup_dir: &Path) -> Result<()> {
     if path.exists() {
-        let backup = backup_path(path);
+        let backup = backup_dir.join(backup_path(path).file_name().unwrap_or_default());
         fs::copy(path, &backup)
             .with_context(|| format!("back up {} to {}", path.display(), backup.display()))?;
         println!("  backup: {}", backup.display());
@@ -945,8 +1006,6 @@ mod tests {
             Plan::Ready { .. } => "ready",
             Plan::Change(_) => "change",
             Plan::Conflict { .. } => "conflict",
-            #[cfg(feature = "experimental-opencode")]
-            Plan::Guidance { .. } => "guidance",
             Plan::Missing { .. } => "missing",
         }
     }
@@ -1282,5 +1341,60 @@ mod tests {
     fn experimental_agent_selection_accepts_opencode() {
         let selected = selected_agents(Some("opencode")).unwrap();
         assert!(selected.contains(&Agent::OpenCode));
+    }
+
+    #[cfg(feature = "experimental-opencode")]
+    #[test]
+    fn opencode_config_dir_follows_xdg_config_home() {
+        let home = Path::new("/home/u");
+        assert_eq!(
+            opencode_config_dir(home, None),
+            home.join(".config").join("opencode")
+        );
+        assert_eq!(
+            opencode_config_dir(home, Some("".into())),
+            home.join(".config").join("opencode")
+        );
+        assert_eq!(
+            opencode_config_dir(home, Some("/xdg".into())),
+            PathBuf::from("/xdg").join("opencode")
+        );
+    }
+
+    #[cfg(feature = "experimental-opencode")]
+    #[test]
+    fn opencode_plugin_is_installed_then_ready_and_an_old_copy_is_replaced() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("plugin").join(OPENCODE_PLUGIN_FILE);
+
+        let Plan::Change(change) = inspect_opencode(&path) else {
+            panic!("a missing plugin must be installed")
+        };
+        apply_change(&change).unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), OPENCODE_PLUGIN);
+        assert_eq!(plan_kind(&inspect_opencode(&path)), "ready");
+
+        std::fs::write(&path, "// older plugin\n").unwrap();
+        let Plan::Change(change) = inspect_opencode(&path) else {
+            panic!("an old copy must be replaced")
+        };
+        apply_change(&change).unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), OPENCODE_PLUGIN);
+        // OpenCode loads every file in plugin/ (a stray backup there hangs
+        // it at startup, seen live on 1.19.5), so the backup goes one level
+        // up, in OpenCode's config directory.
+        let names = |dir: &Path| -> Vec<String> {
+            std::fs::read_dir(dir)
+                .unwrap()
+                .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+                .collect()
+        };
+        assert_eq!(names(path.parent().unwrap()), vec![OPENCODE_PLUGIN_FILE]);
+        let config_dir = path.parent().unwrap().parent().unwrap();
+        let backups: Vec<_> = names(config_dir)
+            .into_iter()
+            .filter(|name| name.contains(".bak."))
+            .collect();
+        assert_eq!(backups.len(), 1);
     }
 }

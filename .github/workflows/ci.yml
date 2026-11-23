@@ -153,6 +153,13 @@ jobs:
       # was broken for a while without CI noticing.
       - name: OpenCode collector fixture tests
         run: collectors/opencode/test_collector.sh
+      # The OpenCode plugin is TypeScript run directly by Node (type
+      # stripping needs Node >= 23.6).
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+      - name: OpenCode plugin tests
+        run: node --test collectors/opencode/af-plugin.test.ts
       - name: claude-code hook collector tests
         run: collectors/claude-code/test_hooks.sh
       - name: statusline bar tests

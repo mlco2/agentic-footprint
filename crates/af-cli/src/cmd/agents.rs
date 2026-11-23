@@ -453,9 +453,10 @@ pub(crate) fn inspect_user_config(agent: AgentId, home: &Path, logs_endpoint: &s
     match agent {
         AgentId::ClaudeCode => claude_config_for(home, None, logs_endpoint).0,
         AgentId::Codex => inspect_codex_file(&setup::codex_config_path(home), logs_endpoint),
-        // No config file and no OTLP path: collected per session.
+        // The plugin `af setup` installs starts a collector per session; its
+        // presence is the configuration.
         #[cfg(feature = "experimental-opencode")]
-        AgentId::OpenCode => UserConfig::Absent,
+        AgentId::OpenCode => inspect_opencode_plugin(&setup::opencode_plugin_path(home)),
     }
 }
 
@@ -688,6 +689,21 @@ pub(crate) fn codex_config_for(
         .and_then(|meta| meta.modified())
         .ok();
     (inspect_codex_file(&path, logs_endpoint), modified)
+}
+
+#[cfg(feature = "experimental-opencode")]
+fn inspect_opencode_plugin(path: &Path) -> UserConfig {
+    match read_config(path) {
+        Ok(None) => UserConfig::Absent,
+        Ok(Some(contents)) if contents == setup::OPENCODE_PLUGIN => UserConfig::Configured {
+            path: path.to_path_buf(),
+        },
+        Ok(Some(_)) => UserConfig::Misconfigured {
+            path: path.to_path_buf(),
+            detail: "the collector plugin is from another af version".to_string(),
+        },
+        Err(unreadable) => unreadable,
+    }
 }
 
 fn inspect_codex_file(path: &Path, logs_endpoint: &str) -> UserConfig {
@@ -1221,12 +1237,6 @@ fn global_state(facts: &AgentFacts) -> (&'static str, Option<String>) {
         .as_ref()
         .is_some_and(|processes| processes.iter().any(|process| process.stale));
     match (&facts.config, facts.installed) {
-        #[cfg(feature = "experimental-opencode")]
-        (_, true) if facts.agent == AgentId::OpenCode => {
-            ("waiting", Some("af collect opencode".to_string()))
-        }
-        #[cfg(feature = "experimental-opencode")]
-        (_, false) if facts.agent == AgentId::OpenCode => ("not_installed", None),
         (UserConfig::Configured { .. }, _) if has_stale => (
             "needs_restart",
             Some(format!("restart {}", facts.agent.command())),
@@ -2459,22 +2469,32 @@ mod tests {
 
     #[cfg(feature = "experimental-opencode")]
     #[test]
-    fn opencode_has_three_states_only() {
+    fn opencode_is_configured_by_its_plugin() {
+        assert_eq!(agent_for_collector("opencode"), Some(AgentId::OpenCode));
+        let dir = tempfile::tempdir().unwrap();
+        let plugin = dir.path().join("plugin").join("agentic-footprint.ts");
         let opencode = |installed| AgentFacts {
             agent: AgentId::OpenCode,
             installed,
-            config: UserConfig::Absent,
+            config: inspect_opencode_plugin(&plugin),
             processes: None,
         };
-        assert_eq!(agent_for_collector("opencode"), Some(AgentId::OpenCode));
-        let waiting = agent_row(&opencode(true), None);
-        assert_eq!(waiting["state"], "waiting");
-        assert_eq!(waiting["action"], "af collect opencode");
+
+        let absent = agent_row(&opencode(true), None);
+        assert_eq!(absent["state"], "not_configured");
+        assert_eq!(absent["action"], "af setup");
         assert_eq!(agent_row(&opencode(false), None)["state"], "not_installed");
+
+        std::fs::create_dir_all(plugin.parent().unwrap()).unwrap();
+        std::fs::write(&plugin, setup::OPENCODE_PLUGIN).unwrap();
+        assert_eq!(agent_row(&opencode(true), None)["state"], "waiting");
         assert_eq!(
-            agent_row(&opencode(false), Some(&active()))["state"],
+            agent_row(&opencode(true), Some(&active()))["state"],
             "receiving"
         );
+
+        std::fs::write(&plugin, "// older plugin\n").unwrap();
+        assert_eq!(agent_row(&opencode(true), None)["state"], "misconfigured");
     }
 
     #[test]

@@ -69,6 +69,11 @@ Leave any of these that you set yourself for another telemetry receiver.
 `[otel]` table that follows the comment
 `# agentic-footprint: native Codex OTLP logs.`
 
+**OpenCode** (experimental builds only): the collector plugin
+`agentic-footprint.ts` in OpenCode's plugin directory
+(`$XDG_CONFIG_HOME/opencode/plugin/`, or `~/.config/opencode/plugin/`), and
+any `agentic-footprint.ts.bak.*` copies in the directory above it.
+
 Restart the agents afterwards: a running session keeps the configuration it
 started with.
 
