@@ -18,10 +18,12 @@
 //! reads transcripts — only the hook JSON on stdin.
 //!
 //! Registered as a bare executable command (`"<af> hook"`, no shell
-//! wrapper) deliberately: Claude Code then spawns it as a direct child, so
-//! this process's parent PID *is* the Claude Code process, and that PID —
-//! carried on the SessionStart bootstrap span's `pids` — is what makes
-//! process-tree energy attribution work.
+//! wrapper) deliberately: Claude Code then usually spawns it as a direct
+//! child, so this process's parent PID is the Claude Code process, and
+//! that PID — carried on the SessionStart bootstrap span's `pids` — is what
+//! makes process-tree energy attribution work. Some Claude Code versions
+//! still run the command through a shell; [`session_root`] then reports the
+//! shell's parent instead of the short-lived shell.
 //!
 //! `session_id` and `tool_use_id` come straight from Claude Code's hook
 //! JSON and are used to build file paths (spool filename, open-span
@@ -97,7 +99,7 @@ pub fn handle(state_dir: &Path, input: &str, now_ms: i64) -> Result<()> {
             // Looked up here, not in `run`: the lookup walks a process
             // snapshot on Windows, and every other (per-tool-call, session-
             // blocking) event has no use for it.
-            let ppid = parent_pid();
+            let ppid = parent_pid().map(|pid| session_root(pid, process_name_and_parent));
             emit(
                 state_dir,
                 &session_id,
@@ -435,6 +437,75 @@ fn parent_pid() -> Option<u32> {
     Some(std::os::unix::process::parent_id())
 }
 
+/// Shells that may run a hook command without exec'ing it.
+const SHELLS: &[&str] = &["sh", "bash", "dash", "zsh", "ash", "ksh"];
+
+/// The pid that stands for the Claude Code session: the hook's parent, or,
+/// when that parent is a shell wrapping the hook command, the shell's own
+/// parent. Some Claude Code versions run hook commands through a shell
+/// that outlives the hook by milliseconds only; its pid would be gone by
+/// the time the sampler looks, and the session would get no energy. A
+/// shell whose parent is init (or unknown) is kept: there is no session
+/// process above it.
+fn session_root(parent: u32, lookup: impl Fn(u32) -> Option<(String, u32)>) -> u32 {
+    match lookup(parent) {
+        Some((name, grandparent))
+            if grandparent > 1 && SHELLS.contains(&name.trim_start_matches('-')) =>
+        {
+            grandparent
+        }
+        _ => parent,
+    }
+}
+
+/// `(name, parent pid)` from a `/proc/<pid>/stat` line. The name sits in
+/// parentheses and may itself hold spaces and parentheses, so the split is
+/// at the last `)`.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn parse_proc_stat(line: &str) -> Option<(String, u32)> {
+    let open = line.find('(')?;
+    let close = line.rfind(')')?;
+    let name = line.get(open + 1..close)?.to_string();
+    let mut rest = line.get(close + 1..)?.split_whitespace();
+    let _state = rest.next()?;
+    let ppid = rest.next()?.parse().ok()?;
+    Some((name, ppid))
+}
+
+/// `(executable name, parent pid)` from `ps -o ppid=,comm=` output; macOS
+/// prints the full path, which may hold spaces.
+#[cfg_attr(any(target_os = "linux", windows), allow(dead_code))]
+fn parse_ps_ppid_comm(output: &str) -> Option<(String, u32)> {
+    let line = output.trim();
+    let (ppid, comm) = line.split_once(char::is_whitespace)?;
+    let comm = comm.trim();
+    let name = comm.rsplit('/').next().filter(|n| !n.is_empty())?;
+    Some((name.to_string(), ppid.parse().ok()?))
+}
+
+#[cfg(target_os = "linux")]
+fn process_name_and_parent(pid: u32) -> Option<(String, u32)> {
+    parse_proc_stat(&std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?)
+}
+
+/// Only SessionStart pays for this `ps`, never a per-tool-call event.
+#[cfg(all(unix, not(target_os = "linux")))]
+fn process_name_and_parent(pid: u32) -> Option<(String, u32)> {
+    let output = std::process::Command::new("ps")
+        .args(["-o", "ppid=,comm=", "-p", &pid.to_string()])
+        .stderr(std::process::Stdio::null())
+        .output()
+        .ok()?;
+    output.status.success().then_some(())?;
+    parse_ps_ppid_comm(&String::from_utf8_lossy(&output.stdout))
+}
+
+/// Windows hooks are not run through a POSIX shell: the parent is kept.
+#[cfg(windows)]
+fn process_name_and_parent(_pid: u32) -> Option<(String, u32)> {
+    None
+}
+
 /// Windows has no getppid; walk a Toolhelp process snapshot for our own
 /// entry's `th32ParentProcessID`.
 #[cfg(windows)]
@@ -555,5 +626,71 @@ mod tests {
         assert_eq!(json_string(Some(&json!("sess")), "d"), "sess");
         assert_eq!(json_string(Some(&json!(5)), "d"), "5");
         assert_eq!(json_string(Some(&json!(true)), "d"), "true");
+    }
+
+    fn lookup<'a>(table: &'a [(u32, &'a str, u32)]) -> impl Fn(u32) -> Option<(String, u32)> + 'a {
+        move |pid| {
+            table
+                .iter()
+                .find(|(p, _, _)| *p == pid)
+                .map(|(_, name, ppid)| (name.to_string(), *ppid))
+        }
+    }
+
+    #[test]
+    fn a_shell_wrapping_the_hook_is_skipped_for_its_parent() {
+        let table = [(100, "sh", 50), (50, "claude", 1)];
+        assert_eq!(session_root(100, lookup(&table)), 50);
+        let table = [(100, "bash", 50)];
+        assert_eq!(session_root(100, lookup(&table)), 50);
+        let table = [(100, "-zsh", 50)];
+        assert_eq!(session_root(100, lookup(&table)), 50);
+    }
+
+    #[test]
+    fn a_direct_claude_code_parent_is_kept() {
+        let table = [(100, "claude", 50), (50, "bash", 1)];
+        assert_eq!(session_root(100, lookup(&table)), 100);
+        let table = [(100, "claude-2.1.331-linux-x64", 50)];
+        assert_eq!(session_root(100, lookup(&table)), 100);
+    }
+
+    #[test]
+    fn an_unreadable_parent_or_a_shell_under_init_is_kept() {
+        assert_eq!(session_root(100, lookup(&[])), 100);
+        let table = [(100, "sh", 1)];
+        assert_eq!(session_root(100, lookup(&table)), 100);
+        let table = [(100, "sh", 0)];
+        assert_eq!(session_root(100, lookup(&table)), 100);
+    }
+
+    #[test]
+    fn proc_stat_lines_give_the_name_and_the_parent() {
+        assert_eq!(
+            parse_proc_stat("123 (sh) S 45 123 123 0"),
+            Some(("sh".to_string(), 45))
+        );
+        assert_eq!(
+            parse_proc_stat("123 (a (b) c) R 7 1 1"),
+            Some(("a (b) c".to_string(), 7))
+        );
+        assert_eq!(parse_proc_stat("garbage"), None);
+    }
+
+    #[test]
+    fn ps_lines_give_the_executable_name_and_the_parent() {
+        assert_eq!(
+            parse_ps_ppid_comm("  45 /bin/bash\n"),
+            Some(("bash".to_string(), 45))
+        );
+        assert_eq!(
+            parse_ps_ppid_comm("45 -zsh"),
+            Some(("-zsh".to_string(), 45))
+        );
+        assert_eq!(
+            parse_ps_ppid_comm("9 /Applications/My App/claude"),
+            Some(("claude".to_string(), 9))
+        );
+        assert_eq!(parse_ps_ppid_comm(""), None);
     }
 }

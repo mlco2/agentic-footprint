@@ -89,20 +89,23 @@ covered by the collector fixtures.
 
 Use an absolute path; `af-hook.sh` must be executable (`chmod +x`).
 
-### The `$PPID` trick — do not wrap the command in `sh -c '...'`
+### The session's root pid
 
 `command` above is the **direct path to the executable script**, not a
-`sh -c '...'` string. This matters: Claude Code spawns the `command` value
-as a *direct child process*. Verified empirically during this task's spike
-— a hook script that dumped `$$`/`$PPID`/`ps -ef` showed the shim's
-`$PPID` was exactly the pid of the running `claude` process itself, one
-level up, no intermediate shell in between. If the command were instead
-`"sh -c '/path/to/af-hook.sh'"`, the shim's parent would be that
-transient `sh -c` wrapper, not Claude Code — the trick would silently
-break. This is why `SessionStart`'s bootstrap `action_span` can report
-`pids: [$PPID]` as an (imperfect, but real) proxy for "the Claude Code
-process running this session," without any other way to discover that pid
-from the hook payload.
+`sh -c '...'` string. Claude Code usually spawns such a `command` as a
+*direct child process*: a spike that dumped `$$`/`$PPID`/`ps -ef` showed
+the shim's `$PPID` was the running `claude` process itself. That pid is
+what `SessionStart`'s bootstrap `action_span` reports in `pids`, as an
+(imperfect, but real) proxy for "the Claude Code process running this
+session"; the hook payload carries no other way to find it.
+
+Some Claude Code versions still run the command through a shell that does
+not `exec` it (seen with Claude Code 2.1.331 in a Linux sandbox). That
+shell exits with the hook, so its pid would be gone by the time the
+sampler looks, and the session would get no energy. When the shim's parent
+is a shell (`sh`, `bash`, `dash`, `zsh`, `ash`, `ksh`), it reports the
+shell's parent instead (`session_root_pid`; `af hook` does the same). Do
+not add a wrapper of your own: a second shell level is not skipped.
 
 ## OTel env block (the `af watch` receiver, run alongside this collector)
 

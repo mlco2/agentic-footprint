@@ -149,13 +149,44 @@ JQ_ENVELOPE='{
   + (if $tool_call_id == "" then {} else {attribution: {tool_call_id: $tool_call_id}} end)
   + {type: $type, payload: '
 
+# --- the session's root pid ----------------------------------------------
+
+# $PPID, or, when $PPID is a shell running this hook without exec'ing it
+# (some Claude Code versions do), that shell's parent: the wrapper exits
+# with the hook, and a dead pid would get the session no energy. A shell
+# whose parent is init, or that cannot be read, is kept. Linux reads
+# /proc; elsewhere `ps`. Called on SessionStart only. Mirrors
+# `session_root` in crates/af-cli/src/cmd/hook.rs.
+session_root_pid() {
+  sr_pid="$PPID"
+  sr_name=""
+  sr_parent=""
+  if [ -r "/proc/$sr_pid/stat" ]; then
+    sr_stat="$(cat "/proc/$sr_pid/stat" 2>/dev/null || true)"
+    sr_name="${sr_stat#*(}"
+    sr_name="${sr_name%)*}"
+    sr_parent="$(printf '%s\n' "${sr_stat##*)}" | awk '{print $2}')"
+  else
+    sr_line="$(ps -o ppid=,comm= -p "$sr_pid" 2>/dev/null || true)"
+    sr_parent="$(printf '%s\n' "$sr_line" | awk '{print $1}')"
+    sr_name="$(printf '%s\n' "$sr_line" | sed -e 's/^ *[0-9][0-9]* *//' -e 's#.*/##')"
+  fi
+  case "${sr_name#-}" in
+    sh | bash | dash | zsh | ash | ksh)
+      if [ -n "$sr_parent" ] && [ "$sr_parent" -gt 1 ] 2>/dev/null; then
+        sr_pid="$sr_parent"
+      fi
+      ;;
+  esac
+  printf '%s' "$sr_pid"
+}
+
 # --- payload expressions, one per emitted shape ---------------------------
 
 # Bootstrap action_span: session_meta is schema-frozen (no room for a
-# process-id field), so the shim's own $PPID — which IS the Claude Code
-# process, since Claude Code spawns hook commands as direct children when
-# the command is an executable path rather than a `sh -c` wrapper (see
-# README.md) — travels as `pids` on a zero-length action_span instead.
+# process-id field), so the Claude Code process's pid (session_root_pid:
+# the shim's $PPID, or the parent of a shell wrapping the shim) travels as
+# `pids` on a zero-length action_span instead.
 JQ_BOOTSTRAP_PAYLOAD='{
     span_id: ("session-boot-" + $session_id),
     tool_name: "__session__",
@@ -328,7 +359,7 @@ main() (
 
   case "$hk_event" in
     SessionStart)
-      ev_pids="[$PPID]"
+      ev_pids="[$(session_root_pid)]"
       emit_event action_span "$hk_now" "" "$JQ_BOOTSTRAP_PAYLOAD"
 
       ev_os="$(uname -s | tr 'A-Z' 'a-z')-$(uname -r)"
