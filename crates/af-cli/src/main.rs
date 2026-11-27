@@ -32,8 +32,7 @@ enum Commands {
     /// Update af itself (and its managed Python runtime)
     #[command(name = "self")]
     SelfCmd(cmd::self_update::Args),
-    #[cfg(feature = "experimental-opencode")]
-    /// Run an experimental native coding-agent collector
+    /// Run a native coding-agent collector
     Collect {
         #[command(subcommand)]
         collector: CollectAction,
@@ -172,7 +171,6 @@ enum PythonAction {
     },
 }
 
-#[cfg(feature = "experimental-opencode")]
 #[derive(Subcommand)]
 enum CollectAction {
     /// Collect OpenCode's durable per-session SSE events
@@ -207,7 +205,6 @@ fn main() {
                 cmd::service::run(&state_dir, args).map(|()| 0),
             );
         }
-        #[cfg(feature = "experimental-opencode")]
         Commands::Collect { collector } => {
             let state_dir = paths::state_dir();
             let result = match collector {

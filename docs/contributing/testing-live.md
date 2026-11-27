@@ -9,9 +9,7 @@ They are `#[ignore]`d, so `cargo test` (and any future default CI job) never
 runs them: they spend tokens, need the agent CLI installed and logged in,
 and take minutes. They run only on manual invocation:
 
-This document focuses on the isolated repository test harness. OpenCode tests
-are experimental and require an `af-cli` build with
-`--features experimental-opencode`; they are not part of the first release.
+This document focuses on the isolated repository test harness.
 
 ```sh
 scripts/test-live.sh                         # Claude Code → OpenCode → Codex

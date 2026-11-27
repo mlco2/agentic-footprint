@@ -64,20 +64,8 @@ fn test_help_shows_subcommands() {
         .stdout(predicate::str::contains("report"));
 }
 
-#[cfg(not(feature = "experimental-opencode"))]
 #[test]
-fn test_default_setup_help_excludes_experimental_opencode() {
-    let mut cmd = Command::cargo_bin("af").unwrap();
-    cmd.args(["setup", "--help"])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("codex,claude-code"))
-        .stdout(predicate::str::contains("opencode").not());
-}
-
-#[cfg(feature = "experimental-opencode")]
-#[test]
-fn test_experimental_setup_help_includes_opencode() {
+fn test_setup_help_lists_every_agent() {
     let mut cmd = Command::cargo_bin("af").unwrap();
     cmd.args(["setup", "--help"])
         .assert()
@@ -192,7 +180,6 @@ fn test_setup_dry_run_stops_before_agent_inspection_when_receiver_is_unhealthy()
         .stdout(predicate::str::contains("Detected agents:").not());
 }
 
-#[cfg(feature = "experimental-opencode")]
 #[test]
 fn test_opencode_offline_mode_is_finite_and_surfaces_sequence_gaps() {
     let dir = tempfile::tempdir().unwrap();

@@ -109,5 +109,4 @@ status line and the debug console can be that far behind a live session; see
 
 ## Supported agents
 
-The default build configures Claude Code and Codex. Other integrations are
-experimental and are not part of the default binary.
+The default build configures Claude Code, Codex and OpenCode.

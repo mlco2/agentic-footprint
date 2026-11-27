@@ -356,7 +356,9 @@ impl Checkpoint {
         if latest == self.saved {
             return Ok(());
         }
-        match File::open(spool) {
+        // Append access, not read-only: on Windows, sync_all
+        // (FlushFileBuffers) needs a handle with write access.
+        match OpenOptions::new().append(true).open(spool) {
             Ok(file) => file
                 .sync_all()
                 .with_context(|| format!("sync spool {}", spool.display()))?,

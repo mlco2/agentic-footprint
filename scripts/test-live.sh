@@ -31,7 +31,10 @@ case "$suite" in
         cargo test -p af-cli --test live_opencode -- --ignored --nocapture --test-threads=1 "$@"
         exec cargo test -p af-cli --test live_codex -- --ignored --nocapture --test-threads=1 "$@"
         ;;
-    claude-code|opencode|codex)
+    opencode)
+        exec cargo test -p af-cli --test live_opencode -- --ignored --nocapture --test-threads=1 "$@"
+        ;;
+    claude-code|codex)
         exec cargo test -p af-cli --test "live_$(printf '%s' "$suite" | tr '-' '_')" \
             -- --ignored --nocapture --test-threads=1 "$@"
         ;;
