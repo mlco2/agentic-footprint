@@ -1,7 +1,8 @@
 # OpenCode collector
 
 OpenCode collection is part of the default `af` build; `af setup` installs
-the plugin below. There is no user guide for it yet. The live test procedure is in
+the plugin below. The user guide is
+[`docs/how-to/opencode.md`](../../docs/how-to/opencode.md). The live test procedure is in
 [`docs/contributing/testing-live.md`](../../docs/contributing/testing-live.md).
 
 There are two collectors:

@@ -1,79 +1,126 @@
 # Agentic Footprint
 
-/!\ This project is in alpha /!\
+> **Alpha software.** Interfaces, schemas and results may change between
+> releases.
 
-Measure and attribute the environmental impact of coding agents. Agentic
-Footprint combines measured local energy, process-level action attribution, and
-modeled remote inference impacts while keeping uncertainty and coverage gaps
-explicit.
+Agentic Footprint (`af`) measures and attributes the environmental impact of
+coding agents. It combines measured local energy, process-level attribution
+of each agent action, and modeled impacts of remote inference, and keeps
+uncertainty and coverage gaps explicit instead of hiding them.
 
-Install from the current source checkout and configure detected coding agents.
-On macOS or Linux:
+## What it measures
+
+- **Local energy, measured.** A CodeCarbon sampler measures the machine's
+  energy and attributes it to the agent's processes.
+- **Agent actions, attributed.** Tool calls and shell commands are recorded
+  as spans, so energy can be broken down by session, task and tool.
+- **Remote inference, modeled.** Token counts per model call are turned into
+  energy and emission estimates with EcoLogits.
+
+Measured and modeled numbers are kept apart, and gaps in coverage are
+reported rather than filled in. See
+[energy attribution](docs/explanation/energy-attribution.md) and the
+[known limitations](docs/reference/known-limitations.md).
+
+## Supported agents
+
+| Agent | How `af` collects | Guide |
+|---|---|---|
+| Claude Code | Native OpenTelemetry logs, plus hooks for actions | [Claude Code](docs/how-to/claude-code.md) |
+| Codex | Native OpenTelemetry logs | [Codex](docs/how-to/codex.md) |
+| OpenCode | A plugin `af setup` installs | [OpenCode](docs/how-to/opencode.md) |
+| Pi | An extension `af setup` installs | [Pi](docs/how-to/pi.md) |
+
+`af setup` detects which of these are installed and configures them.
+
+## Install
+
+Platforms: macOS (Apple silicon and Intel), Linux (x86-64), Windows 11
+(x86-64).
+
+### From a release
+
+Binaries for every platform, with checksums and Sigstore signatures, are on
+the [releases page](https://github.com/mlco2/agentic-footprint/releases).
+[Verify a release](docs/how-to/verify-release.md) explains how to check
+one, and [Install and configure](docs/how-to/installation.md#curl-ready-inputs)
+how to install a downloaded binary with the installer.
+
+### From source
+
+From a checkout of this repository, on macOS or Linux:
 
 ```sh
 ./install.sh
 ```
 
-On Windows 11 PowerShell:
+On Windows 11 (PowerShell):
 
 ```powershell
 .\install.ps1
 ```
 
-The installer puts the native binary in `~/.local/bin` (macOS, Linux: add
-that directory to your `PATH` if the installer says it is missing) or adds it
-to the user `PATH` (Windows), provisions the managed CodeCarbon/EcoLogits
-runtime, and runs the receiver-first setup wizard, which can install a
-per-user background receiver. The
-[quickstart](docs/tutorials/quickstart.md) lists what a source build needs,
-and [Uninstall](docs/how-to/uninstall.md) how to remove it all.
+The installer builds `af` and puts it in `~/.local/bin` on macOS and Linux
+(add that directory to your `PATH` if the installer says it is missing), or
+adds it to the user `PATH` on Windows. It then provisions the managed
+CodeCarbon/EcoLogits runtime and runs the setup wizard, which checks the
+receiver first and can install it as a per-user background service. The
+[quickstart](docs/tutorials/quickstart.md) lists what a source build needs.
 
-No release has been published yet: a source checkout is the only way to
-install, and `af self update` has nothing to install until the first release.
+To remove everything, see [Uninstall](docs/how-to/uninstall.md).
+
+## Usage
 
 Once an agent session has run:
 
 ```sh
 af report                 # per-session results
-af summary --period 7d    # tokens and estimated impacts as JSON (read-only)
-af status                 # what is installed and running, as JSON (read-only)
+af summary --period 7d    # tokens and estimated impacts, as JSON
+af status                 # what is installed and running, as JSON
 af doctor                 # why an agent's data is not arriving
-af console                # debug console of the running receiver (macOS/Linux)
+af console                # debug console of the running receiver (macOS, Linux)
 ```
 
-- **Documentation:** [docs/index.md](docs/index.md)
-- **Contributor onboarding:** [CONTRIBUTING.md](CONTRIBUTING.md)
-- **Unified installer and setup wizard:**
-  [docs/how-to/installation.md](docs/how-to/installation.md)
-- **Claude Code guide:**
-  [docs/how-to/claude-code.md](docs/how-to/claude-code.md)
-- **Codex guide:** [docs/how-to/codex.md](docs/how-to/codex.md)
-- **Using af from another program:**
-  [docs/how-to/integrate.md](docs/how-to/integrate.md)
-- **Known limitations:**
-  [docs/reference/known-limitations.md](docs/reference/known-limitations.md)
-- **Architecture and crate boundaries:**
-  [docs/contributing/api-boundaries.md](docs/contributing/api-boundaries.md)
-- **Event schemas (Contract #1):** [schemas/v0.1/](schemas/v0.1/)
-- **License:** [MIT](LICENSE)
+`af summary` and `af status` are read-only and meant for scripts; see
+[use af from another program](docs/how-to/integrate.md) and the
+[CLI reference](docs/reference/cli.md).
 
-Architecture in one line: per-agent **collectors** emit raw facts (tokens, joules,
-action spans) to a local JSONL spool (hooks, the energy sampler) or as OTLP
-telemetry to the local receiver, which stores it directly → a standard
-**Rust control plane** owns all
-estimation methodology (managed Python env running ecologits/codecarbon) and aggregates
-at session/task/tool level → **presentation** layers (statusline, CLI, future
-dashboards) consume the read model.
+## How it works
+
+1. **Collectors** emit raw facts (tokens, joules, action spans): agents send
+   OpenTelemetry logs to a local receiver, while hooks, plugins, extensions
+   and the energy sampler append JSONL to a local spool.
+2. **A Rust control plane** (`af watch`) ingests both into a local store and
+   owns all estimation methodology. It runs EcoLogits and CodeCarbon in a
+   managed Python environment and aggregates results by session, task and
+   tool.
+3. **Presentation layers** (the CLI, the status line, the debug console)
+   read the aggregated results.
+
+Facts follow versioned [event schemas](schemas/v0.1/) (Contract #1). More in
+the [architecture overview](docs/explanation/rebuild-architecture.md) and
+[crate boundaries](docs/contributing/api-boundaries.md).
 
 ## Documentation
 
-The site is built with Zensical using `mkdocs.yml`:
+The full documentation starts at [docs/index.md](docs/index.md). The site is
+built with Zensical from `mkdocs.yml`:
 
 ```sh
 scripts/docs.sh build
 scripts/docs.sh serve
 ```
 
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md). `make help` lists the maintenance
+targets; `make check` runs the standard local validation (lint, tests,
+repository hygiene).
+
 ## Security
 
 Report vulnerabilities privately as described in [SECURITY.md](SECURITY.md).
+
+## License
+
+[MIT](LICENSE)
