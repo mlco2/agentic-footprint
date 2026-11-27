@@ -1,5 +1,6 @@
 //! The `tiny_http`-backed HTTP server: `POST /v1/logs` and `POST
-//! /v1/metrics`, everything else 404s. Kept separate from [`crate::normalize`]
+//! /v1/metrics`, a plain-text `GET /` saying what the port is, everything
+//! else 404s. Kept separate from [`crate::normalize`]
 //! so the mapping logic has no HTTP-layer dependency and can be tested
 //! against fixtures directly.
 //!
@@ -352,7 +353,19 @@ fn handle_request(
     }
 
     if *request.method() != Method::Post {
-        respond(request, 404, "not found");
+        // Someone who opens the port in a browser learns what owns it. Only
+        // static text: this port is unauthenticated, so it serves no data.
+        let is_root = request.url() == "/";
+        let is_read = matches!(request.method(), Method::Get | Method::Head);
+        if is_root && is_read {
+            respond(request, 200, &landing_text());
+        } else {
+            respond(
+                request,
+                404,
+                "not found: this is the Agentic Footprint receiver (GET / says more)",
+            );
+        }
         return;
     }
 
@@ -601,6 +614,18 @@ fn send_reject(
         attribute_keys,
         bytes: bytes as u64,
     }));
+}
+
+/// What `GET /` answers: what this port is, and where the results are.
+fn landing_text() -> String {
+    format!(
+        "Agentic Footprint receiver (af {version})\n\
+         \n\
+         This port receives telemetry from coding agents so af can estimate\n\
+         the environmental impact of their work. There is nothing to browse\n\
+         here: run `af --help` to see the results on the command line.\n",
+        version = env!("CARGO_PKG_VERSION"),
+    )
 }
 
 fn respond(request: tiny_http::Request, status: u16, body: &str) {

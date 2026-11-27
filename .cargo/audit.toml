@@ -1,0 +1,11 @@
+# cargo audit configuration (read by `cargo audit` in CI's audit job).
+
+[advisories]
+ignore = [
+    # url 2.5.8: stack overflow in Url::origin() on nested blob: URLs.
+    # Neither af nor ureq 2.12.1 (the only crate that pulls url in) calls
+    # Url::origin() or url::quirks::origin(), so af is not exposed.
+    # The fix, url 2.5.9, was released 2026-11-20; under the 7-day dependency
+    # cooldown, bump it on or after 2026-11-27 and remove this entry.
+    "RUSTSEC-2026-0592",
+]

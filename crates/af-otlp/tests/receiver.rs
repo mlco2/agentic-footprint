@@ -564,6 +564,28 @@ fn post_with_headers(
     (status_code, response_body)
 }
 
+/// A GET as a browser sends it for an address typed into the bar.
+fn browser_get(addr: SocketAddr, path: &str) -> (u16, String) {
+    let mut stream = TcpStream::connect(addr).expect("connect to test server");
+    write!(
+        stream,
+        "GET {path} HTTP/1.1\r\nHost: {addr}\r\nSec-Fetch-Site: none\r\nConnection: close\r\n\r\n"
+    )
+    .expect("write request");
+    let mut response = String::new();
+    stream.read_to_string(&mut response).expect("read response");
+    let status = response
+        .split_whitespace()
+        .nth(1)
+        .and_then(|s| s.parse().ok())
+        .unwrap_or_else(|| panic!("couldn't parse status from: {response}"));
+    let body = response
+        .split_once("\r\n\r\n")
+        .map(|(_, b)| b.to_string())
+        .unwrap_or_default();
+    (status, body)
+}
+
 fn start_stalled_post(addr: SocketAddr) -> TcpStream {
     start_stalled_post_of(addr, 1024)
 }
@@ -771,6 +793,25 @@ fn unknown_path_404s() {
     let server = TestServer::start();
     let (status, _) = post(server.addr(), "/not-otlp", b"{}");
     assert_eq!(status, 404);
+}
+
+/// Typing the address into a browser sends `Sec-Fetch-Site: none`; the
+/// page it gets says what owns the port instead of a bare "not found".
+#[test]
+fn a_browser_opening_the_root_is_told_what_the_port_is() {
+    let server = TestServer::start();
+    let (status, body) = browser_get(server.addr(), "/");
+    assert_eq!(status, 200);
+    assert!(body.contains("Agentic Footprint receiver"), "{body}");
+    assert!(body.contains("af --help"), "{body}");
+}
+
+#[test]
+fn a_browser_opening_any_other_path_still_404s() {
+    let server = TestServer::start();
+    let (status, body) = browser_get(server.addr(), "/v1/logs");
+    assert_eq!(status, 404);
+    assert!(body.contains("Agentic Footprint receiver"), "{body}");
 }
 
 // ---------------------------------------------------------------------

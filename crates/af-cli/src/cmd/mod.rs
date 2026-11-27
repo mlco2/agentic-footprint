@@ -8,7 +8,6 @@ pub mod estimator_worker;
 pub mod hook;
 pub mod http;
 pub mod ingest;
-#[cfg(feature = "experimental-opencode")]
 pub mod opencode;
 pub mod python;
 pub mod python_upgrade;
