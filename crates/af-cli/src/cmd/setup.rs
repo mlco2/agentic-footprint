@@ -15,10 +15,8 @@ const CLAUDE_HOOK: &str = include_str!("../../../../collectors/claude-code/af-ho
 /// directory, where OpenCode loads every file at startup. It writes facts
 /// from OpenCode's bus events (temporary: released OpenCode sessions do not
 /// write the durable stream `af collect opencode` reads).
-#[cfg(feature = "experimental-opencode")]
 pub(crate) const OPENCODE_PLUGIN: &str =
     include_str!("../../../../collectors/opencode/af-plugin.ts");
-#[cfg(feature = "experimental-opencode")]
 const OPENCODE_PLUGIN_FILE: &str = "agentic-footprint.ts";
 const CLAUDE_EVENTS: &[&str] = &[
     "SessionStart",
@@ -31,14 +29,7 @@ const CLAUDE_EVENTS: &[&str] = &[
 
 #[derive(Debug, Clone, clap::Args)]
 pub struct Args {
-    #[cfg_attr(
-        feature = "experimental-opencode",
-        arg(long, help = "Comma-separated agents: codex,claude-code,opencode")
-    )]
-    #[cfg_attr(
-        not(feature = "experimental-opencode"),
-        arg(long, help = "Comma-separated agents: codex,claude-code")
-    )]
+    #[arg(long, help = "Comma-separated agents: codex,claude-code,opencode")]
     agents: Option<String>,
     /// Project directory whose project-local agent settings should be configured.
     #[arg(long, default_value = ".")]
@@ -64,7 +55,6 @@ pub struct Args {
 enum Agent {
     Codex,
     ClaudeCode,
-    #[cfg(feature = "experimental-opencode")]
     OpenCode,
 }
 
@@ -73,7 +63,6 @@ impl Agent {
         match self {
             Self::Codex => "Codex",
             Self::ClaudeCode => "Claude Code",
-            #[cfg(feature = "experimental-opencode")]
             Self::OpenCode => "OpenCode",
         }
     }
@@ -82,7 +71,6 @@ impl Agent {
         match self {
             Self::Codex => "codex",
             Self::ClaudeCode => "claude",
-            #[cfg(feature = "experimental-opencode")]
             Self::OpenCode => "opencode",
         }
     }
@@ -98,21 +86,10 @@ enum Plan {
 
 #[derive(Debug)]
 enum Change {
-    Codex {
-        path: PathBuf,
-        contents: String,
-    },
-    ClaudeHook {
-        path: PathBuf,
-    },
-    ClaudeSettings {
-        path: PathBuf,
-        contents: String,
-    },
-    #[cfg(feature = "experimental-opencode")]
-    OpenCodePlugin {
-        path: PathBuf,
-    },
+    Codex { path: PathBuf, contents: String },
+    ClaudeHook { path: PathBuf },
+    ClaudeSettings { path: PathBuf, contents: String },
+    OpenCodePlugin { path: PathBuf },
 }
 
 impl Change {
@@ -120,7 +97,6 @@ impl Change {
         match self {
             Self::Codex { .. } => Agent::Codex,
             Self::ClaudeHook { .. } | Self::ClaudeSettings { .. } => Agent::ClaudeCode,
-            #[cfg(feature = "experimental-opencode")]
             Self::OpenCodePlugin { .. } => Agent::OpenCode,
         }
     }
@@ -134,7 +110,6 @@ impl Change {
             Self::ClaudeSettings { path, .. } => {
                 format!("merge hooks and OTLP environment into {}", path.display())
             }
-            #[cfg(feature = "experimental-opencode")]
             Self::OpenCodePlugin { path } => {
                 format!("install the collector plugin at {}", path.display())
             }
@@ -329,7 +304,6 @@ fn print_plans(plans: &[Plan]) {
 
 fn selected_agents(raw: Option<&str>) -> Result<BTreeSet<Agent>> {
     let all = vec![Agent::Codex, Agent::ClaudeCode];
-    #[cfg(feature = "experimental-opencode")]
     let all = {
         let mut all = all;
         all.push(Agent::OpenCode);
@@ -347,7 +321,6 @@ fn selected_agents(raw: Option<&str>) -> Result<BTreeSet<Agent>> {
         let agent = match value {
             "codex" => Agent::Codex,
             "claude" | "claude-code" => Agent::ClaudeCode,
-            #[cfg(feature = "experimental-opencode")]
             "opencode" => Agent::OpenCode,
             _ => bail!("unknown agent {value:?}; expected codex or claude-code"),
         };
@@ -383,7 +356,6 @@ fn inspect(
             Agent::ClaudeCode => {
                 plans.extend(inspect_claude(state_dir, &home, project, global, endpoint)?)
             }
-            #[cfg(feature = "experimental-opencode")]
             Agent::OpenCode => plans.push(inspect_opencode(&opencode_plugin_path(&home))),
         }
     }
@@ -394,7 +366,6 @@ fn inspect(
 /// `~/.config/opencode` (OpenCode resolves it with xdg-basedir, on every
 /// platform). Takes the variable's value so tests need not touch the
 /// process environment.
-#[cfg(feature = "experimental-opencode")]
 fn opencode_config_dir(home: &Path, xdg_config_home: Option<std::ffi::OsString>) -> PathBuf {
     match xdg_config_home.filter(|value| !value.is_empty()) {
         Some(value) => PathBuf::from(value).join("opencode"),
@@ -404,7 +375,6 @@ fn opencode_config_dir(home: &Path, xdg_config_home: Option<std::ffi::OsString>)
 
 /// Where `af setup` installs the OpenCode plugin: the global plugin
 /// directory, so every OpenCode session in every project loads it.
-#[cfg(feature = "experimental-opencode")]
 pub(crate) fn opencode_plugin_path(home: &Path) -> PathBuf {
     opencode_config_dir(home, env::var_os("XDG_CONFIG_HOME"))
         .join("plugin")
@@ -413,7 +383,6 @@ pub(crate) fn opencode_plugin_path(home: &Path) -> PathBuf {
 
 /// Whether the installed plugin is this build's. An older or edited copy is
 /// replaced after a backup: the file is af's own, under an af-owned name.
-#[cfg(feature = "experimental-opencode")]
 fn inspect_opencode(path: &Path) -> Plan {
     if fs::read_to_string(path).ok().as_deref() == Some(OPENCODE_PLUGIN) {
         Plan::Ready {
@@ -941,7 +910,6 @@ fn apply_change(change: &Change) -> Result<()> {
             write_config(path, CLAUDE_HOOK.as_bytes())?;
             make_executable(path)
         }
-        #[cfg(feature = "experimental-opencode")]
         Change::OpenCodePlugin { path } => {
             // OpenCode loads every file in plugin/, and a stray backup there
             // hangs it at startup: back up into the config directory above.
@@ -1336,14 +1304,12 @@ mod tests {
         assert!(selected.contains(&Agent::ClaudeCode));
     }
 
-    #[cfg(feature = "experimental-opencode")]
     #[test]
-    fn experimental_agent_selection_accepts_opencode() {
+    fn agent_selection_accepts_opencode() {
         let selected = selected_agents(Some("opencode")).unwrap();
         assert!(selected.contains(&Agent::OpenCode));
     }
 
-    #[cfg(feature = "experimental-opencode")]
     #[test]
     fn opencode_config_dir_follows_xdg_config_home() {
         let home = Path::new("/home/u");
@@ -1361,7 +1327,6 @@ mod tests {
         );
     }
 
-    #[cfg(feature = "experimental-opencode")]
     #[test]
     fn opencode_plugin_is_installed_then_ready_and_an_old_copy_is_replaced() {
         let dir = tempfile::tempdir().unwrap();

@@ -370,18 +370,12 @@ fn parse_etime(value: &str) -> Option<Duration> {
 pub(crate) enum AgentId {
     ClaudeCode,
     Codex,
-    #[cfg(feature = "experimental-opencode")]
     OpenCode,
 }
 
 impl AgentId {
     pub(crate) fn all() -> Vec<AgentId> {
-        vec![
-            AgentId::ClaudeCode,
-            AgentId::Codex,
-            #[cfg(feature = "experimental-opencode")]
-            AgentId::OpenCode,
-        ]
+        vec![AgentId::ClaudeCode, AgentId::Codex, AgentId::OpenCode]
     }
 
     /// Stable identifier used on the wire.
@@ -389,7 +383,6 @@ impl AgentId {
         match self {
             AgentId::ClaudeCode => "claude-code",
             AgentId::Codex => "codex",
-            #[cfg(feature = "experimental-opencode")]
             AgentId::OpenCode => "opencode",
         }
     }
@@ -398,7 +391,6 @@ impl AgentId {
         match self {
             AgentId::ClaudeCode => "Claude Code",
             AgentId::Codex => "Codex",
-            #[cfg(feature = "experimental-opencode")]
             AgentId::OpenCode => "OpenCode",
         }
     }
@@ -408,7 +400,6 @@ impl AgentId {
         match self {
             AgentId::ClaudeCode => "claude",
             AgentId::Codex => "codex",
-            #[cfg(feature = "experimental-opencode")]
             AgentId::OpenCode => "opencode",
         }
     }
@@ -425,7 +416,6 @@ pub(crate) fn agent_for_collector(collector: &str) -> Option<AgentId> {
         // `otlp-cc` is the OTLP normalizer's.
         "claude-code" | super::hook::COLLECTOR_NAME | "otlp-cc" => Some(AgentId::ClaudeCode),
         "codex" => Some(AgentId::Codex),
-        #[cfg(feature = "experimental-opencode")]
         super::opencode::COLLECTOR_NAME => Some(AgentId::OpenCode),
         other if other.starts_with("otlp-codex") => Some(AgentId::Codex),
         _ => None,
@@ -455,7 +445,6 @@ pub(crate) fn inspect_user_config(agent: AgentId, home: &Path, logs_endpoint: &s
         AgentId::Codex => inspect_codex_file(&setup::codex_config_path(home), logs_endpoint),
         // The plugin `af setup` installs starts a collector per session; its
         // presence is the configuration.
-        #[cfg(feature = "experimental-opencode")]
         AgentId::OpenCode => inspect_opencode_plugin(&setup::opencode_plugin_path(home)),
     }
 }
@@ -691,7 +680,6 @@ pub(crate) fn codex_config_for(
     (inspect_codex_file(&path, logs_endpoint), modified)
 }
 
-#[cfg(feature = "experimental-opencode")]
 fn inspect_opencode_plugin(path: &Path) -> UserConfig {
     match read_config(path) {
         Ok(None) => UserConfig::Absent,
@@ -925,7 +913,6 @@ fn judge_process(
                 codex_config_for(codex_home, logs_endpoint)
             })
         }
-        #[cfg(feature = "experimental-opencode")]
         AgentId::OpenCode => None,
     };
     let Some((config, modified)) = judged else {
@@ -2467,7 +2454,6 @@ mod tests {
         );
     }
 
-    #[cfg(feature = "experimental-opencode")]
     #[test]
     fn opencode_is_configured_by_its_plugin() {
         assert_eq!(agent_for_collector("opencode"), Some(AgentId::OpenCode));

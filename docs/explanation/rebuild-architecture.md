@@ -58,7 +58,7 @@ flowchart LR
 ```
 
 There are two transports. File-based collectors (the Claude Code hook, the
-CodeCarbon sampler, the experimental OpenCode collector) append JSONL to
+CodeCarbon sampler, the OpenCode collectors) append JSONL to
 `$AF_STATE_DIR/spool/<collector>.<session>.jsonl`. OTLP telemetry (Claude
 Code and Codex token usage and LLM calls) is posted to the receiver inside
 `af watch`, which normalizes it and writes it straight into `raw_events`; it

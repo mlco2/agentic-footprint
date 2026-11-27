@@ -144,13 +144,7 @@ jobs:
       # the crate's surface lives in integration tests.
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
-      - name: Verify default release surface excludes OpenCode
-        run: |
-          cargo run --locked -q -p af-cli -- setup --help > /tmp/af-setup-help
-          ! grep -qi opencode /tmp/af-setup-help
-      - run: cargo test -p af-cli --features experimental-opencode
-      # The fixture script builds its own af with experimental-opencode; it
-      # was broken for a while without CI noticing.
+      # The fixture script was broken for a while without CI noticing.
       - name: OpenCode collector fixture tests
         run: collectors/opencode/test_collector.sh
       # The OpenCode plugin is TypeScript run directly by Node (type

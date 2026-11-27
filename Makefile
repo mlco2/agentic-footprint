@@ -43,7 +43,6 @@ test: test-rust test-console test-python test-collectors ## Run deterministic te
 
 test-rust: console-build ## Run Rust workspace and feature tests
 	$(CARGO) test --workspace
-	$(CARGO) test -p af-cli --features experimental-opencode
 
 test-console: console-install ## Run console unit tests
 	$(NPM) --prefix console test

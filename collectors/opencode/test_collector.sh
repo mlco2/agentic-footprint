@@ -7,7 +7,7 @@ AF_BIN="$REPO_ROOT/target/debug/af"
 STATE_DIR="$(mktemp -d)"
 trap 'rm -rf "$STATE_DIR"' EXIT
 
-(cd "$REPO_ROOT" && cargo build -p af-cli --features experimental-opencode -q)
+(cd "$REPO_ROOT" && cargo build -p af-cli -q)
 AF_STATE_DIR="$STATE_DIR" "$AF_BIN" collect opencode \
   --session-id ses_fixture \
   --input "$SCRIPT_DIR/test-data/session.sse" \

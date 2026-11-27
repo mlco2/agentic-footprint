@@ -1,5 +1,4 @@
-// agentic-footprint: OpenCode collector plugin (experimental, installed by
-// `af setup` in builds with `experimental-opencode`).
+// agentic-footprint: OpenCode collector plugin (installed by `af setup`).
 //
 // OpenCode loads every file in its global plugin directory
 // (`$XDG_CONFIG_HOME/opencode/plugin/`, default `~/.config/opencode/plugin/`).
