@@ -58,8 +58,11 @@ fn map(record: &LogRecord, index: usize) -> Option<Envelope> {
         .ok()?;
     let response_id = record.string("gen_ai.response.id");
 
+    // A response id is issued by its provider and unique only there, so it
+    // identifies a call together with the provider and the session; alone,
+    // two providers' calls could share an id and be stored as one.
     let event_id = if let Some(response_id) = response_id {
-        stable_id("otlp-genai", &response_id)
+        stable_id("otlp-genai", &(&provider, &session_id, &response_id))
     } else {
         stable_id(
             "otlp-genai",

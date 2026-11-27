@@ -284,6 +284,81 @@ fn standard_gen_ai_record_normalizes_without_claude_specific_attributes() {
     assert_eq!(call.endpoint.as_deref(), Some("api.anthropic.com"));
 }
 
+fn gen_ai_body(provider: &str, session: &str, response_id: &str, time: &str) -> serde_json::Value {
+    serde_json::json!({
+        "resourceLogs": [{
+            "resource": {"attributes": [
+                {"key": "gen_ai.provider.name", "value": {"stringValue": provider}},
+                {"key": "session.id", "value": {"stringValue": session}}
+            ]},
+            "scopeLogs": [{
+                "scope": {"name": "opentelemetry.instrumentation.genai"},
+                "logRecords": [{
+                    "timeUnixNano": time,
+                    "body": {"stringValue": "gen_ai.client.inference.operation.details"},
+                    "attributes": [
+                        {"key": "gen_ai.request.model", "value": {"stringValue": "some-model"}},
+                        {"key": "gen_ai.response.id", "value": {"stringValue": response_id}},
+                        {"key": "gen_ai.usage.input_tokens", "value": {"intValue": "10"}},
+                        {"key": "gen_ai.usage.output_tokens", "value": {"intValue": "5"}}
+                    ]
+                }]
+            }]
+        }]
+    })
+}
+
+fn only_event_id(body: &serde_json::Value) -> String {
+    let outcome = af_otlp::normalize_logs(body);
+    assert_eq!(outcome.events.len(), 1);
+    outcome.events[0].event_id.clone()
+}
+
+/// A response id is unique only within its provider: two providers can
+/// issue the same one, and an id shared across them must not merge two
+/// calls into one event (the store keeps one row per event id).
+#[test]
+fn gen_ai_calls_sharing_a_response_id_across_providers_stay_distinct() {
+    let first = only_event_id(&gen_ai_body(
+        "provider-a",
+        "session-a",
+        "resp_1",
+        "1785001495850000000",
+    ));
+    let second = only_event_id(&gen_ai_body(
+        "provider-b",
+        "session-b",
+        "resp_1",
+        "1785001496850000000",
+    ));
+    assert_ne!(first, second);
+}
+
+/// The same provider reusing an id in another session is still two calls.
+#[test]
+fn gen_ai_calls_sharing_a_response_id_across_sessions_stay_distinct() {
+    let first = only_event_id(&gen_ai_body(
+        "provider-a",
+        "session-a",
+        "resp_1",
+        "1785001495850000000",
+    ));
+    let second = only_event_id(&gen_ai_body(
+        "provider-a",
+        "session-b",
+        "resp_1",
+        "1785001496850000000",
+    ));
+    assert_ne!(first, second);
+}
+
+/// An exporter retrying the same record must still be deduplicated.
+#[test]
+fn a_redelivered_gen_ai_call_keeps_its_event_id() {
+    let body = gen_ai_body("provider-a", "session-a", "resp_1", "1785001495850000000");
+    assert_eq!(only_event_id(&body), only_event_id(&body));
+}
+
 #[test]
 fn unrelated_otlp_records_are_unclaimed_not_dropped() {
     let body = logs_body(vec![serde_json::json!({
