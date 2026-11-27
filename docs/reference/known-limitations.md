@@ -109,8 +109,8 @@ status line and the debug console can be that far behind a live session; see
 
 ## Supported agents
 
-The default build configures Claude Code, Codex, OpenCode and
-[Pi](../how-to/pi.md).
+The default build configures Claude Code, Codex,
+[OpenCode](../how-to/opencode.md) and [Pi](../how-to/pi.md).
 
 Pi's context compaction and branch summaries call the model directly, without
 the `message_end` event the collector listens to, so their tokens are not
