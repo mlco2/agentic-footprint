@@ -70,7 +70,7 @@ fn test_setup_help_lists_every_agent() {
     cmd.args(["setup", "--help"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("codex,claude-code,opencode"));
+        .stdout(predicate::str::contains("codex,claude-code,opencode,pi"));
 }
 
 #[cfg(unix)]

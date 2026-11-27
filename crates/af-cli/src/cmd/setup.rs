@@ -11,6 +11,10 @@ use serde_json::{json, Map, Value};
 use super::DEFAULT_LOGS_ENDPOINT;
 
 const CLAUDE_HOOK: &str = include_str!("../../../../collectors/claude-code/af-hook.sh");
+/// The Pi collector extension, installed into Pi's global extensions
+/// directory, where Pi loads every `*.ts` file at startup.
+pub(crate) const PI_EXTENSION: &str = include_str!("../../../../collectors/pi/af-collector.ts");
+const PI_EXTENSION_FILE: &str = "agentic-footprint.ts";
 /// The OpenCode collector plugin, installed into OpenCode's global plugin
 /// directory, where OpenCode loads every file at startup. It writes facts
 /// from OpenCode's bus events (temporary: released OpenCode sessions do not
@@ -27,9 +31,16 @@ const CLAUDE_EVENTS: &[&str] = &[
     "SessionEnd",
 ];
 
+/// The names `--agents` accepts in this build.
+const AGENT_NAMES: &[&str] = &["codex", "claude-code", "opencode", "pi"];
+
+fn agents_help() -> String {
+    format!("Comma-separated agents: {}", AGENT_NAMES.join(","))
+}
+
 #[derive(Debug, Clone, clap::Args)]
 pub struct Args {
-    #[arg(long, help = "Comma-separated agents: codex,claude-code,opencode")]
+    #[arg(long, help = agents_help())]
     agents: Option<String>,
     /// Project directory whose project-local agent settings should be configured.
     #[arg(long, default_value = ".")]
@@ -56,6 +67,7 @@ enum Agent {
     Codex,
     ClaudeCode,
     OpenCode,
+    Pi,
 }
 
 impl Agent {
@@ -64,6 +76,7 @@ impl Agent {
             Self::Codex => "Codex",
             Self::ClaudeCode => "Claude Code",
             Self::OpenCode => "OpenCode",
+            Self::Pi => "Pi",
         }
     }
 
@@ -72,6 +85,7 @@ impl Agent {
             Self::Codex => "codex",
             Self::ClaudeCode => "claude",
             Self::OpenCode => "opencode",
+            Self::Pi => "pi",
         }
     }
 }
@@ -90,6 +104,7 @@ enum Change {
     ClaudeHook { path: PathBuf },
     ClaudeSettings { path: PathBuf, contents: String },
     OpenCodePlugin { path: PathBuf },
+    PiExtension { path: PathBuf },
 }
 
 impl Change {
@@ -98,6 +113,7 @@ impl Change {
             Self::Codex { .. } => Agent::Codex,
             Self::ClaudeHook { .. } | Self::ClaudeSettings { .. } => Agent::ClaudeCode,
             Self::OpenCodePlugin { .. } => Agent::OpenCode,
+            Self::PiExtension { .. } => Agent::Pi,
         }
     }
 
@@ -112,6 +128,9 @@ impl Change {
             }
             Self::OpenCodePlugin { path } => {
                 format!("install the collector plugin at {}", path.display())
+            }
+            Self::PiExtension { path } => {
+                format!("install the collector extension at {}", path.display())
             }
         }
     }
@@ -303,7 +322,7 @@ fn print_plans(plans: &[Plan]) {
 }
 
 fn selected_agents(raw: Option<&str>) -> Result<BTreeSet<Agent>> {
-    let all = vec![Agent::Codex, Agent::ClaudeCode];
+    let all = vec![Agent::Codex, Agent::ClaudeCode, Agent::Pi];
     let all = {
         let mut all = all;
         all.push(Agent::OpenCode);
@@ -322,7 +341,11 @@ fn selected_agents(raw: Option<&str>) -> Result<BTreeSet<Agent>> {
             "codex" => Agent::Codex,
             "claude" | "claude-code" => Agent::ClaudeCode,
             "opencode" => Agent::OpenCode,
-            _ => bail!("unknown agent {value:?}; expected codex or claude-code"),
+            "pi" => Agent::Pi,
+            _ => bail!(
+                "unknown agent {value:?}; expected one of: {}",
+                AGENT_NAMES.join(", ")
+            ),
         };
         selected.insert(agent);
     }
@@ -357,6 +380,7 @@ fn inspect(
                 plans.extend(inspect_claude(state_dir, &home, project, global, endpoint)?)
             }
             Agent::OpenCode => plans.push(inspect_opencode(&opencode_plugin_path(&home))),
+            Agent::Pi => plans.push(inspect_pi(&pi_extension_path(&home))),
         }
     }
     Ok(plans)
@@ -391,6 +415,47 @@ fn inspect_opencode(path: &Path) -> Plan {
         }
     } else {
         Plan::Change(Change::OpenCodePlugin {
+            path: path.to_path_buf(),
+        })
+    }
+}
+
+/// Pi's agent directory: `$PI_CODING_AGENT_DIR` (with a leading `~`
+/// expanded, as Pi does), else `~/.pi/agent`. Mirrors `getAgentDir()` in
+/// Pi's `config.js`. Takes the variable's value so tests need not touch the
+/// process environment.
+fn pi_agent_dir(home: &Path, env_dir: Option<std::ffi::OsString>) -> PathBuf {
+    match env_dir.filter(|value| !value.is_empty()) {
+        Some(value) => {
+            let value = PathBuf::from(value);
+            match value.strip_prefix("~") {
+                Ok(rest) => home.join(rest),
+                Err(_) => value,
+            }
+        }
+        None => home.join(".pi").join("agent"),
+    }
+}
+
+/// Where `af setup` installs the Pi collector: Pi's global extensions
+/// directory, so every Pi session in every project loads it.
+pub(crate) fn pi_extension_path(home: &Path) -> PathBuf {
+    pi_agent_dir(home, env::var_os("PI_CODING_AGENT_DIR"))
+        .join("extensions")
+        .join(PI_EXTENSION_FILE)
+}
+
+/// Whether the installed extension is this build's collector. An older or
+/// edited copy is replaced (after a backup) rather than reported as a
+/// conflict: the file is af's own, under an af-owned name.
+fn inspect_pi(path: &Path) -> Plan {
+    if fs::read_to_string(path).ok().as_deref() == Some(PI_EXTENSION) {
+        Plan::Ready {
+            agent: Agent::Pi,
+            detail: format!("collector extension installed at {}", path.display()),
+        }
+    } else {
+        Plan::Change(Change::PiExtension {
             path: path.to_path_buf(),
         })
     }
@@ -919,6 +984,7 @@ fn apply_change(change: &Change) -> Result<()> {
                 .unwrap_or(Path::new("."));
             write_config_with_backup_in(path, OPENCODE_PLUGIN.as_bytes(), backups)
         }
+        Change::PiExtension { path } => write_config(path, PI_EXTENSION.as_bytes()),
     }
 }
 
@@ -1361,5 +1427,61 @@ mod tests {
             .filter(|name| name.contains(".bak."))
             .collect();
         assert_eq!(backups.len(), 1);
+    }
+
+    #[test]
+    fn pi_is_selectable_and_its_agent_dir_follows_pi() {
+        assert!(selected_agents(Some("pi")).unwrap().contains(&Agent::Pi));
+        assert!(selected_agents(None).unwrap().contains(&Agent::Pi));
+        let home = Path::new("/home/u");
+        assert_eq!(pi_agent_dir(home, None), home.join(".pi").join("agent"));
+        assert_eq!(
+            pi_agent_dir(home, Some("".into())),
+            home.join(".pi").join("agent")
+        );
+        assert_eq!(
+            pi_agent_dir(home, Some("/opt/pi".into())),
+            PathBuf::from("/opt/pi")
+        );
+        assert_eq!(
+            pi_agent_dir(home, Some("~/custom/pi".into())),
+            home.join("custom").join("pi")
+        );
+    }
+
+    #[test]
+    fn pi_extension_is_installed_then_ready_and_an_old_copy_is_replaced() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("extensions").join(PI_EXTENSION_FILE);
+
+        let plan = inspect_pi(&path);
+        assert_eq!(plan_kind(&plan), "change");
+        let Plan::Change(change) = plan else {
+            unreachable!()
+        };
+        apply_change(&change).unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), PI_EXTENSION);
+        assert_eq!(plan_kind(&inspect_pi(&path)), "ready");
+
+        std::fs::write(&path, "// older collector\n").unwrap();
+        let Plan::Change(change) = inspect_pi(&path) else {
+            panic!("an old copy must be replaced")
+        };
+        apply_change(&change).unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), PI_EXTENSION);
+        // The old copy is backed up under a name Pi does not load (*.ts only).
+        let backups: Vec<_> = std::fs::read_dir(path.parent().unwrap())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+            .filter(|name| name.contains(".bak."))
+            .collect();
+        assert_eq!(backups.len(), 1);
+        assert!(!backups[0].ends_with(".ts"));
+    }
+
+    #[test]
+    fn unknown_agent_error_and_help_name_every_agent_of_the_build() {
+        let err = selected_agents(Some("nope")).unwrap_err().to_string();
+        assert!(err.contains("pi") && err.contains("claude-code"), "{err}");
     }
 }

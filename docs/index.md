@@ -42,5 +42,5 @@ plane failures remain visible to the operator.
 ## Project status
 
 Agentic Footprint is alpha software and no release has been published yet;
-it is installed from a source checkout. It supports Claude Code, Codex and
-OpenCode.
+it is installed from a source checkout. It supports Claude Code, Codex, OpenCode
+and Pi.

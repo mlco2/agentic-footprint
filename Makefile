@@ -56,6 +56,7 @@ test-python: ## Run Python sidecar tests
 test-collectors: ## Run collector and statusline shell tests
 	collectors/claude-code/test_hooks.sh
 	collectors/opencode/test_collector.sh
+	collectors/pi/test_collector.sh
 	statusline/test_statusline.sh
 
 test-install: ## Test the isolated installer flow
