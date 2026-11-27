@@ -871,6 +871,37 @@ else
 fi
 rm -rf "$(dirname "$state13")"
 
+# --- Case: the session's root pid is Claude Code, not a shell wrapping the hook
+# Some Claude Code versions run the hook command through a shell that does
+# not exec it. The bootstrap span must then carry the shell's parent: the
+# wrapper exits with the hook, and a dead pid gets the session no energy.
+state14="$(mktemp -d)"
+AF_STATE_DIR="$state14" sh -c '"$1" <"$2"; :' wrapper "$HOOK" "$DATA/session_start.real.json"
+spool14="$(spool_file_for "$state14" "$DATA/session_start.real.json")"
+pids14="$(jq -c 'select(.type == "action_span") | .payload.pids' "$spool14" 2>/dev/null || true)"
+if [ "$pids14" = "[$$]" ]; then
+  pass "SessionStart: a shell wrapping the hook is skipped for its parent"
+else
+  fail "SessionStart: a shell wrapping the hook is skipped for its parent (got: $pids14, want [$$])"
+fi
+rm -rf "$state14"
+
+if command -v python3 >/dev/null 2>&1; then
+  state15="$(mktemp -d)"
+  parent15="$(python3 -c 'import os, subprocess, sys
+print(os.getpid(), flush=True)
+subprocess.run([sys.argv[1]], stdin=open(sys.argv[2]), env={**os.environ, "AF_STATE_DIR": sys.argv[3]}, check=True)' \
+    "$HOOK" "$DATA/session_start.real.json" "$state15")"
+  spool15="$(spool_file_for "$state15" "$DATA/session_start.real.json")"
+  pids15="$(jq -c 'select(.type == "action_span") | .payload.pids' "$spool15" 2>/dev/null || true)"
+  if [ "$pids15" = "[$parent15]" ]; then
+    pass "SessionStart: a parent that is not a shell is the session's root"
+  else
+    fail "SessionStart: a parent that is not a shell is the session's root (got: $pids15, want [$parent15])"
+  fi
+  rm -rf "$state15"
+fi
+
 # --- Summary ---------------------------------------------------------------
 
 echo "----"
