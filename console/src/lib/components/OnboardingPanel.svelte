@@ -18,7 +18,7 @@
     {#if statusStore.data}
       <p class="onboarding__line"><span aria-hidden="true">● </span>{watcherLine}</p>
     {:else if statusStore.unavailable}
-      <p class="onboarding__line">Connected. This version of af does not report watcher or agent status.</p>
+      <p class="onboarding__line">Connected. This version of afoot does not report watcher or agent status.</p>
     {:else}
       <p class="onboarding__line">Connecting to the watcher…</p>
     {/if}

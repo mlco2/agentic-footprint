@@ -26,7 +26,7 @@ export interface SessionInfo {
   events?: number;
   attribution_policy: AttributionPolicy;
   methodology: {
-    /** Real-server gap (docs/design-log.md, "af watch resident mode…"):
+    /** Real-server gap (docs/design-log.md, "afoot watch resident mode…"):
      * before the first llm_call is estimated, the only methodology artifact
      * this build carries (the estimator sidecar's ecologits pin) isn't
      * known yet, so this reads literally as
@@ -158,7 +158,7 @@ export interface AllocationTrace {
    * by Σ watched would make attributed+agent ≡ 100%, destroying the explicit
    * baseline/idle remainder that is L2's whole point (DATA-CONTRACT §2.4). */
   denominator_cpu_ms: number;
-  /** Present on the real server (crates/af-cli/src/cmd/debug_frames.rs):
+  /** Present on the real server (crates/afoot-cli/src/cmd/debug_frames.rs):
    * explains, in prose, exactly what `denominator_cpu_ms` is and is not —
    * absent from the mock, which relies on this file's own doc comment
    * instead. Optional so both are valid. */
@@ -187,7 +187,7 @@ export interface AllocationTrace {
 /** Contract #2's estimation_status values, reused rather than redeclared. */
 export type EstimationStatus = ImpactEstimate["estimation_status"];
 
-/** This pipeline's sixth status (docs/design-log.md, "af watch resident
+/** This pipeline's sixth status (docs/design-log.md, "afoot watch resident
  * mode…"): a `llm_call` with no token count to estimate from never reaches
  * ecologits and is recorded as `missing_usage` directly — outside Contract
  * #2's own five-value union, and folded into the report histogram only
@@ -259,7 +259,7 @@ export interface ConformanceRow {
   note?: string;
 }
 
-/** One `af python doctor` result row. */
+/** One `afoot python doctor` result row. */
 export interface PythonDoctorRow {
   key: string;
   value: string;
@@ -275,7 +275,7 @@ export interface HealthPayload {
   collectors: CollectorHealth[];
   otlp_receiver: {
     /** e.g. "127.0.0.1:4318" — http/json only; 4317 is the gRPC port and is
-     * wrong here. `null` when no OTLP receiver is running in this `af watch`
+     * wrong here. `null` when no OTLP receiver is running in this `afoot watch`
      * process at all (e.g. `--no-otlp`, or the bind failed and was reported
      * rather than fatal — docs/design-log.md) — an e2e-verified real-server
      * case beyond DATA-CONTRACT's own example, not just this task's
@@ -289,7 +289,7 @@ export interface HealthPayload {
   };
   conformance?: ConformanceRow[];
   rejected: RejectFrame[];
-  /** Real-server-only counters (crates/af-cli/src/cmd/watch.rs's `publish("health", ...)`
+  /** Real-server-only counters (crates/afoot-cli/src/cmd/watch.rs's `publish("health", ...)`
    * payload, verified read-only — this mock never sends them, hence
    * optional): every one of these is a running, all-time count, never
    * decremented. */
@@ -319,7 +319,7 @@ export interface Snapshot {
 }
 
 /** One coding agent's state, first match wins (server-side, see
- * `crates/af-cli/src/cmd/agents.rs`):
+ * `crates/afoot-cli/src/cmd/agents.rs`):
  * - `receiving`      at least one event from it since this watcher started
  * - `needs_restart`  configured, and a running process predates the config
  * - `waiting`        configured, nothing received yet
@@ -358,7 +358,7 @@ export interface AgentStatus {
   name: string;
   state: AgentState;
   detail: string | null;
-  /** A command to run when there is an obvious next step (`af setup`). */
+  /** A command to run when there is an obvious next step (`afoot setup`). */
   action: string | null;
   config_path: string | null;
   /** `null` when processes could not be listed on the watcher's platform. */
@@ -377,7 +377,7 @@ export interface AgentStatus {
 export interface WatcherStatus {
   boot_id: string;
   started_at: string;
-  af_version: string;
+  afoot_version: string;
   flush_interval_ms: number;
   receiver: { endpoint: string | null; note: string | null };
   agents: AgentStatus[];

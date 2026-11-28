@@ -66,7 +66,7 @@ export class SessionStore {
   }
 
   /** Forget every session and the pin — the watcher behind the connection
-   * is a different process (AfClient, on a `boot_id` change). */
+   * is a different process (AfootClient, on a `boot_id` change). */
   clear(): void {
     this.sessions = {};
     this.summaries = {};

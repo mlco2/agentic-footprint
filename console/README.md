@@ -1,7 +1,7 @@
-# af debug console
+# afoot debug console
 
-A local-first web console for `af watch --debug`'s `/debug` HTTP+SSE surface
-(`docs/design_handoff_af_debug_console/DATA-CONTRACT.md`). It streams the
+A local-first web console for `afoot watch --debug`'s `/debug` HTTP+SSE surface
+(`docs/design_handoff_afoot_debug_console/DATA-CONTRACT.md`). It streams the
 control plane's live facts, decisions, allocation traces, watchdog state,
 impact report and collector health straight from the debugging server —
 never computing impacts, attribution, apportionment or grid conversions
@@ -14,8 +14,8 @@ The console runs against either of two `/debug` backends, selected at the
 
 | Command | Backend | Notes |
 |---|---|---|
-| `npm run dev` | `mockDebugServer()` (`console/dev/mock-plugin.ts`) | Default. A deterministic, contract-faithful replay of a rich fixture scenario (`console/dev/scenario.ts`) — no real `af` binary needed. |
-| `npm run dev:real` | A real `af watch --debug` process | Proxies `/debug/*` to `AF_DEBUG_TARGET` (default `http://127.0.0.1:9414`, `af watch`'s own default `--debug-addr`). |
+| `npm run dev` | `mockDebugServer()` (`console/dev/mock-plugin.ts`) | Default. A deterministic, contract-faithful replay of a rich fixture scenario (`console/dev/scenario.ts`) — no real `afoot` binary needed. |
+| `npm run dev:real` | A real `afoot watch --debug` process | Proxies `/debug/*` to `AFOOT_DEBUG_TARGET` (default `http://127.0.0.1:9414`, `afoot watch`'s own default `--debug-addr`). |
 | `npm run preview` | mock | Same mock, served from the production build. |
 | `npm run preview:real` | real | Same proxy, served from the production build. |
 
@@ -28,24 +28,24 @@ load. "Disabled" means "never loaded."
 
 ```bash
 # 1. Build the CLI (from the repo root):
-cargo build -p af-cli
+cargo build -p afoot-cli
 
-# 2. Start a resident af watch with the debug surface on, against whatever
-#    AF_STATE_DIR you want the console to show (a live project, or a
+# 2. Start a resident afoot watch with the debug surface on, against whatever
+#    AFOOT_STATE_DIR you want the console to show (a live project, or a
 #    tempdir seeded with fixture spool lines — see
-#    crates/af-cli/tests/watch.rs for the pattern):
-AF_STATE_DIR=/path/to/state ./target/debug/af watch --debug \
+#    crates/afoot-cli/tests/watch.rs for the pattern):
+AFOOT_STATE_DIR=/path/to/state ./target/debug/afoot watch --debug \
   --no-sidecars --no-otlp --debug-addr 127.0.0.1:9414
 
 # 3. Point the console at it (from console/):
-AF_DEBUG_TARGET=http://127.0.0.1:9414 npm run dev:real
+AFOOT_DEBUG_TARGET=http://127.0.0.1:9414 npm run dev:real
 ```
 
 CORS is wide open on the real server (`Access-Control-Allow-Origin: *`), so
 the proxy isn't required for correctness — it exists so the console can use
 plain relative `/debug/*` URLs in both modes alike (global-constraints.md
 #4: "the client uses relative URLs only for /debug/* endpoints"), and so
-`AF_DEBUG_TARGET` is the only thing that changes between a mock run and a
+`AFOOT_DEBUG_TARGET` is the only thing that changes between a mock run and a
 real one.
 
 The SSE endpoint (`GET /debug/stream`) is proxied with `ws: false` (it's
@@ -58,13 +58,13 @@ see its own header comment for prerequisites; not wired into CI.
 
 ## Real-server behaviors v1
 
-The real `af watch --debug` server (`crates/af-cli/src/cmd/{watch,debug_server,debug_frames}.rs`)
+The real `afoot watch --debug` server (`crates/afoot-cli/src/cmd/{watch,debug_server,debug_frames}.rs`)
 implements the same `/debug` contract as the mock, but deviates from the
 mock's deliberately rich fixtures in specific, documented ways. All of
 these are tolerated by the console's types (`console/src/lib/types/debug.ts`)
 and stores — a null/absent value here is never rendered as a fabricated
 number or a silent 0. Full rationale for each: `docs/design-log.md`, entry
-"`af watch` resident mode, sampler lifecycle, and the `/debug` console
+"`afoot watch` resident mode, sampler lifecycle, and the `/debug` console
 surface" (read this first for anything below that seems surprising).
 
 - **`open_spans` is always `[]`.** The only span collector emits spans on
@@ -88,13 +88,13 @@ surface" (read this first for anything below that seems surprising).
   is exactly the invented number the project forbids. `grid.source` says
   why. Renders `"n/a · {source}"` (`fmtGridIntensity`), never `0`.
 - **`health.otlp_receiver.endpoint` may be `null`**, with an explanatory
-  `note`, when no OTLP receiver is running in this `af watch` process (e.g.
+  `note`, when no OTLP receiver is running in this `afoot watch` process (e.g.
   `--no-otlp`, or a reported-not-fatal bind failure) — found during this
   task's own e2e run, not originally in DATA-CONTRACT's own example.
 - **Watchdog `cmd` is the owning span's `tool_name`, not a command line** —
   no collector reports argv.
 - **Watchdog `orphaned`/`agent` states are currently unreachable** through
-  `af watch` (the v1 sampler watch-list only watches the root tree once per
+  `afoot watch` (the v1 sampler watch-list only watches the root tree once per
   session; the orphan-tail protocol is implemented and tested at the
   sampler level, but never triggered here).
 - **Allocation traces carry extra `note` strings**: `denominator_note` on
@@ -147,23 +147,23 @@ available) on a developer's own machine.
 
 ## Verifying against the real binary
 
-`cargo build -p af-cli`, start a resident `af watch --debug` against a
-tempdir `AF_STATE_DIR` (append Contract #1 spool lines from
+`cargo build -p afoot-cli`, start a resident `afoot watch --debug` against a
+tempdir `AFOOT_STATE_DIR` (append Contract #1 spool lines from
 `tests/fixtures/spool/basic-session/cc-hooks.sess-basic.jsonl`, or hand-roll
-your own — see `crates/af-cli/tests/watch.rs`'s `append_lines` helper for
+your own — see `crates/afoot-cli/tests/watch.rs`'s `append_lines` helper for
 the exact spool file naming convention: `<collector>.<session_id>.jsonl`
-under `$AF_STATE_DIR/spool/`), then `AF_DEBUG_TARGET=http://127.0.0.1:<port>
+under `$AFOOT_STATE_DIR/spool/`), then `AFOOT_DEBUG_TARGET=http://127.0.0.1:<port>
 npm run dev:real`. Open the console, and expect: the masthead dot to reach
 "live", the Stream tab's table and Inspector to populate from real facts
 (sorted by `ts`, correlated rows working), new spool lines to appear within
 about a second of being appended (the same `200ms` poll + `300ms` debounce
-`af watch` documents), and zero console errors as `report`/`health`/`alloc`
+`afoot watch` documents), and zero console errors as `report`/`health`/`alloc`
 frames — carrying the real server's nulls/notes above — flow through.
 
-## Shipping inside `af` (embed/mount contract)
+## Shipping inside `afoot` (embed/mount contract)
 
 The built console is not served by Vite in production — it is compiled
-into the `af` binary by `crates/af-console/`, a small Rust crate whose
+into the `afoot` binary by `crates/afoot-console/`, a small Rust crate whose
 whole job is `include_dir!`-embedding `console/dist/` and handing pages
 back out:
 
@@ -173,9 +173,9 @@ pub fn asset(path: &str) -> Option<StaticAsset>;
 pub fn is_placeholder() -> bool;
 ```
 
-This is **implemented in `crates/af-cli/src/cmd/debug_server.rs`**: its
+This is **implemented in `crates/afoot-cli/src/cmd/debug_server.rs`**: its
 routing fallback (everything that doesn't match `/debug/*`) calls
-`af_console::asset(path)` — a leading `/` and a trailing `?query` are both
+`afoot_console::asset(path)` — a leading `/` and a trailing `?query` are both
 fine, `asset` strips them itself, collapses repeated/empty path segments
 (`//assets//x.js` resolves the same as `/assets/x.js`), and rejects `..`
 path segments outright. `Some(StaticAsset)` is a 200: `bytes` with
@@ -192,13 +192,13 @@ To run the console from inside the real binary:
 
 ```bash
 npm --prefix console run build   # produces console/dist/
-cargo build -p af-cli            # embeds it into af-console, links af-cli
-af watch --debug                 # open http://127.0.0.1:9414/
+cargo build -p afoot-cli            # embeds it into afoot-console, links afoot-cli
+afoot watch --debug                 # open http://127.0.0.1:9414/
 ```
 
-If `console/dist/` is missing at `cargo build` time, `af-console`'s
+If `console/dist/` is missing at `cargo build` time, `afoot-console`'s
 `build.rs` falls back to a placeholder page (see "Build pipeline" below)
-and `af watch --debug` logs a startup line to stderr — `debug console
+and `afoot watch --debug` logs a startup line to stderr — `debug console
 embedded as placeholder — build console/ and rebuild to serve the UI` — so
 a forgotten `npm run build` shows up immediately instead of silently
 serving a near-empty page. The dev modes above (`npm run dev` /
@@ -208,12 +208,12 @@ the console as it actually ships.
 ### Build pipeline
 
 `console/dist/` must exist *before* `cargo build` compiles
-`af-console`, because its `build.rs` only copies the directory — it never
+`afoot-console`, because its `build.rs` only copies the directory — it never
 invokes `npm`:
 
 ```bash
 npm --prefix console run build   # produces console/dist/
-cargo build                       # embeds it into af-console
+cargo build                       # embeds it into afoot-console
 ```
 
 Build the crate without that first step (a fresh checkout, a cargo-only
@@ -221,7 +221,7 @@ CI job, local iteration on the Rust side) and it still compiles: `build.rs`
 falls back to a minimal placeholder `index.html` ("console not built — run
 `npm --prefix console run build` and rebuild") and prints a
 `cargo:warning` so the gap shows up in build output instead of silently
-shipping stale or missing UI. `af_console::is_placeholder()` lets a caller
+shipping stale or missing UI. `afoot_console::is_placeholder()` lets a caller
 (or a test) tell which case is embedded at runtime.
 
 ### Review checklist

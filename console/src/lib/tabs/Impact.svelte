@@ -1,7 +1,7 @@
 <script lang="ts">
   // flex:1 main + 296px aside (SCREENS.md §4). Main: cards -> criteria
   // table -> cross-paradigm note -> per-model table. Aside: "what
-  // token-only misses" -> estimation-status histogram -> af statusline
+  // token-only misses" -> estimation-status histogram -> afoot statusline
   // preview -> methodology block.
   //
   // Unlike Attribution/Timeline (which read eventStore/allocStore's bulk
@@ -121,7 +121,7 @@
         {/each}
       </div>
 
-      <div class="impact__section-heading">af statusline preview</div>
+      <div class="impact__section-heading">afoot statusline preview</div>
       <StatuslinePreview lines={aside.statuslineLines} />
 
       <div class="impact__section-heading">Methodology</div>

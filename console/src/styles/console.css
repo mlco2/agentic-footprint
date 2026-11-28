@@ -1,5 +1,5 @@
 /* Console-specific semantic layer, built entirely on Broadsheet variables
-   (see docs/design_handoff_af_debug_console/DESIGN-SYSTEM.md). No raw hex,
+   (see docs/design_handoff_afoot_debug_console/DESIGN-SYSTEM.md). No raw hex,
    font or px value that a token already carries. */
 
 :root {
@@ -7,7 +7,7 @@
 }
 
 /* — shell layout (SCREENS.md: 100vh column, overflow hidden) — */
-.af-shell {
+.afoot-shell {
   height: 100vh;
   display: flex;
   flex-direction: column;
@@ -16,7 +16,7 @@
   color: var(--color-text);
   font-family: var(--font-body);
 }
-.af-main {
+.afoot-main {
   flex: 1;
   min-height: 0;
   display: flex;

@@ -10,7 +10,7 @@
   import Impact from "./lib/tabs/Impact.svelte";
   import Health from "./lib/tabs/Health.svelte";
   import OnboardingPanel from "./lib/components/OnboardingPanel.svelte";
-  import { afClient } from "./lib/client/afClient.svelte";
+  import { afootClient } from "./lib/client/afootClient.svelte";
   import { sessionStore } from "./lib/stores/sessionStore.svelte";
   import { uiStore, type Tab } from "./lib/stores/uiStore.svelte";
 
@@ -22,19 +22,19 @@
   // session to show: say what it is waiting for instead of rendering five
   // empty tabs. While disconnected the tabs stay, with whatever they last
   // held, under the banner — an onboarding screen then would be a lie.
-  const onboarding = $derived(sessionStore.list.length === 0 && (afClient.status === "live" || afClient.status === "connecting"));
+  const onboarding = $derived(sessionStore.list.length === 0 && (afootClient.status === "live" || afootClient.status === "connecting"));
 
   onMount(() => {
-    void afClient.start();
+    void afootClient.start();
   });
 </script>
 
-<div class="af-shell">
+<div class="afoot-shell">
   <Masthead />
   <TabBar tabs={TABS} active={uiStore.tab} onSelect={(t) => uiStore.setTab(t)} />
-  <DisconnectedBanner status={afClient.status} />
+  <DisconnectedBanner status={afootClient.status} />
 
-  <main class="af-main">
+  <main class="afoot-main">
     {#if onboarding}
       <OnboardingPanel />
     {:else if uiStore.tab === "timeline"}

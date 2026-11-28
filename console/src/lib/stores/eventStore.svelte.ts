@@ -3,7 +3,7 @@
 // a full scan. Bulk data (the ring, the span map, the bucket index, the
 // decision/reject lists, the counters) is plain non-reactive state; `rev` is
 // the only reactive signal, and it only advances when `flush()` is called —
-// once per 1 Hz tick, from AfClient's single interval (architecture rule:
+// once per 1 Hz tick, from AfootClient's single interval (architecture rule:
 // "bumped once per flush batch, not per frame"). Ingest methods never touch
 // `rev` directly; they only flip an internal `dirty` flag.
 //
@@ -161,7 +161,7 @@ export class EventStore {
   }
 
   /** Back to the freshly-constructed state, all-time counters included —
-   * everything held came from a watcher process that is gone (AfClient, on
+   * everything held came from a watcher process that is gone (AfootClient, on
    * a `boot_id` change), and its sequence of events cannot be merged with
    * the new process's. `rev` is bumped on the next `flush()` like any
    * other change, so selectors recompute once. */
@@ -187,7 +187,7 @@ export class EventStore {
   }
 
   /** Bumps `rev` once if anything changed since the last flush; a no-op
-   * otherwise. Called from AfClient's single 1 Hz interval — never from
+   * otherwise. Called from AfootClient's single 1 Hz interval — never from
    * ingest methods themselves. */
   flush(): void {
     if (this.dirty) {

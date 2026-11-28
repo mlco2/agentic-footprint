@@ -103,7 +103,7 @@ function sessionFixture(): SessionInfo {
     attribution_policy: "l2_cpu_time",
     methodology: { version: "v2026.06.1", source: "bundled" },
     grid: { zone: "US-CAL-CISO", g_co2e_per_kwh: 210, source: "electricitymaps" },
-    state_dir: "/tmp/af",
+    state_dir: "/tmp/afoot",
     schema_version: "0.1.0",
     mode: "watch",
   };

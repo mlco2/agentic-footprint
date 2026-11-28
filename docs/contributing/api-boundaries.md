@@ -9,38 +9,38 @@ code stops at normalization; every later stage consumes shared contracts.
 collectors / OTLP normalizers
             │
             ▼
-        af-events
+        afoot-events
             │
      ┌──────┴──────┐
      ▼             ▼
- af-spool       af-store
+ afoot-spool       afoot-store
      │             │
      └──────┬──────┘
             ▼
-         af-core ◀── af-sidecar
+         afoot-core ◀── afoot-sidecar
             │
             ▼
-          af-cli ─── af-console
+          afoot-cli ─── afoot-console
 ```
 
-`af-cli` is the composition root. Lower crates must not depend on CLI modules
+`afoot-cli` is the composition root. Lower crates must not depend on CLI modules
 or on a specific coding agent.
 
 ## Topic ownership
 
-- **Wire facts:** `af-events` and `schemas/`. Adding a fact field starts here.
-- **Filesystem transport:** `af-spool`. Filename grammar and tail offsets
+- **Wire facts:** `afoot-events` and `schemas/`. Adding a fact field starts here.
+- **Filesystem transport:** `afoot-spool`. Filename grammar and tail offsets
   have one implementation; lines that fail to parse are handed back to the
   caller, not stored.
-- **OTLP transport and source parsing:** `af-otlp`. Normalizers claim records
+- **OTLP transport and source parsing:** `afoot-otlp`. Normalizers claim records
   through descriptors and return envelope/unclaimed/dropped outcomes. The
   server writes nothing: it sends normalized events and metadata-only rejects
-  over a bounded channel to its owner (`af watch`), which stores them.
-- **Persistence:** `af-store`. Callers do not issue ad-hoc SQL outside this
+  over a bounded channel to its owner (`afoot watch`), which stores them.
+- **Persistence:** `afoot-store`. Callers do not issue ad-hoc SQL outside this
   crate. This includes the `rejects` table, the one place rejected input is
   recorded, as metadata only.
-- **Methodology:** `af-core` and managed sidecars. Collectors never estimate.
-- **Process orchestration and UX:** `af-cli`. Setup, watch, reporting, and HTTP
+- **Methodology:** `afoot-core` and managed sidecars. Collectors never estimate.
+- **Process orchestration and UX:** `afoot-cli`. Setup, watch, reporting, and HTTP
   presentation are binary concerns.
 
 ## Public API conventions
@@ -56,19 +56,19 @@ or on a specific coding agent.
   external protocol boundary or for opaque methodology payloads.
 - Source-specific attributes and compatibility fallbacks remain in the source
   normalizer.
-- Additive schema compatibility belongs in `af-events`; consumers should not
+- Additive schema compatibility belongs in `afoot-events`; consumers should not
   independently reinterpret the wire schema.
 
 ## Error types by boundary
 
-- `af-events` exposes `RejectReason` because callers branch on validation
+- `afoot-events` exposes `RejectReason` because callers branch on validation
   categories.
-- `af-store` exposes a typed `Error`/`Result` because SQLite vs JSON failures
+- `afoot-store` exposes a typed `Error`/`Result` because SQLite vs JSON failures
   are meaningful to callers.
-- `af-spool` uses `std::io::Result` for direct filesystem operations and
+- `afoot-spool` uses `std::io::Result` for direct filesystem operations and
   returns rejected lines as values (`RejectedLine`); the caller keeps only
   their metadata.
-- `af-core`, `af-sidecar`, `af-otlp::serve`, and CLI commands use
+- `afoot-core`, `afoot-sidecar`, `afoot-otlp::serve`, and CLI commands use
   `anyhow::Result` where failures combine multiple external systems and are
   ultimately rendered to a human operator.
 

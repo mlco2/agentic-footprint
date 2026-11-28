@@ -42,7 +42,7 @@ type ExtensionApi = {
   on: (name: string, handler: (event: Record<string, unknown>, context: Context) => void) => void;
 };
 
-const output = process.env.AF_PI_CAPTURE;
+const output = process.env.AFOOT_PI_CAPTURE;
 
 function messageSummary(value: unknown): Json {
   if (!value || typeof value !== "object") return null;

@@ -42,7 +42,7 @@ export class AllocStore {
   }
 
   /** Forget every trace — they belong to a watcher process that is gone
-   * (AfClient, on a `boot_id` change). In-flight fetches are left to
+   * (AfootClient, on a `boot_id` change). In-flight fetches are left to
    * finish; their ids are not ones the new process will ask about. */
   clear(): void {
     this.map.clear();

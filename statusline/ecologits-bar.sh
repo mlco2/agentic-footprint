@@ -4,7 +4,7 @@
 #
 # This prints ONE line with the environmental impact — greenhouse gas,
 # freshwater, energy, and more — of the current session, as measured and
-# estimated by the LOCAL control plane (`af`). It is meant to be called from
+# estimated by the LOCAL control plane (`afoot`). It is meant to be called from
 # inside YOUR OWN statusline.sh, which keeps full ownership of its output.
 # Add this after your line prints:
 #
@@ -19,19 +19,19 @@
 # from and whose rendering it keeps verbatim:
 #
 #   * No network, no API key, no cache, no background refresh. The numbers
-#     come from one synchronous `af statusline` call, which reads the local
+#     come from one synchronous `afoot statusline` call, which reads the local
 #     control plane's already-computed session record and never estimates,
-#     ingests or writes anything. If `af` is missing or has nothing stored
+#     ingests or writes anything. If `afoot` is missing or has nothing stored
 #     for this session yet, the bar renders zeros.
 #   * The numbers are NOT token-count estimates of the remote inference
-#     alone: `af` joins the ecologits estimate for the session's LLM calls
+#     alone: `afoot` joins the ecologits estimate for the session's LLM calls
 #     with the *measured* local energy of the agent's own tool execution on
 #     this machine. Zeros mean "not measured yet", never "no impact".
 #   * No model resolution. The control plane learns the model from the
 #     session's own events, so nothing here needs to guess an API model id;
 #     the `model` metric simply displays what Claude Code reports on stdin.
 #   * The electricity-mix zone is the control plane's business too
-#     (`af report --zone`, `$AF_ZONE`) — not this script's.
+#     (`afoot report --zone`, `$AFOOT_ZONE`) — not this script's.
 #
 # Repo: https://github.com/<org>/agentic-footprint
 # Impact methodology powered by EcoLogits — https://ecologits.ai
@@ -40,9 +40,9 @@
 # can also be overridden by an exported environment variable of the same name:
 #   ECOLOGITS_METRICS   impacts to display      (default: "gwp wcf energy")
 #                       one or more of: gwp wcf energy adpe pe model
-#   AF_BIN              path to the `af` binary (default: af, from $PATH)
+#   AFOOT_BIN              path to the `afoot` binary (default: afoot, from $PATH)
 #
-# Dependencies: bash, jq, awk, and the `af` binary.
+# Dependencies: bash, jq, awk, and the `afoot` binary.
 
 input=$(cat)
 
@@ -80,12 +80,12 @@ ECO_METRICS="${ECOLOGITS_METRICS:-gwp wcf energy}"
 
 # ---- The numbers: one synchronous call into the local control plane -------
 #
-# `af statusline` takes the same status JSON on stdin, reads the stored
+# `afoot statusline` takes the same status JSON on stdin, reads the stored
 # session record read-only, and prints exactly one line of five plain
 # decimals — always, including when it knows nothing. The `|| printf` is for
-# the cases `af` never gets to answer at all (not installed, not executable):
+# the cases `afoot` never gets to answer at all (not installed, not executable):
 # a status line must not lose its bar because a binary is missing.
-LINE=$("${AF_BIN:-af}" statusline <<<"$input" 2>/dev/null || printf '0 0 0 0 0')
+LINE=$("${AFOOT_BIN:-afoot}" statusline <<<"$input" 2>/dev/null || printf '0 0 0 0 0')
 read -r GWP WCF ENERGY ADPE PE <<<"$LINE"
 
 # ---- The metrics, one table -----------------------------------------------

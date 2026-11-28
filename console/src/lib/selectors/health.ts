@@ -171,7 +171,7 @@ export interface RejectedRow {
   reason: string;
   origin: string;
   /** 1-based line number, from the start of the file (docs/design-log.md,
-   * "`af_spool::tail` reject shape changed") — typeset via `fmtCount`
+   * "`afoot_spool::tail` reject shape changed") — typeset via `fmtCount`
    * (grouped, no unit), never `fmtBytes` (a size-scaling formatter that
    * would misrepresent a line number as a magnitude). */
   lineLabel: string;
@@ -232,7 +232,7 @@ export interface HealthAsideModel {
 
 function doctorDotClass(status: string): DotClass {
   // PythonDoctorRow.status is a plain `string` on the wire (debug.ts's own
-  // doc comment doesn't narrow it to a union — `af python doctor --json` is
+  // doc comment doesn't narrow it to a union — `afoot python doctor --json` is
   // gap #11, a real CLI surface this console does not own the vocabulary
   // of). Brief: "status ok=cyan, warn=neutral, error=magenta" — an unknown
   // fourth value falls back to neutral (not magenta), since a status this
@@ -245,7 +245,7 @@ function doctorDotClass(status: string): DotClass {
 /** `health.collectors[].spool_file`/`byte_offset` joined with
  * `session.state_dir` per the documented spool layout (docs/design-log.md:
  * "All spool files live under `~/.local/state/agentic-footprint/spool/`, or
- * `$AF_STATE_DIR/spool/` if set") — string concatenation of two already-real
+ * `$AFOOT_STATE_DIR/spool/` if set") — string concatenation of two already-real
  * payload fields with a fixed, documented separator, not a fabricated path
  * segment (global-constraints.md #1 forbids computing NUMBERS the server
  * didn't supply; it does not forbid composing a display path out of two
@@ -332,7 +332,7 @@ const memoHealthAside = memo1((health: HealthPayload | undefined, rev: number, s
 
 /** Ingestion key/values (spool paths + byte offsets + otlp endpoint/
  * protocol/accepted/discarded, verbatim) + watchdog rows (Timeline rail
- * model shape, reused) + `af python doctor` rows with a severity dot
+ * model shape, reused) + `afoot python doctor` rows with a severity dot
  * (SCREENS.md §5 aside). `rev` is `eventStore.rev` — the watchdog list's own
  * change signal, since `eventStore.watchdog` is bulk non-reactive state read
  * directly here, mirroring every other selector's `(rev, ...)` memo key. */

@@ -1,5 +1,5 @@
 // SessionStore selection semantics + ReportStore per-session keying — the
-// client half of the multi-session contract (see crates/af-cli/tests/
+// client half of the multi-session contract (see crates/afoot-cli/tests/
 // watch.rs `two_sessions_are_served_side_by_side` for the server half).
 import { describe, expect, it, vi } from "vitest";
 

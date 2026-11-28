@@ -35,7 +35,7 @@ def main() -> None:
     with args.output.open("wb") as raw:
         with gzip.GzipFile(filename="", mode="wb", fileobj=raw, mtime=args.epoch) as compressed:
             with tarfile.open(fileobj=compressed, mode="w", format=tarfile.PAX_FORMAT) as archive:
-                add_file(archive, args.binary, f"{root}/af", 0o755, args.epoch)
+                add_file(archive, args.binary, f"{root}/afoot", 0o755, args.epoch)
                 add_file(archive, Path("install.sh"), f"{root}/install.sh", 0o755, args.epoch)
                 add_file(archive, Path("LICENSE"), f"{root}/LICENSE", 0o644, args.epoch)
                 add_file(archive, Path("README.md"), f"{root}/README.md", 0o644, args.epoch)

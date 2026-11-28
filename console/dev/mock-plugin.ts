@@ -1,4 +1,4 @@
-// Dev-only mock of the af `/debug/*` HTTP+SSE surface (DATA-CONTRACT §2).
+// Dev-only mock of the afoot `/debug/*` HTTP+SSE surface (DATA-CONTRACT §2).
 // Wired into both `configureServer` (vite dev) and `configurePreviewServer`
 // (vite preview) in vite.config.ts, so `npm run dev` and `npm run preview`
 // both serve it. The real Rust control-plane endpoints arrive later from
@@ -6,7 +6,7 @@
 // console/src/ code is written against it. Nothing under console/dev/ (this
 // file included) may ever be imported by console/src/.
 //
-// Chaos toggles (dev-only, never present in a real af server):
+// Chaos toggles (dev-only, never present in a real afoot server):
 //   POST /debug/__mock/drop-sse — closes every currently-open SSE connection once.
 //   POST /debug/__mock/stall    — stop emitting frames for 10s without closing any connection.
 //   POST /debug/__mock/restart  — behave like a restarted watcher: new boot_id, every open
@@ -221,7 +221,7 @@ export function buildStatus(boot: string, nowWallMs: number): WatcherStatus {
   return {
     boot_id: boot,
     started_at: new Date(SERVER_START_WALL_MS).toISOString(),
-    af_version: "0.1.0",
+    afoot_version: "0.1.0",
     flush_interval_ms: 60000,
     receiver: { endpoint: "127.0.0.1:4318", note: null },
     agents: [
@@ -267,7 +267,7 @@ export function buildStatus(boot: string, nowWallMs: number): WatcherStatus {
             config_path: "/Users/dev/work/api/.codex/config.toml",
             state: "not_configured",
             detail: "/Users/dev/work/api/.codex/config.toml has no telemetry configuration",
-            action: "af setup --agents codex --project /Users/dev/work/api",
+            action: "afoot setup --agents codex --project /Users/dev/work/api",
             session_id: null,
             last_event_at: null,
           },
@@ -280,7 +280,7 @@ export function buildStatus(boot: string, nowWallMs: number): WatcherStatus {
         name: "OpenCode",
         state: "not_configured",
         detail: null,
-        action: "af setup",
+        action: "afoot setup",
         config_path: null,
         processes: null,
         sessions: 0,

@@ -3,14 +3,14 @@
 For the complete copy-paste setup, verification, privacy, and troubleshooting
 procedure, see [`docs/how-to/codex.md`](../../docs/how-to/codex.md).
 
-Codex uses the existing `af watch` OTLP receiver; no wrapper or app-server
+Codex uses the existing `afoot watch` OTLP receiver; no wrapper or app-server
 proxy is required for ordinary CLI/TUI sessions. The receiver stores the
 normalized facts directly in the SQLite store; there is no Codex spool file.
 
 Enable native Codex log export to the receiver:
 
 ```sh
-af setup --agents codex
+afoot setup --agents codex
 ```
 
 The wizard backs up and updates the effective `$CODEX_HOME/config.toml` when
@@ -40,7 +40,7 @@ The provider on each `llm_call` is the `provider_name` that
 provider-configurable via `model_providers`, so it is never assumed). A
 `response.completed` for a conversation whose start this receiver never saw
 gets `provider: "unknown"` — if the start was missed, the receiver was not
-running, and guessing would be dishonest. Start `af watch` before the Codex
+running, and guessing would be dishonest. Start `afoot watch` before the Codex
 session.
 
 MCP tool calls get `execution_locus: "unknown"`, matching the Claude Code

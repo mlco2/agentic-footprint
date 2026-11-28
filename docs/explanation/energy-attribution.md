@@ -1,7 +1,7 @@
 # Energy attribution: machine → session → action span
 
 This document describes the attribution pipeline currently implemented by
-`af watch`, the shared CodeCarbon sampler, and `af-core`.
+`afoot watch`, the shared CodeCarbon sampler, and `afoot-core`.
 
 The central invariant is **energy conservation**. A physical machine window is
 measured once, divided across active agent sessions once, and then divided
@@ -49,7 +49,7 @@ There are two distinct attribution stages:
 
 1. **Machine → session**, performed by the shared Python sampler.
 2. **Session → action span/tool**, performed independently for each session by
-   `af-core`.
+   `afoot-core`.
 
 Keeping these stages separate allows one machine meter to serve concurrent
 sessions without losing process-level attribution.
@@ -146,7 +146,7 @@ spans currently participate like local spans.
 
 ## Stage 4 — attribute a session slice to spans/tools
 
-For every session energy window, `af-core` chooses the best available policy.
+For every session energy window, `afoot-core` chooses the best available policy.
 
 ```mermaid
 flowchart TD

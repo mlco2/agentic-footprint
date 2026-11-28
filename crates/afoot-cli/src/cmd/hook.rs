@@ -1,0 +1,696 @@
+//! `afoot hook`: the Claude Code hooks collector ("cc-hooks") as a built-in
+//! subcommand — the native-Windows counterpart of
+//! `collectors/claude-code/afoot-hook.sh`, and a behavioral port of it: same
+//! collector name/version, same spool lines, same open-span lifecycle, so
+//! the two implementations are interchangeable per platform.
+//!
+//! One subcommand handles all six hook events (SessionStart, PreToolUse,
+//! PostToolUse, PostToolUseFailure, Stop, SessionEnd) — the same command is
+//! registered for every event in `.claude/settings.json`, and dispatch
+//! happens on the hook payload's own `hook_event_name` field.
+//!
+//! Contract (shared with `afoot statusline`): read the hook JSON from stdin,
+//! **always exit 0**, degrade silently. Claude Code blocks on this command
+//! for every tool call inside a live session; collection is best-effort and
+//! the running session is sacred — this command must never be the reason a
+//! turn fails. Errors are best-effort appended to
+//! `<state_dir>/tmp/hook-errors.log` and otherwise swallowed. It never
+//! reads transcripts — only the hook JSON on stdin.
+//!
+//! Registered as a bare executable command (`"<afoot> hook"`, no shell
+//! wrapper) deliberately: Claude Code then usually spawns it as a direct
+//! child, so this process's parent PID is the Claude Code process, and
+//! that PID — carried on the SessionStart bootstrap span's `pids` — is what
+//! makes process-tree energy attribution work. Some Claude Code versions
+//! still run the command through a shell; [`session_root`] then reports the
+//! shell's parent instead of the short-lived shell.
+//!
+//! `session_id` and `tool_use_id` come straight from Claude Code's hook
+//! JSON and are used to build file paths (spool filename, open-span
+//! filename); both go through [`afoot_otlp::sanitize_id`] — the same rule the
+//! sh hook and `afoot_sampler` implement, pinned for all of them by
+//! `tests/fixtures/sanitize-vectors.json`.
+
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+
+use anyhow::{Context, Result};
+use serde_json::Value;
+
+use afoot_events::{
+    ActionSpan, AgentApp, Attribution, Collector, Envelope, ExecutionLocus, Payload, SessionMeta,
+    Status, ToolKind,
+};
+use afoot_otlp::sanitize_id;
+
+const SCHEMA_VERSION: &str = "0.1.0";
+pub(super) const COLLECTOR_NAME: &str = "cc-hooks";
+const COLLECTOR_VERSION: &str = "0.1.0";
+
+/// Entry point behind `afoot hook`. Always returns 0 — see the module doc.
+pub fn run() -> i32 {
+    let mut input = String::new();
+    let _ = std::io::Read::read_to_string(&mut std::io::stdin(), &mut input);
+    let Some(state_dir) = crate::paths::state_dir_checked() else {
+        return 0;
+    };
+    let result = handle(&state_dir, &input, super::now_ms());
+    if let Err(error) = result {
+        log_line(&state_dir, &format!("{error:#}"));
+    }
+    0
+}
+
+/// The testable core: everything [`run`] does apart from reading stdin,
+/// sampling the clock, and swallowing the outcome.
+///
+/// One `now` per hook invocation, shared by every emitted event's envelope
+/// `ts` and `t_end` — a hook invocation *is* one instant as far as this
+/// collector can honestly claim to know. Formatted by
+/// [`afoot_core::rfc3339_ms`], the same RFC 3339 millisecond shape the sh
+/// hook's jq derives and the control plane stamps derived records with.
+pub fn handle(state_dir: &Path, input: &str, now_ms: i64) -> Result<()> {
+    let hook: Value = serde_json::from_str(input).context("hook stdin is not valid JSON")?;
+    let ts = afoot_core::rfc3339_ms(now_ms).context("formatting the invocation timestamp")?;
+
+    let session_id = sanitize_id(&json_string(hook.get("session_id"), "unknown"));
+    let event = json_string(hook.get("hook_event_name"), "");
+    let tool_use_id_raw = json_string(hook.get("tool_use_id"), "");
+    let tool_name = json_string(hook.get("tool_name"), "");
+    let is_interrupt = match hook.get("is_interrupt") {
+        Some(Value::Bool(flag)) => *flag,
+        Some(Value::String(s)) => s == "true",
+        _ => false,
+    };
+
+    // Open-span scratch files are partitioned per session:
+    // <state>/tmp/openspans/<SESSION_ID>/<tool_use_id>. The per-session
+    // directory is what makes the Stop/SessionEnd sweep safe: a concurrent
+    // session's in-flight spans are not visible here and cannot be swept.
+    // Safe as a path component because SESSION_ID has been through
+    // sanitize_id: it can hold no separator.
+    let openspan_dir = state_dir.join("tmp").join("openspans").join(&session_id);
+
+    match event.as_str() {
+        "SessionStart" => {
+            // session_meta is schema-frozen (no room for a process-id
+            // field), so the parent PID — the Claude Code process — travels
+            // as `pids` on a zero-length bootstrap action_span instead.
+            // Looked up here, not in `run`: the lookup walks a process
+            // snapshot on Windows, and every other (per-tool-call, session-
+            // blocking) event has no use for it.
+            let ppid = parent_pid().map(|pid| session_root(pid, process_name_and_parent));
+            emit(
+                state_dir,
+                &session_id,
+                &envelope(
+                    &ts,
+                    now_ms,
+                    &session_id,
+                    None,
+                    Payload::ActionSpan(ActionSpan {
+                        span_id: format!("session-boot-{session_id}"),
+                        tool_name: "__session__".to_string(),
+                        tool_kind: ToolKind::Other,
+                        execution_locus: ExecutionLocus::Local,
+                        t_start: ts.clone(),
+                        t_end: ts.clone(),
+                        pids: ppid.map(|pid| vec![i64::from(pid)]),
+                        cgroup: None,
+                        status: Some(Status::Ok),
+                    }),
+                ),
+            )?;
+            // version omitted: not present in any hook payload field;
+            // geo_zone omitted: user-configured, not auto-detected here.
+            emit(
+                state_dir,
+                &session_id,
+                &envelope(
+                    &ts,
+                    now_ms,
+                    &session_id,
+                    None,
+                    Payload::SessionMeta(SessionMeta {
+                        agent_app: AgentApp {
+                            name: "claude-code".to_string(),
+                            version: None,
+                        },
+                        os: Some(std::env::consts::OS.to_string()),
+                        hardware: None,
+                        geo_zone: None,
+                        power_source: None,
+                    }),
+                ),
+            )?;
+        }
+
+        "PreToolUse" => {
+            // No spool write here — PreToolUse only opens the span. Without
+            // a tool_use_id there's no key to open it under, so there's
+            // nothing this hook can usefully record.
+            if !tool_use_id_raw.is_empty() {
+                let tool_use_id = sanitize_id(&tool_use_id_raw);
+                create_private_dir(&openspan_dir)
+                    .with_context(|| format!("creating {}", openspan_dir.display()))?;
+                let record = serde_json::json!({"t_start": ts, "tool_name": tool_name});
+                private_file()
+                    .write(true)
+                    .create(true)
+                    .truncate(true)
+                    .open(openspan_dir.join(&tool_use_id))
+                    .and_then(|mut file| {
+                        std::io::Write::write_all(&mut file, record.to_string().as_bytes())
+                    })
+                    .context("writing the open-span record")?;
+            }
+        }
+
+        // PostToolUseFailure is the *other* half of PostToolUse, not an
+        // extra: Claude Code fires exactly one of the two per tool call,
+        // and a failing tool call gets ONLY the failure event. Both share
+        // the closing logic; only the `status` of an observed span differs.
+        "PostToolUse" | "PostToolUseFailure" => {
+            if tool_use_id_raw.is_empty() {
+                return Ok(());
+            }
+            let tool_use_id = sanitize_id(&tool_use_id_raw);
+            // `is_interrupt: true` is the user/agent cancelling a running
+            // tool, which the schema names `cancelled`; every other failure
+            // is `error`.
+            let status = if event == "PostToolUseFailure" {
+                if is_interrupt {
+                    Status::Cancelled
+                } else {
+                    Status::Error
+                }
+            } else {
+                Status::Ok
+            };
+            let span_file = openspan_dir.join(&tool_use_id);
+            let record = read_open_span(&span_file);
+            let span = close_span(record.as_ref(), &tool_use_id, &tool_name, status, &ts);
+            let event = envelope(
+                &ts,
+                now_ms,
+                &session_id,
+                Some(tool_use_id.clone()),
+                Payload::ActionSpan(span),
+            );
+            emit(state_dir, &session_id, &event)?;
+            // Removed either way, so a stale file can't be mis-parsed again
+            // by a later Stop/SessionEnd sweep.
+            let _ = std::fs::remove_file(&span_file);
+        }
+
+        "Stop" | "SessionEnd" => {
+            // Close any open-spans still on disk **for this session only**:
+            // a PreToolUse that never got a matching PostToolUse (the turn
+            // was interrupted, Claude Code crashed mid-tool-call, ...).
+            let Ok(entries) = std::fs::read_dir(&openspan_dir) else {
+                return Ok(());
+            };
+            let mut files: Vec<PathBuf> = entries
+                .flatten()
+                .map(|entry| entry.path())
+                .filter(|path| path.is_file())
+                .collect();
+            files.sort();
+            let mut corrupt_count = 0_u32;
+            for span_file in files {
+                let span_id = span_file
+                    .file_name()
+                    .map(|name| name.to_string_lossy().into_owned())
+                    .unwrap_or_default();
+                // Only files whose content actually parses as JSON are
+                // treated as open-spans and emitted; anything else is a
+                // corrupt/stray file — counted and removed, nothing emitted
+                // for it, never crashes the collector.
+                match read_open_span(&span_file) {
+                    Some(record) => {
+                        let span = close_span(Some(&record), &span_id, "", Status::Unknown, &ts);
+                        let event = envelope(
+                            &ts,
+                            now_ms,
+                            &session_id,
+                            Some(span_id),
+                            Payload::ActionSpan(span),
+                        );
+                        emit(state_dir, &session_id, &event)?;
+                    }
+                    None => corrupt_count += 1,
+                }
+                let _ = std::fs::remove_file(&span_file);
+            }
+            // The sweep emptied this session's directory; remove it so a
+            // long-lived state dir doesn't accumulate one empty directory
+            // per session ever run. Best-effort and non-recursive: a
+            // concurrent PreToolUse's fresh file makes the removal refuse,
+            // which is exactly the safety wanted.
+            let _ = std::fs::remove_dir(&openspan_dir);
+            if corrupt_count > 0 {
+                log_line(
+                    state_dir,
+                    &format!(
+                        "warn: Stop/SessionEnd skipped {corrupt_count} corrupt open-span file(s) under {}",
+                        openspan_dir.display()
+                    ),
+                );
+            }
+        }
+
+        // Unregistered/unknown hook event: nothing to do. Not an error —
+        // keeps the collector forward-compatible with hook events it
+        // doesn't model yet, rather than failing a Claude Code turn.
+        _ => {}
+    }
+    Ok(())
+}
+
+/// One closing `action_span`, for both the PostToolUse/PostToolUseFailure
+/// path and the Stop/SessionEnd sweep.
+///
+/// Never fabricate a start time we didn't observe: with no usable
+/// open-span record (hooks enabled mid-session, the file lost, a truncated
+/// write) the span collapses to a point at `t_end` and is marked
+/// `unknown`, which wins over the known outcome on purpose — the span
+/// itself was never observed.
+///
+/// `tool_name` comes from the hook payload when it has one and from the
+/// open-span `record` otherwise, which is what lets the sweep — whose Stop
+/// payload names no tool — classify the spans it closes. The record is the
+/// caller's one [`read_open_span`] result (`None` for a missing or
+/// unparseable file), so each span file is read exactly once.
+fn close_span(
+    record: Option<&Value>,
+    span_id: &str,
+    tool_name: &str,
+    status: Status,
+    t_end: &str,
+) -> ActionSpan {
+    let observed_start = record
+        .and_then(|record| record.get("t_start"))
+        .and_then(Value::as_str)
+        .filter(|start| !start.is_empty());
+    let name = if tool_name.is_empty() {
+        record
+            .map(|record| json_string(record.get("tool_name"), ""))
+            .unwrap_or_default()
+    } else {
+        tool_name.to_string()
+    };
+    let (kind, locus) = classify_tool(&name);
+    ActionSpan {
+        span_id: span_id.to_string(),
+        tool_name: name,
+        tool_kind: kind,
+        execution_locus: locus,
+        t_start: observed_start.unwrap_or(t_end).to_string(),
+        t_end: t_end.to_string(),
+        pids: None,
+        cgroup: None,
+        status: Some(if observed_start.is_none() {
+            Status::Unknown
+        } else {
+            status
+        }),
+    }
+}
+
+/// The open-span record, if the file exists and parses as JSON.
+fn read_open_span(span_file: &Path) -> Option<Value> {
+    let contents = std::fs::read_to_string(span_file).ok()?;
+    serde_json::from_str(&contents).ok()
+}
+
+/// tool_name -> (kind, locus). One definition, used by every emitted
+/// `action_span`: the closing PostToolUse knows the name from the hook
+/// payload, the Stop/SessionEnd sweep reads it back out of the open-span
+/// file, and both must classify it identically.
+///
+/// `mcp__*` -> locus `unknown`: the tool name alone doesn't reveal whether
+/// the MCP server is a local stdio process or a remote HTTP server, and
+/// this collector never invents a locus it can't observe.
+/// WebFetch/WebSearch are the only tools it can be sure are remote-network
+/// by name alone.
+fn classify_tool(name: &str) -> (ToolKind, ExecutionLocus) {
+    match name {
+        "Bash" => (ToolKind::Bash, ExecutionLocus::Local),
+        _ if name.starts_with("mcp__") => (ToolKind::Mcp, ExecutionLocus::Unknown),
+        "Edit" | "Write" | "Read" | "NotebookEdit" | "Glob" | "Grep" => {
+            (ToolKind::FileOp, ExecutionLocus::Local)
+        }
+        "Task" | "Agent" => (ToolKind::Subagent, ExecutionLocus::Local),
+        "WebFetch" | "WebSearch" => (ToolKind::Web, ExecutionLocus::Remote),
+        _ => (ToolKind::Other, ExecutionLocus::Unknown),
+    }
+}
+
+fn envelope(
+    ts: &str,
+    now_ms: i64,
+    session_id: &str,
+    tool_call_id: Option<String>,
+    payload: Payload,
+) -> Envelope {
+    Envelope {
+        schema_version: SCHEMA_VERSION.to_string(),
+        event_id: new_event_id(now_ms),
+        ts: ts.to_string(),
+        collector: Collector {
+            name: COLLECTOR_NAME.to_string(),
+            version: COLLECTOR_VERSION.to_string(),
+        },
+        session_id: session_id.to_string(),
+        attribution: tool_call_id.map(|id| Attribution {
+            tool_call_id: Some(id),
+            ..Attribution::default()
+        }),
+        payload,
+    }
+}
+
+/// Creates `dir` and any missing parents owner-only (`0700` on unix), as
+/// the sh shim's `umask 077` does: the hook can be the first thing to
+/// create the state dir, before `afoot watch` ever restricted it, and what it
+/// writes carries tool inputs. Directories that already exist keep their
+/// mode.
+fn create_private_dir(dir: &Path) -> std::io::Result<()> {
+    let mut builder = std::fs::DirBuilder::new();
+    builder.recursive(true);
+    #[cfg(unix)]
+    std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
+    builder.create(dir)
+}
+
+/// Open options whose newly created file is owner-only (`0600` on unix);
+/// see [`create_private_dir`].
+fn private_file() -> std::fs::OpenOptions {
+    #[cfg_attr(not(unix), allow(unused_mut))]
+    let mut options = std::fs::OpenOptions::new();
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+    options
+}
+
+/// Appends one Contract #1 event line to this session's spool file. A
+/// single write keeps each line complete; collectors never delete spool
+/// lines once written.
+fn emit(state_dir: &Path, session_id: &str, event: &Envelope) -> Result<()> {
+    use std::io::Write;
+
+    let spool_dir = state_dir.join("spool");
+    create_private_dir(&spool_dir)
+        .with_context(|| format!("creating spool dir {}", spool_dir.display()))?;
+    let line = serde_json::to_string(event).context("serializing the event")?;
+    let path = spool_dir.join(afoot_spool::spool_file_name(COLLECTOR_NAME, session_id));
+    let mut file = private_file()
+        .create(true)
+        .append(true)
+        .open(&path)
+        .with_context(|| format!("opening spool file {}", path.display()))?;
+    writeln!(file, "{line}").with_context(|| format!("appending to {}", path.display()))?;
+    Ok(())
+}
+
+/// A unique event id, comfortably over the schema's `minLength: 16`
+/// without a uuid dependency: the invocation's wall-clock millis + pid +
+/// a per-process counter (distinct ids within one invocation) + a randomly
+/// seeded hash (distinct across concurrent invocations in the same
+/// millisecond).
+fn new_event_id(now_ms: i64) -> String {
+    use std::hash::{BuildHasher, Hasher, RandomState};
+
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let count = COUNTER.fetch_add(1, Ordering::Relaxed);
+    let random = RandomState::new().build_hasher().finish();
+    format!(
+        "cc-{now_ms:x}-{pid}-{count}-{random:08x}",
+        pid = std::process::id()
+    )
+}
+
+/// The parent process id — the Claude Code process when this command is
+/// registered as a bare executable path (see the module doc).
+#[cfg(unix)]
+fn parent_pid() -> Option<u32> {
+    Some(std::os::unix::process::parent_id())
+}
+
+/// Shells that may run a hook command without exec'ing it.
+const SHELLS: &[&str] = &["sh", "bash", "dash", "zsh", "ash", "ksh"];
+
+/// The pid that stands for the Claude Code session: the hook's parent, or,
+/// when that parent is a shell wrapping the hook command, the shell's own
+/// parent. Some Claude Code versions run hook commands through a shell
+/// that outlives the hook by milliseconds only; its pid would be gone by
+/// the time the sampler looks, and the session would get no energy. A
+/// shell whose parent is init (or unknown) is kept: there is no session
+/// process above it.
+fn session_root(parent: u32, lookup: impl Fn(u32) -> Option<(String, u32)>) -> u32 {
+    match lookup(parent) {
+        Some((name, grandparent))
+            if grandparent > 1 && SHELLS.contains(&name.trim_start_matches('-')) =>
+        {
+            grandparent
+        }
+        _ => parent,
+    }
+}
+
+/// `(name, parent pid)` from a `/proc/<pid>/stat` line. The name sits in
+/// parentheses and may itself hold spaces and parentheses, so the split is
+/// at the last `)`.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn parse_proc_stat(line: &str) -> Option<(String, u32)> {
+    let open = line.find('(')?;
+    let close = line.rfind(')')?;
+    let name = line.get(open + 1..close)?.to_string();
+    let mut rest = line.get(close + 1..)?.split_whitespace();
+    let _state = rest.next()?;
+    let ppid = rest.next()?.parse().ok()?;
+    Some((name, ppid))
+}
+
+/// `(executable name, parent pid)` from `ps -o ppid=,comm=` output; macOS
+/// prints the full path, which may hold spaces.
+#[cfg_attr(any(target_os = "linux", windows), allow(dead_code))]
+fn parse_ps_ppid_comm(output: &str) -> Option<(String, u32)> {
+    let line = output.trim();
+    let (ppid, comm) = line.split_once(char::is_whitespace)?;
+    let comm = comm.trim();
+    let name = comm.rsplit('/').next().filter(|n| !n.is_empty())?;
+    Some((name.to_string(), ppid.parse().ok()?))
+}
+
+#[cfg(target_os = "linux")]
+fn process_name_and_parent(pid: u32) -> Option<(String, u32)> {
+    parse_proc_stat(&std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?)
+}
+
+/// Only SessionStart pays for this `ps`, never a per-tool-call event.
+#[cfg(all(unix, not(target_os = "linux")))]
+fn process_name_and_parent(pid: u32) -> Option<(String, u32)> {
+    let output = std::process::Command::new("ps")
+        .args(["-o", "ppid=,comm=", "-p", &pid.to_string()])
+        .stderr(std::process::Stdio::null())
+        .output()
+        .ok()?;
+    output.status.success().then_some(())?;
+    parse_ps_ppid_comm(&String::from_utf8_lossy(&output.stdout))
+}
+
+/// Windows hooks are not run through a POSIX shell: the parent is kept.
+#[cfg(windows)]
+fn process_name_and_parent(_pid: u32) -> Option<(String, u32)> {
+    None
+}
+
+/// Windows has no getppid; walk a Toolhelp process snapshot for our own
+/// entry's `th32ParentProcessID`.
+#[cfg(windows)]
+fn parent_pid() -> Option<u32> {
+    use windows_sys::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE};
+    use windows_sys::Win32::System::Diagnostics::ToolHelp::{
+        CreateToolhelp32Snapshot, Process32First, Process32Next, PROCESSENTRY32, TH32CS_SNAPPROCESS,
+    };
+
+    let own_pid = std::process::id();
+    // SAFETY: a snapshot handle is closed on every path out; PROCESSENTRY32
+    // is a plain data struct with dwSize set before use, as the API requires.
+    unsafe {
+        let snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+        if snapshot == INVALID_HANDLE_VALUE {
+            return None;
+        }
+        let mut entry: PROCESSENTRY32 = std::mem::zeroed();
+        entry.dwSize = std::mem::size_of::<PROCESSENTRY32>() as u32;
+        let mut found = None;
+        if Process32First(snapshot, &mut entry) != 0 {
+            loop {
+                if entry.th32ProcessID == own_pid {
+                    found = Some(entry.th32ParentProcessID);
+                    break;
+                }
+                if Process32Next(snapshot, &mut entry) == 0 {
+                    break;
+                }
+            }
+        }
+        CloseHandle(snapshot);
+        found
+    }
+}
+
+/// `jq`-compatible string coercion for a hook JSON field:
+/// missing/null/false fall back to `default` (jq's `//` treats null and
+/// false as absent), strings pass through, and anything else renders as
+/// its JSON text (jq's `tostring`).
+fn json_string(value: Option<&Value>, default: &str) -> String {
+    match value {
+        None | Some(Value::Null) | Some(Value::Bool(false)) => default.to_string(),
+        Some(Value::String(s)) => s.clone(),
+        Some(other) => other.to_string(),
+    }
+}
+
+/// Best-effort line into the hook error log under `<state_dir>/tmp`;
+/// failures to log are swallowed — there is nowhere safer to report them.
+fn log_line(state_dir: &Path, message: &str) {
+    use std::io::Write;
+
+    let tmp = state_dir.join("tmp");
+    if create_private_dir(&tmp).is_err() {
+        return;
+    }
+    if let Ok(mut file) = private_file()
+        .create(true)
+        .append(true)
+        .open(tmp.join("hook-errors.log"))
+    {
+        let _ = writeln!(file, "afoot[claude-hook] {message}");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn classification_matches_the_sh_hook_table() {
+        assert_eq!(
+            classify_tool("Bash"),
+            (ToolKind::Bash, ExecutionLocus::Local)
+        );
+        assert_eq!(
+            classify_tool("mcp__github__create_issue"),
+            (ToolKind::Mcp, ExecutionLocus::Unknown)
+        );
+        for name in ["Edit", "Write", "Read", "NotebookEdit", "Glob", "Grep"] {
+            assert_eq!(
+                classify_tool(name),
+                (ToolKind::FileOp, ExecutionLocus::Local)
+            );
+        }
+        for name in ["Task", "Agent"] {
+            assert_eq!(
+                classify_tool(name),
+                (ToolKind::Subagent, ExecutionLocus::Local)
+            );
+        }
+        for name in ["WebFetch", "WebSearch"] {
+            assert_eq!(classify_tool(name), (ToolKind::Web, ExecutionLocus::Remote));
+        }
+        for name in ["", "TodoWrite", "bash"] {
+            assert_eq!(
+                classify_tool(name),
+                (ToolKind::Other, ExecutionLocus::Unknown)
+            );
+        }
+    }
+
+    #[test]
+    fn event_ids_are_long_enough_and_distinct() {
+        let a = new_event_id(1_784_000_000_007);
+        let b = new_event_id(1_784_000_000_007);
+        assert!(a.len() >= 16, "id too short: {a}");
+        assert_ne!(a, b, "same-instant ids must still differ");
+    }
+
+    #[test]
+    fn json_string_mirrors_jq_alternative_and_tostring() {
+        use serde_json::json;
+        assert_eq!(json_string(None, "unknown"), "unknown");
+        assert_eq!(json_string(Some(&Value::Null), "unknown"), "unknown");
+        assert_eq!(json_string(Some(&json!(false)), "d"), "d");
+        assert_eq!(json_string(Some(&json!("sess")), "d"), "sess");
+        assert_eq!(json_string(Some(&json!(5)), "d"), "5");
+        assert_eq!(json_string(Some(&json!(true)), "d"), "true");
+    }
+
+    fn lookup<'a>(table: &'a [(u32, &'a str, u32)]) -> impl Fn(u32) -> Option<(String, u32)> + 'a {
+        move |pid| {
+            table
+                .iter()
+                .find(|(p, _, _)| *p == pid)
+                .map(|(_, name, ppid)| (name.to_string(), *ppid))
+        }
+    }
+
+    #[test]
+    fn a_shell_wrapping_the_hook_is_skipped_for_its_parent() {
+        let table = [(100, "sh", 50), (50, "claude", 1)];
+        assert_eq!(session_root(100, lookup(&table)), 50);
+        let table = [(100, "bash", 50)];
+        assert_eq!(session_root(100, lookup(&table)), 50);
+        let table = [(100, "-zsh", 50)];
+        assert_eq!(session_root(100, lookup(&table)), 50);
+    }
+
+    #[test]
+    fn a_direct_claude_code_parent_is_kept() {
+        let table = [(100, "claude", 50), (50, "bash", 1)];
+        assert_eq!(session_root(100, lookup(&table)), 100);
+        let table = [(100, "claude-2.1.331-linux-x64", 50)];
+        assert_eq!(session_root(100, lookup(&table)), 100);
+    }
+
+    #[test]
+    fn an_unreadable_parent_or_a_shell_under_init_is_kept() {
+        assert_eq!(session_root(100, lookup(&[])), 100);
+        let table = [(100, "sh", 1)];
+        assert_eq!(session_root(100, lookup(&table)), 100);
+        let table = [(100, "sh", 0)];
+        assert_eq!(session_root(100, lookup(&table)), 100);
+    }
+
+    #[test]
+    fn proc_stat_lines_give_the_name_and_the_parent() {
+        assert_eq!(
+            parse_proc_stat("123 (sh) S 45 123 123 0"),
+            Some(("sh".to_string(), 45))
+        );
+        assert_eq!(
+            parse_proc_stat("123 (a (b) c) R 7 1 1"),
+            Some(("a (b) c".to_string(), 7))
+        );
+        assert_eq!(parse_proc_stat("garbage"), None);
+    }
+
+    #[test]
+    fn ps_lines_give_the_executable_name_and_the_parent() {
+        assert_eq!(
+            parse_ps_ppid_comm("  45 /bin/bash\n"),
+            Some(("bash".to_string(), 45))
+        );
+        assert_eq!(
+            parse_ps_ppid_comm("45 -zsh"),
+            Some(("-zsh".to_string(), 45))
+        );
+        assert_eq!(
+            parse_ps_ppid_comm("9 /Applications/My App/claude"),
+            Some(("claude".to_string(), 9))
+        );
+        assert_eq!(parse_ps_ppid_comm(""), None);
+    }
+}

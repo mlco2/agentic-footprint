@@ -11,7 +11,7 @@ Only these attributes were rewritten, everything else is verbatim:
 - `user.account_id` → `00000000-0000-4000-8000-000000000000`
 - `host.name` → `host.local`
 
-Unlike `crates/af-otlp/tests/fixtures/otlp/logs-codex.json` (hand-shaped),
+Unlike `crates/afoot-otlp/tests/fixtures/otlp/logs-codex.json` (hand-shaped),
 these show what Codex really sends: `provider_name` is the display name
 `"OpenAI"`, `success` is sometimes the string `"true"`, and the first
 `response.completed` is a websocket prewarm with `output_token_count = 0`.

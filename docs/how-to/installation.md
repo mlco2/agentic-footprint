@@ -1,8 +1,8 @@
 # Install and setup wizard
 
 `install.sh` is the macOS/Linux bootstrap entry point and `install.ps1` is its
-Windows counterpart. Both install the native `af` binary and run the same
-receiver-first `af setup` wizard available from the CLI.
+Windows counterpart. Both install the native `afoot` binary and run the same
+receiver-first `afoot setup` wizard available from the CLI.
 
 ## From a source checkout
 
@@ -10,26 +10,26 @@ receiver-first `af setup` wizard available from the CLI.
 ./install.sh
 ```
 
-The shell script builds a release binary, installs it to `~/.local/bin/af`,
+The shell script builds a release binary, installs it to `~/.local/bin/afoot`,
 provisions the managed Python runtime and embedded sidecar sources, installs
-and starts a resident `af watch` user service, verifies its OTLP receiver, then
+and starts a resident `afoot watch` user service, verifies its OTLP receiver, then
 opens the agent setup prompt. Claude Code is configured in user settings so
 new projects work without repeating setup; Codex already uses user
 configuration.
 
 The managed runtime is a Python virtual environment under
-`$AF_STATE_DIR/venv`, created with `uv` when it is on `PATH` (otherwise with a
+`$AFOOT_STATE_DIR/venv`, created with `uv` when it is on `PATH` (otherwise with a
 matching system Python's `venv` and `pip`) from the pins in
 `python/manifest.toml`. `uv` runs with `--no-config`, so a `uv.toml` or
 `[tool.uv]` in the directory you install from cannot change where packages come
-from. The sidecars then run as `python -I` from a directory af owns, so code or
+from. The sidecars then run as `python -I` from a directory afoot owns, so code or
 a `.codecarbon.config` in your project is never picked up.
 
 Source-checkout installs rebuild the console before compiling Rust so the
-binary always embeds the current UI. If `af` already exists at the destination,
+binary always embeds the current UI. If `afoot` already exists at the destination,
 the installer shows the installed and candidate versions and asks before
 replacing it. Use `--yes` to approve upgrades non-interactively. If another
-`af` earlier on `PATH` would hide the installed binary, the installer prints a
+`afoot` earlier on `PATH` would hide the installed binary, the installer prints a
 warning with both paths.
 
 Non-interactive setup:
@@ -70,7 +70,7 @@ Custom install and project paths:
 Release archives will be signed and checksummed. The installer accepts
 explicit release inputs:
 
-A URL input always needs its SHA-256 (`AF_BINARY_SHA256`, `AF_SOURCE_SHA256`,
+A URL input always needs its SHA-256 (`AFOOT_BINARY_SHA256`, `AFOOT_SOURCE_SHA256`,
 from the release's `SHA256SUMS`); the installer refuses before downloading
 anything without it. After the download it compares the file's SHA-256 with
 the one supplied, case-insensitively, and stops with both values on a
@@ -78,25 +78,25 @@ mismatch, before anything is installed or built. A URL by itself is not a
 source of trust: whoever serves it decides what runs next. The checksum is only
 as trustworthy as where you copied it from, so take it from the release page,
 or check the release first as described in
-[Verify a release](verify-release.md). `AF_INSTALL_BINARY` and source-checkout
+[Verify a release](verify-release.md). `AFOOT_INSTALL_BINARY` and source-checkout
 installs are not checksummed: you already have the file.
 
 ```sh
 curl -LsSf https://example.invalid/install.sh | \
-  AF_BINARY_URL=https://example.invalid/releases/af \
-  AF_BINARY_SHA256=<sha256> \
+  AFOOT_BINARY_URL=https://example.invalid/releases/afoot \
+  AFOOT_BINARY_SHA256=<sha256> \
   sh -s -- --yes
 ```
 
 It can also install a locally supplied binary or build a source archive:
 
 ```sh
-AF_INSTALL_BINARY=/absolute/path/to/af ./install.sh
-AF_SOURCE_URL=https://example.invalid/source.tar.gz AF_SOURCE_SHA256=<sha256> ./install.sh
+AFOOT_INSTALL_BINARY=/absolute/path/to/afoot ./install.sh
+AFOOT_SOURCE_URL=https://example.invalid/source.tar.gz AFOOT_SOURCE_SHA256=<sha256> ./install.sh
 ```
 
 The shell script only obtains and places the binary. All agent detection and
-configuration logic lives in `af setup`, so future curl, Homebrew, npm, and
+configuration logic lives in `afoot setup`, so future curl, Homebrew, npm, and
 other distribution methods share exactly the same onboarding behavior.
 
 ## Windows 11
@@ -110,42 +110,42 @@ From a PowerShell prompt in a source checkout:
 For a published release binary, provide its URL and checksum:
 
 ```powershell
-$env:AF_BINARY_URL = 'https://example.invalid/releases/af-x86_64-pc-windows-msvc.exe'
-$env:AF_BINARY_SHA256 = '<sha256>'
+$env:AFOOT_BINARY_URL = 'https://example.invalid/releases/afoot-x86_64-pc-windows-msvc.exe'
+$env:AFOOT_BINARY_SHA256 = '<sha256>'
 .\install.ps1 -Yes
 ```
 
-The installer upgrades `%LOCALAPPDATA%\Programs\agentic-footprint\af.exe`
+The installer upgrades `%LOCALAPPDATA%\Programs\agentic-footprint\afoot.exe`
 atomically and adds that directory to the user `PATH`. On Windows the
-background receiver is a scheduled task (`agentic-footprint-af-watch`) that
-starts `af watch` when you log on; `af setup` offers to register it, and
-`af service install` does it directly. It is registered for your account
+background receiver is a scheduled task (`agentic-footprint-afoot-watch`) that
+starts `afoot watch` when you log on; `afoot setup` offers to register it, and
+`afoot service install` does it directly. It is registered for your account
 only and needs no administrator rights. This has not yet been verified on a
 standard (non-administrator) Windows account; where an organisation's policy
-forbids users from creating tasks, registration fails and `af` prints the
-`af watch` command to keep running in a PowerShell window instead.
+forbids users from creating tasks, registration fails and `afoot` prints the
+`afoot watch` command to keep running in a PowerShell window instead.
 
 ## Wizard commands
 
 ```sh
-af setup
-af setup --dry-run
-af setup --check
-af setup --yes
-af setup --global
-af setup --agents codex,claude-code
-af setup --project /absolute/path/to/project
-af setup --endpoint http://127.0.0.1:5000/v1/logs
+afoot setup
+afoot setup --dry-run
+afoot setup --check
+afoot setup --yes
+afoot setup --global
+afoot setup --agents codex,claude-code
+afoot setup --project /absolute/path/to/project
+afoot setup --endpoint http://127.0.0.1:5000/v1/logs
 ```
 
 The current wizard:
 
 - checks the receiver before inspecting any agent configuration;
-- when needed, offers to install and start `af watch` through the per-user
+- when needed, offers to install and start `afoot watch` through the per-user
   service manager (launchd on macOS, a systemd user session on Linux, Task
   Scheduler on Windows);
-- where there is none, prints the foreground `af watch` command instead;
-- verifies `POST /v1/logs` is answered by this version of the af receiver
+- where there is none, prints the foreground `afoot watch` command instead;
+- verifies `POST /v1/logs` is answered by this version of the afoot receiver
   (the `X-Agentic-Footprint` response header) before detecting or proposing
   agent changes;
 - detects Codex and Claude Code on `PATH`;
@@ -156,7 +156,7 @@ The current wizard:
   `settings.local.json`) that would disable telemetry or hooks, or redirect
   the logs exporter;
 - on macOS/Linux, installs the embedded Claude Code shell hook under
-  `$AF_STATE_DIR/integrations/`; on Windows, registers the built-in `af hook`
+  `$AFOOT_STATE_DIR/integrations/`; on Windows, registers the built-in `afoot hook`
   collector;
 - merges Claude hooks and OTLP environment into either the selected project's
   `.claude/settings.json` or, with `--global`, `~/.claude/settings.json`;
@@ -169,24 +169,24 @@ agent configuration is not inspected until receiver health passes.
 
 If you decline the recommended background receiver, setup exits without
 inspecting or changing agent configuration. Start the foreground receiver with
-the command printed by the wizard, keep it running, then rerun `af setup`.
+the command printed by the wizard, keep it running, then rerun `afoot setup`.
 
 ## Updating
 
-No release has been published yet, so `af self update` has nothing to
-install. An af built from a source checkout is updated by pulling and
+No release has been published yet, so `afoot self update` has nothing to
+install. An afoot built from a source checkout is updated by pulling and
 rerunning `./install.sh`. Once releases exist:
 
 ```sh
-af self update            # the latest release
-af self update X.Y.Z      # an exact release
-af self update --dry-run  # show what would change
+afoot self update            # the latest release
+afoot self update X.Y.Z      # an exact release
+afoot self update --dry-run  # show what would change
 ```
 
-`af self update` updates an af that the installer placed from a GitHub release
+`afoot self update` updates an afoot that the installer placed from a GitHub release
 binary. It checks the download against the release's `SHA256SUMS` and its
 Sigstore signature, which must come from this repository's release workflow
-for that tag. The signature is verified inside `af`, with nothing extra to
+for that tag. The signature is verified inside `afoot`, with nothing extra to
 install. `--allow-unsigned` skips the signature and relies on the checksum
 alone, which comes from the same release. It then replaces the binary, refreshes
 the managed CodeCarbon/EcoLogits runtime, and restarts the background
@@ -197,11 +197,11 @@ kept. Run from a source-checkout build, it changes nothing and exits 2.
 ## When data does not arrive
 
 ```sh
-af doctor
+afoot doctor
 ```
 
-`af doctor` is read-only. It checks that the receiver answering on the
-endpoint is this af and that the managed CodeCarbon/EcoLogits runtime works,
+`afoot doctor` is read-only. It checks that the receiver answering on the
+endpoint is this afoot and that the managed CodeCarbon/EcoLogits runtime works,
 lists running `claude`/`codex` processes that started
 before the telemetry configuration they read at startup last changed, and lists
 recent sessions that recorded tool activity but no token telemetry. Claude Code
@@ -209,30 +209,30 @@ reloads hooks while it runs but not its OTLP exporter settings, so a process
 started before setup records tool calls and never token usage: restart it. A
 process started before an unrelated edit to the same settings file is reported
 too; restarting it is harmless. It exits 1 when anything needs attention.
-`af watch` writes received telemetry once a minute, so a session that just
+`afoot watch` writes received telemetry once a minute, so a session that just
 started can be reported for a minute before its first token telemetry is
 stored.
 
 On macOS and Linux, service commands are idempotent:
 
 ```sh
-af service install
-af service start
-af service status
+afoot service install
+afoot service start
+afoot service status
 ```
 
-On macOS, logs are written under `$AF_STATE_DIR/logs/`. On Linux, inspect them
+On macOS, logs are written under `$AFOOT_STATE_DIR/logs/`. On Linux, inspect them
 with `journalctl --user -u agentic-footprint-watch.service`. Both service
 definitions set a `077` umask, so the logs and every file the service creates
 are readable by your account only. The background
 service deliberately does not use `--debug` and listens on no debug port; run
-`af console` to open the debug UI on it, for as long as that command runs
+`afoot console` to open the debug UI on it, for as long as that command runs
 (see [Open the debug console](debug-console.md)).
 
 There is no command yet to stop or remove the service, or to revert what
-`af setup` wrote; see [known limitations](../reference/known-limitations.md).
+`afoot setup` wrote; see [known limitations](../reference/known-limitations.md).
 
 If launchd or a systemd user session is unavailable, setup stops before agent
-configuration and prints a manual `af watch` command. Keep that process
-running and rerun `af setup`; a reachable manually managed receiver satisfies
+configuration and prints a manual `afoot watch` command. Keep that process
+running and rerun `afoot setup`; a reachable manually managed receiver satisfies
 the setup check.

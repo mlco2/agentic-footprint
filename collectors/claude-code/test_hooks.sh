@@ -1,14 +1,14 @@
 #!/bin/sh
 # collectors/claude-code/test_hooks.sh
 #
-# Plain-sh test runner for af-hook.sh (no bats, matching this repo's shell
+# Plain-sh test runner for afoot-hook.sh (no bats, matching this repo's shell
 # tooling budget). Pipes recorded/synthetic Claude Code hook payloads
 # (test-data/*.json — see that directory's provenance notes: `.real.json`
 # fixtures are sanitized captures of a real headless Claude Code session,
 # `.synthetic.json` fixtures are handwritten from documented hook fields
 # for tool kinds the captured session didn't exercise) through the shim
-# into a fresh AF_STATE_DIR per case, validates every resulting spool line
-# via `af validate-line` (crates/af-cli's hidden helper subcommand), and
+# into a fresh AFOOT_STATE_DIR per case, validates every resulting spool line
+# via `afoot validate-line` (crates/afoot-cli's hidden helper subcommand), and
 # asserts the shapes the Task 9 brief describes.
 #
 # Wired into CI as a step after `cargo test --workspace`
@@ -18,9 +18,9 @@ set -eu
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
-HOOK="$SCRIPT_DIR/af-hook.sh"
+HOOK="$SCRIPT_DIR/afoot-hook.sh"
 DATA="$SCRIPT_DIR/test-data"
-AF_BIN="$REPO_ROOT/target/debug/af"
+AFOOT_BIN="$REPO_ROOT/target/debug/afoot"
 
 CASES=0
 FAILURES=0
@@ -36,19 +36,19 @@ fail() {
   printf 'not ok - %s\n' "$1"
 }
 
-echo "building af-cli..."
-(cd "$REPO_ROOT" && cargo build -p af-cli -q)
+echo "building afoot-cli..."
+(cd "$REPO_ROOT" && cargo build -p afoot-cli -q)
 
 # --- helpers ------------------------------------------------------------
 
 validate_line() {
-  # $1 = line; exit code mirrors `af validate-line`
-  printf '%s' "$1" | "$AF_BIN" validate-line >/dev/null 2>&1
+  # $1 = line; exit code mirrors `afoot validate-line`
+  printf '%s' "$1" | "$AFOOT_BIN" validate-line >/dev/null 2>&1
 }
 
 run_hook() {
   # $1 = state dir, $2 = payload file
-  AF_STATE_DIR="$1" "$HOOK" <"$2"
+  AFOOT_STATE_DIR="$1" "$HOOK" <"$2"
 }
 
 spool_file_for() {
@@ -58,7 +58,7 @@ spool_file_for() {
 }
 
 # Open-span scratch files live under tmp/openspans/<session_id>/, one
-# directory per session — see af-hook.sh. Tests must address them the same
+# directory per session — see afoot-hook.sh. Tests must address them the same
 # way, or a shim that regressed to a flat directory would still pass.
 openspan_dir_for() {
   # $1 = state dir, $2 = payload file (session_id read out of it)
@@ -81,7 +81,7 @@ line_count() {
 }
 
 # True (exit 0) if $1 <= $2, comparing RFC3339 Z-normalized timestamp
-# strings lexicographically, the same assumption `af report` relies on.
+# strings lexicographically, the same assumption `afoot report` relies on.
 ts_le() {
   first="$(printf '%s\n%s\n' "$1" "$2" | sort | head -n1)"
   [ "$first" = "$1" ]
@@ -92,7 +92,7 @@ ts_lt() {
 }
 
 # True (exit 0) if $1 is an RFC3339 UTC timestamp with exactly three
-# fractional digits — the millisecond precision af-hook.sh promises. This
+# fractional digits — the millisecond precision afoot-hook.sh promises. This
 # is a *format* assertion on purpose: asserting that any particular pair of
 # timestamps differs by a sub-second amount would be timing-dependent and
 # flaky, while the format is deterministic.
@@ -492,7 +492,7 @@ sleep 1
 # to pass with it only because the sweep was cross-session — i.e. it was
 # asserting the bug. A synthetic Stop for this session is the honest form.
 printf '%s' "{\"session_id\":\"$session_id5\",\"hook_event_name\":\"Stop\"}" \
-  | AF_STATE_DIR="$state5" "$HOOK" >/dev/null 2>&1
+  | AFOOT_STATE_DIR="$state5" "$HOOK" >/dev/null 2>&1
 
 if [ -f "$openspan5" ]; then
   fail "Stop deletes the open-span file"
@@ -538,7 +538,7 @@ assert_pair_kind_locus \
 # state behind.
 
 state6="$(mktemp -d)"
-if printf 'not valid json{{{' | AF_STATE_DIR="$state6" "$HOOK" >/dev/null 2>&1; then
+if printf 'not valid json{{{' | AFOOT_STATE_DIR="$state6" "$HOOK" >/dev/null 2>&1; then
   pass "Malformed stdin JSON: hook exits 0"
 else
   fail "Malformed stdin JSON: hook exits 0"
@@ -565,7 +565,7 @@ rm -rf "$state6"
 # --- Case: jq missing from PATH -> silent no-op, exit 0 -------------------
 
 state7="$(mktemp -d)"
-if PATH="/nonexistent-af-test-path" AF_STATE_DIR="$state7" "$HOOK" \
+if PATH="/nonexistent-afoot-test-path" AFOOT_STATE_DIR="$state7" "$HOOK" \
   <"$DATA/session_start.real.json" >/dev/null 2>&1; then
   pass "jq missing from PATH: hook exits 0"
 else
@@ -581,11 +581,11 @@ rm -rf "$state7"
 
 # --- Case: tool_use_id path traversal is sanitized -------------------------
 # A malicious/buggy tool_use_id containing "../" must never let PreToolUse
-# escape $AF_STATE_DIR/tmp/openspans/ when building the open-span filename.
+# escape $AFOOT_STATE_DIR/tmp/openspans/ when building the open-span filename.
 
 state8="$(mktemp -d)"
 malicious_pre8='{"session_id":"76cb257d-0251-4eca-825c-42ab7dff67cd","hook_event_name":"PreToolUse","tool_name":"Bash","tool_use_id":"../../evil/pwned"}'
-printf '%s' "$malicious_pre8" | AF_STATE_DIR="$state8" "$HOOK" >/dev/null 2>&1
+printf '%s' "$malicious_pre8" | AFOOT_STATE_DIR="$state8" "$HOOK" >/dev/null 2>&1
 
 # What the *unsanitized* join ("$OPENSPAN_DIR/../../evil/pwned") would have
 # resolved to: two levels up from tmp/openspans is $state8 itself.
@@ -616,11 +616,11 @@ rm -rf "$state8"
 
 # --- Case: session_id path traversal is sanitized ---------------------------
 # A malicious/buggy session_id containing "/" must never let a spool write
-# escape $AF_STATE_DIR/spool/ or create a stray intermediate directory.
+# escape $AFOOT_STATE_DIR/spool/ or create a stray intermediate directory.
 
 state9="$(mktemp -d)"
 malicious_start9='{"session_id":"weird/../id","hook_event_name":"SessionStart","source":"startup"}'
-printf '%s' "$malicious_start9" | AF_STATE_DIR="$state9" "$HOOK" >/dev/null 2>&1
+printf '%s' "$malicious_start9" | AFOOT_STATE_DIR="$state9" "$HOOK" >/dev/null 2>&1
 
 if [ -e "$state9/spool/cc-hooks.weird" ]; then
   fail "SessionStart path traversal: no stray 'cc-hooks.weird' path component"
@@ -638,13 +638,13 @@ rm -rf "$state9"
 
 # --- Case: the shared sanitize_id conformance vectors ----------------------
 # `sanitize_id` is implemented three times over — this shim (`tr -cd` plus a
-# `case` guard), `crates/af-otlp/src/sanitize.rs` and
-# `python/af_sampler/__main__.py` — because the three collectors that build
+# `case` guard), `crates/afoot-otlp/src/sanitize.rs` and
+# `python/afoot_sampler/__main__.py` — because the three collectors that build
 # spool filenames are written in three languages. Two of them disagreeing
 # about what a session id may contain produces two filenames for one
 # session, and the join then silently sees two sessions.
 # tests/fixtures/sanitize-vectors.json is the one thing all three CAN share;
-# crates/af-otlp/tests/sanitize_vectors.rs and python/tests/test_sampler.py
+# crates/afoot-otlp/tests/sanitize_vectors.rs and python/tests/test_sampler.py
 # read the same file.
 #
 # Driven through the shim's real SessionStart path rather than by calling
@@ -664,7 +664,7 @@ while IFS= read -r vec_raw && IFS= read -r vec_expected; do
   vector_count=$((vector_count + 1))
   state_v="$(mktemp -d)"
   jq -nc --arg s "$vec_raw" '{session_id: $s, hook_event_name: "SessionStart"}' |
-    AF_STATE_DIR="$state_v" "$HOOK" >/dev/null 2>&1
+    AFOOT_STATE_DIR="$state_v" "$HOOK" >/dev/null 2>&1
   if [ ! -f "$state_v/spool/cc-hooks.$vec_expected.jsonl" ]; then
     vector_failures=$((vector_failures + 1))
     printf '  vector %s: wanted spool cc-hooks.%s.jsonl, got: %s\n' \
@@ -691,7 +691,7 @@ openspan_dir10="$(openspan_dir_for "$state10" "$DATA/posttooluse_bash.real.json"
 mkdir -p "$openspan_dir10"
 printf 'not valid json{{{' >"$openspan_dir10/$tool_use_id10"
 
-if AF_STATE_DIR="$state10" "$HOOK" <"$DATA/posttooluse_bash.real.json" >/dev/null 2>&1; then
+if AFOOT_STATE_DIR="$state10" "$HOOK" <"$DATA/posttooluse_bash.real.json" >/dev/null 2>&1; then
   pass "Corrupted open-span (PostToolUse): hook exits 0"
 else
   fail "Corrupted open-span (PostToolUse): hook exits 0"
@@ -734,7 +734,7 @@ openspan_dir11="$(openspan_dir_for "$state11" "$DATA/stop.real.json")"
 mkdir -p "$openspan_dir11"
 printf 'not valid json{{{' >"$openspan_dir11/garbage-span"
 
-if AF_STATE_DIR="$state11" "$HOOK" <"$DATA/stop.real.json" >/dev/null 2>&1; then
+if AFOOT_STATE_DIR="$state11" "$HOOK" <"$DATA/stop.real.json" >/dev/null 2>&1; then
   pass "Corrupted open-span (Stop): hook exits 0"
 else
   fail "Corrupted open-span (Stop): hook exits 0"
@@ -769,9 +769,9 @@ session_b12="bbbbbbbb-0000-4000-8000-000000000002"
 
 # Both sessions open a span.
 printf '%s' "{\"session_id\":\"$session_a12\",\"hook_event_name\":\"PreToolUse\",\"tool_name\":\"Bash\",\"tool_use_id\":\"toolu_a12\"}" \
-  | AF_STATE_DIR="$state12" "$HOOK" >/dev/null 2>&1
+  | AFOOT_STATE_DIR="$state12" "$HOOK" >/dev/null 2>&1
 printf '%s' "{\"session_id\":\"$session_b12\",\"hook_event_name\":\"PreToolUse\",\"tool_name\":\"Edit\",\"tool_use_id\":\"toolu_b12\"}" \
-  | AF_STATE_DIR="$state12" "$HOOK" >/dev/null 2>&1
+  | AFOOT_STATE_DIR="$state12" "$HOOK" >/dev/null 2>&1
 
 if [ -f "$state12/tmp/openspans/$session_a12/toolu_a12" ] \
   && [ -f "$state12/tmp/openspans/$session_b12/toolu_b12" ]; then
@@ -783,7 +783,7 @@ fi
 sleep 1
 # Session A stops. Only A's span may be closed.
 printf '%s' "{\"session_id\":\"$session_a12\",\"hook_event_name\":\"Stop\"}" \
-  | AF_STATE_DIR="$state12" "$HOOK" >/dev/null 2>&1
+  | AFOOT_STATE_DIR="$state12" "$HOOK" >/dev/null 2>&1
 
 if [ -f "$state12/tmp/openspans/$session_b12/toolu_b12" ]; then
   pass "Concurrent sessions: A's Stop leaves B's open span untouched"
@@ -819,7 +819,7 @@ fi
 
 # …and B can still close its own span afterwards.
 printf '%s' "{\"session_id\":\"$session_b12\",\"hook_event_name\":\"SessionEnd\"}" \
-  | AF_STATE_DIR="$state12" "$HOOK" >/dev/null 2>&1
+  | AFOOT_STATE_DIR="$state12" "$HOOK" >/dev/null 2>&1
 
 n_b12_after="$(line_count "$spool_b12")"
 if [ "$n_b12_after" = "1" ]; then
@@ -856,7 +856,7 @@ fi
 rm -rf "$state12"
 
 # --- Case: what the hook creates is the user's alone ------------------------
-# The hook can run before `af watch` ever restricted the state dir, and a
+# The hook can run before `afoot watch` ever restricted the state dir, and a
 # spool line carries prompts' tool inputs.
 state13="$(mktemp -d)/fresh-state"
 payload13="$(ls "$DATA"/*.json | head -1)"
@@ -876,7 +876,7 @@ rm -rf "$(dirname "$state13")"
 # not exec it. The bootstrap span must then carry the shell's parent: the
 # wrapper exits with the hook, and a dead pid gets the session no energy.
 state14="$(mktemp -d)"
-AF_STATE_DIR="$state14" sh -c '"$1" <"$2"; :' wrapper "$HOOK" "$DATA/session_start.real.json"
+AFOOT_STATE_DIR="$state14" sh -c '"$1" <"$2"; :' wrapper "$HOOK" "$DATA/session_start.real.json"
 spool14="$(spool_file_for "$state14" "$DATA/session_start.real.json")"
 pids14="$(jq -c 'select(.type == "action_span") | .payload.pids' "$spool14" 2>/dev/null || true)"
 if [ "$pids14" = "[$$]" ]; then
@@ -890,7 +890,7 @@ if command -v python3 >/dev/null 2>&1; then
   state15="$(mktemp -d)"
   parent15="$(python3 -c 'import os, subprocess, sys
 print(os.getpid(), flush=True)
-subprocess.run([sys.argv[1]], stdin=open(sys.argv[2]), env={**os.environ, "AF_STATE_DIR": sys.argv[3]}, check=True)' \
+subprocess.run([sys.argv[1]], stdin=open(sys.argv[2]), env={**os.environ, "AFOOT_STATE_DIR": sys.argv[3]}, check=True)' \
     "$HOOK" "$DATA/session_start.real.json" "$state15")"
   spool15="$(spool_file_for "$state15" "$DATA/session_start.real.json")"
   pids15="$(jq -c 'select(.type == "action_span") | .payload.pids' "$spool15" 2>/dev/null || true)"

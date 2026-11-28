@@ -26,7 +26,7 @@ flowchart LR
     end
 
     Spool[(JSONL spool)]
-    Receiver[OTLP receiver in af watch<br/>held in memory until the flush]
+    Receiver[OTLP receiver in afoot watch<br/>held in memory until the flush]
 
     subgraph SQLite[SQLite state.db]
         Raw[(raw_events<br/>source of truth)]
@@ -59,10 +59,10 @@ flowchart LR
 
 There are two transports. File-based collectors (the Claude Code hook, the
 CodeCarbon sampler, the OpenCode collectors) append JSONL to
-`$AF_STATE_DIR/spool/<collector>.<session>.jsonl`. OTLP telemetry (Claude
+`$AFOOT_STATE_DIR/spool/<collector>.<session>.jsonl`. OTLP telemetry (Claude
 Code and Codex token usage and LLM calls) is posted to the receiver inside
-`af watch`, which normalizes it and writes it straight into `raw_events`; it
-never touches the spool. Within `af watch` the loop owns the one database
+`afoot watch`, which normalizes it and writes it straight into `raw_events`; it
+never touches the spool. Within `afoot watch` the loop owns the one database
 connection, so the receiver hands its facts to that loop through a bounded
 queue rather than writing anything itself; when the queue is full it answers
 with a retryable `503`.
@@ -82,7 +82,7 @@ row in the `rejects` table: when, the source, the reason, the attribute
 names, and the size in bytes. The content itself is not kept anywhere,
 because a rejected batch can carry tool arguments, command output, or
 account identifiers. The table keeps the newest 1,000 rows (`REJECT_RING` in
-`crates/af-store/src/rejects.rs`).
+`crates/afoot-store/src/rejects.rs`).
 
 ### Rebuild derived views
 
@@ -102,7 +102,7 @@ view, while only estimating the remote calls still missing an estimate.
 
 ### Replay
 
-`af replay` is a destructive rebuild of **derived data only**. It first clears
+`afoot replay` is a destructive rebuild of **derived data only**. It first clears
 `impact_estimates` and `impact_joins`, then runs the same calculation pipeline
 from the retained `raw_events`.
 
@@ -137,19 +137,19 @@ flowchart TD
     Rebuild --> Join
 ```
 
-## What `af report` does
+## What `afoot report` does
 
-`af report` is not read-only. It performs an on-demand update before printing:
+`afoot report` is not read-only. It performs an on-demand update before printing:
 
 ```mermaid
 sequenceDiagram
     participant User
-    participant CLI as af report
+    participant CLI as afoot report
     participant Spool as JSONL spool
     participant Store as SQLite store
     participant Estimator as EcoLogits sidecar
 
-    User->>CLI: af report
+    User->>CLI: afoot report
     CLI->>Spool: scan files and tail from stored offsets
     CLI->>Store: insert new raw events and offsets
     CLI->>Store: resolve configured/session zone
@@ -170,11 +170,11 @@ sequenceDiagram
 The important consequence is that report latency scales with the outstanding
 estimation backlog and with all retained sessions that are rebuilt.
 
-`af report` reads only the spool and the store. Telemetry that a running
-`af watch` has received but not yet flushed is still in that process's memory,
+`afoot report` reads only the spool and the store. Telemetry that a running
+`afoot watch` has received but not yet flushed is still in that process's memory,
 so a report can lag the receiver by up to one flush interval (see below).
 
-## What `af watch` does today
+## What `afoot watch` does today
 
 The resident tracker wakes on received telemetry, on a spool change, or on
 its next deadline, and writes in batches: everything it has to write since
@@ -213,10 +213,10 @@ again when it is checkpointed into the database. For a process that stays
 resident all day, disk wear follows the number of commits, not the volume of
 telemetry: sampler windows land every few seconds and Claude Code exports
 every two, and at a 10-second flush a day of work measured about 600 MiB of
-physical writes. So `af watch` commits once per flush:
+physical writes. So `afoot watch` commits once per flush:
 
 - the flush interval is 60 seconds (`DEFAULT_BATCH_INTERVAL_MS` in
-  `crates/af-cli/src/cmd/watch.rs`; the hidden `--batch-interval-ms` flag
+  `crates/afoot-cli/src/cmd/watch.rs`; the hidden `--batch-interval-ms` flag
   changes it, and tests pass 0);
 - something new is written at once: a session or spool file this watch has
   not seen yet, or a burst of 5,000 received events, so a new session's
@@ -232,7 +232,7 @@ physical writes. So `af watch` commits once per flush:
 
 The trade-off is staleness and a bounded loss window. The status line and the
 debug console show numbers up to one interval old (sample-only energy up to
-six), and `af report`, which ingests the spool itself, lacks the OTLP
+six), and `afoot report`, which ingests the spool itself, lacks the OTLP
 telemetry the watch has not flushed yet. Received OTLP telemetry not yet flushed exists only in
 memory, and the receiver has already answered the exporter with success, so a
 crash or `kill -9` loses up to one interval of it. Spool data is not at risk
@@ -252,7 +252,7 @@ The resident path is deliberately scoped and non-blocking:
   block ingestion or the receiver;
 - completed estimates schedule another rebuild only for the affected sessions.
 
-`af report` and `af replay` still use the complete-store pipeline because they
+`afoot report` and `afoot replay` still use the complete-store pipeline because they
 must present or regenerate a coherent view of retained history. The optimized
 watch path changes scheduling and reuse, not the raw/derived contracts or the
 attribution result.
@@ -261,13 +261,13 @@ attribution result.
 
 The debug console shows per-event decisions, allocation traces and collector
 health. Building them costs work on every pass, and a background service runs
-all day with nobody looking. So the resident `af watch` builds none of it
+all day with nobody looking. So the resident `afoot watch` builds none of it
 until a console attaches:
 
 - the background service listens on no debug TCP port. It serves the debug
   API on `console.sock`, a socket in the state directory that only its owner
   can open, because the API exposes session data and has no authentication;
-- `af console` attaches by holding a stream open on that socket. While no
+- `afoot console` attaches by holding a stream open on that socket. While no
   stream is open, the collector builds no frames and no decisions, and does
   not re-detect agent processes;
 - a console that attaches is told the present: the status, the list of stored
@@ -279,7 +279,7 @@ until a console attaches:
 - when the last console leaves, the collector discards what it had built,
   since it would only go stale.
 
-`af watch --debug` keeps the earlier behaviour for development: a TCP debug
+`afoot watch --debug` keeps the earlier behaviour for development: a TCP debug
 port, and diagnostics built for the life of the process. The routes and
 frames are in the [debug API reference](../reference/debug-api.md), and
 [Open the debug console](../how-to/debug-console.md) shows how to use it.

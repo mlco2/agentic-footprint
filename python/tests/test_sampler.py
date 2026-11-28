@@ -1,4 +1,4 @@
-"""Tests for `python/af_sampler/__main__.py`, the codecarbon sampler sidecar.
+"""Tests for `python/afoot_sampler/__main__.py`, the codecarbon sampler sidecar.
 
 Unlike `test_estimator.py` (which drives a real subprocess because the
 estimator's whole contract *is* its stdio framing), the sampler's contract
@@ -15,9 +15,9 @@ synchronously with three injected seams:
   * `tracker_factory`   — callable -> codecarbon-shaped tracker (fake windows)
   * `process_inspector` — callable pid -> (cpu_seconds_total, rss_bytes, alive)
 
-`af_sampler.__main__` imports nothing outside the stdlib at module level
+`afoot_sampler.__main__` imports nothing outside the stdlib at module level
 (codecarbon and psutil are imported inside `main()`), so **these tests run
-on a bare interpreter** — no managed venv needed. Only the `AF_E2E=1`
+on a bare interpreter** — no managed venv needed. Only the `AFOOT_E2E=1`
 test at the bottom touches the real tracker.
 """
 import json
@@ -32,7 +32,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from af_sampler.__main__ import (  # noqa: E402  (after sys.path shim)
+from afoot_sampler.__main__ import (  # noqa: E402  (after sys.path shim)
     ORPHAN_TAIL_S,
     Sampler,
     detect_methods,
@@ -44,7 +44,7 @@ from af_sampler.__main__ import (  # noqa: E402  (after sys.path shim)
     sanitize_id,
 )
 
-MAIN = Path(__file__).resolve().parents[1] / "af_sampler" / "__main__.py"
+MAIN = Path(__file__).resolve().parents[1] / "afoot_sampler" / "__main__.py"
 SANITIZE_VECTORS = (
     Path(__file__).resolve().parents[2] / "tests" / "fixtures" / "sanitize-vectors.json"
 )
@@ -825,13 +825,13 @@ def test_ops_arriving_mid_window_take_effect_from_the_next_window(tmp_path):
 
 def test_sanitize_id_matches_the_shared_conformance_vectors():
     # `sanitize_id` exists three times over — here, in
-    # `collectors/claude-code/af-hook.sh` and in
-    # `crates/af-otlp/src/sanitize.rs` — because the three collectors that
+    # `collectors/claude-code/afoot-hook.sh` and in
+    # `crates/afoot-otlp/src/sanitize.rs` — because the three collectors that
     # build spool filenames are written in three languages. Two that
     # disagree about what a session id may contain produce two filenames
     # for one session, and the join then silently sees two sessions. The
     # vectors are the one thing all three CAN share; the other two suites
-    # (test_hooks.sh, crates/af-otlp/tests/sanitize_vectors.rs) read this
+    # (test_hooks.sh, crates/afoot-otlp/tests/sanitize_vectors.rs) read this
     # same file.
     vectors = json.loads(SANITIZE_VECTORS.read_text(encoding="utf-8"))
     assert len(vectors) >= 10, "the vector file lost its contents"
@@ -947,13 +947,13 @@ def test_spool_is_appended_to_never_truncated(tmp_path):
 
 
 # --------------------------------------------------------------------------
-# gated real-hardware run (AF_E2E=1, needs the managed venv's codecarbon)
+# gated real-hardware run (AFOOT_E2E=1, needs the managed venv's codecarbon)
 # --------------------------------------------------------------------------
 
 
 @pytest.mark.skipif(
-    os.environ.get("AF_E2E") != "1",
-    reason="real codecarbon sampler run; set AF_E2E=1 (needs the managed venv)",
+    os.environ.get("AFOOT_E2E") != "1",
+    reason="real codecarbon sampler run; set AFOOT_E2E=1 (needs the managed venv)",
 )
 def test_real_codecarbon_run_emits_valid_energy_samples(tmp_path):
     proc = subprocess.Popen(
@@ -1087,7 +1087,7 @@ def _spawn_tree():
 
 def test_the_psutil_inspector_lists_the_process_table_once_per_window(monkeypatch):
     psutil = pytest.importorskip("psutil")
-    from af_sampler.__main__ import _make_psutil_inspector
+    from afoot_sampler.__main__ import _make_psutil_inspector
 
     listings = []
     real_iter = psutil.process_iter

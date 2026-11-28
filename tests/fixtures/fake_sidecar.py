@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Fake sidecar fixture for `af-sidecar` framing tests
-(crates/af-sidecar/tests/framing.rs) and golden-transcript replay tests
-(e.g. crates/af-core/tests/estimate.rs).
+"""Fake sidecar fixture for `afoot-sidecar` framing tests
+(crates/afoot-sidecar/tests/framing.rs) and golden-transcript replay tests
+(e.g. crates/afoot-core/tests/estimate.rs).
 
 Default mode reads newline-delimited JSON objects from stdin and reacts to
 `op`:
@@ -11,7 +11,7 @@ Default mode reads newline-delimited JSON objects from stdin and reacts to
   {"op": "silent", "id": N}           -> never responds (simulates a hung sidecar; timeout test)
 
 `estimate` answers `unknown_model` for a model outside
-`AF_FAKE_KNOWN_MODELS` when that variable is set (see `_is_known_model`).
+`AFOOT_FAKE_KNOWN_MODELS` when that variable is set (see `_is_known_model`).
 
 Anything else gets {"id": N, "error": "unknown op"}. Malformed lines are
 skipped. Stdlib only, per the project's "Python sidecars: stdlib +
@@ -27,7 +27,7 @@ are the responses to emit). For each line read from stdin (regardless of
 its content — the incoming request's `id` is the only part that matters),
 the next response line is emitted verbatim except its `"id"` is replaced
 with the incoming request's `"id"`. This lets a real protocol client (e.g.
-`af-sidecar::Sidecar`, which injects its own monotonic ids) drive a fixed
+`afoot-sidecar::Sidecar`, which injects its own monotonic ids) drive a fixed
 scripted conversation without the fixture needing to understand the
 protocol it's replaying.
 """
@@ -78,11 +78,11 @@ def _version_response(req_id, version: str) -> dict:
 
 
 def _is_known_model(req: dict) -> bool:
-    """With `AF_FAKE_KNOWN_MODELS` pointing at
+    """With `AFOOT_FAKE_KNOWN_MODELS` pointing at
     `tests/fixtures/models/agent-models.json`, only the `(provider, model)`
     pairs listed there are estimable — the same list the model-coverage
     test holds against the real pinned ecologits. Unset, every model is."""
-    path = __import__("os").environ.get("AF_FAKE_KNOWN_MODELS")
+    path = __import__("os").environ.get("AFOOT_FAKE_KNOWN_MODELS")
     if not path:
         return True
     known = {
@@ -125,10 +125,10 @@ def main() -> None:
         elif op == "estimate" and not _is_known_model(req):
             resp = {"id": req_id, "status": "unknown_model"}
         elif op == "estimate":
-            started_file = __import__("os").environ.get("AF_FAKE_ESTIMATE_STARTED_FILE")
+            started_file = __import__("os").environ.get("AFOOT_FAKE_ESTIMATE_STARTED_FILE")
             if started_file:
                 Path(started_file).touch()
-            time.sleep(float(__import__("os").environ.get("AF_FAKE_ESTIMATE_DELAY", "0")))
+            time.sleep(float(__import__("os").environ.get("AFOOT_FAKE_ESTIMATE_DELAY", "0")))
             resp = {
                 "id": req_id,
                 "status": "ok",

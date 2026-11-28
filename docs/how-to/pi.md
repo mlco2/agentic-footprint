@@ -1,24 +1,24 @@
 # Pi setup guide
 
 This guide configures [Pi](https://github.com/badlogic/pi-mono) (the
-`pi` coding agent) to report usage facts to `agentic-footprint` (`af`).
+`pi` coding agent) to report usage facts to `agentic-footprint` (`afoot`).
 
 Pi has no OpenTelemetry exporter. It loads TypeScript **extensions** into its
-own process, and `af` collects through one: `collectors/pi/af-collector.ts`
+own process, and `afoot` collects through one: `collectors/pi/afoot-collector.ts`
 subscribes to Pi's lifecycle events and appends Contract #1 facts to the
-spool, where `af watch` ingests them like any other collector.
+spool, where `afoot watch` ingests them like any other collector.
 
-Pi support is part of the default `af` build. The v0.1.0 release predates it;
+Pi support is part of the default `afoot` build. The v0.1.0 release predates it;
 releases built after it include it.
 
-## 1. Install `af`
+## 1. Install `afoot`
 
-Install `af` as described in [Install and configure](installation.md), or,
+Install `afoot` as described in [Install and configure](installation.md), or,
 for manual development, from the repository root:
 
 ```sh
-cargo build -p af-cli
-export AF_BIN="$PWD/target/debug/af"
+cargo build -p afoot-cli
+export AFOOT_BIN="$PWD/target/debug/afoot"
 ```
 
 Pi must be installed and on `PATH` (`pi --version`), and logged in to a
@@ -26,15 +26,15 @@ provider (`pi`, then `/login`).
 
 ## 2. Install the collector extension
 
-### With `af setup` (recommended)
+### With `afoot setup` (recommended)
 
 ```sh
-"$AF_BIN" setup --agents pi --dry-run   # show the plan
-"$AF_BIN" setup --agents pi             # apply it
-"$AF_BIN" setup --agents pi --check     # verify
+"$AFOOT_BIN" setup --agents pi --dry-run   # show the plan
+"$AFOOT_BIN" setup --agents pi             # apply it
+"$AFOOT_BIN" setup --agents pi --check     # verify
 ```
 
-Setup writes the collector, embedded in `af`, to Pi's global extensions
+Setup writes the collector, embedded in `afoot`, to Pi's global extensions
 directory as `agentic-footprint.ts`:
 
 - `$PI_CODING_AGENT_DIR/extensions/` when `PI_CODING_AGENT_DIR` is set;
@@ -42,7 +42,7 @@ directory as `agentic-footprint.ts`:
 
 Pi loads every `*.ts` file in that directory at startup, so every Pi session
 in every project is collected with no further step. Rerunning setup after
-upgrading `af` replaces an older copy; the old file is backed up under a
+upgrading `afoot` replaces an older copy; the old file is backed up under a
 name ending in `.bak.<timestamp>`, which Pi does not load.
 
 Like every agent, setup needs a healthy receiver first: on macOS and Linux it
@@ -51,17 +51,17 @@ offers to install the background service (see
 
 ### Manually
 
-Without `af setup`, either copy the extension into Pi's extensions directory:
+Without `afoot setup`, either copy the extension into Pi's extensions directory:
 
 ```sh
 mkdir -p ~/.pi/agent/extensions
-cp collectors/pi/af-collector.ts ~/.pi/agent/extensions/agentic-footprint.ts
+cp collectors/pi/afoot-collector.ts ~/.pi/agent/extensions/agentic-footprint.ts
 ```
 
 or load it for a single run:
 
 ```sh
-pi --extension /absolute/path/to/collectors/pi/af-collector.ts
+pi --extension /absolute/path/to/collectors/pi/afoot-collector.ts
 ```
 
 Do not do both: Pi would load the collector twice. The store keeps one copy
@@ -74,16 +74,16 @@ With the background service installed, nothing more is needed. For manual
 development, start the receiver before Pi:
 
 ```sh
-"$AF_BIN" watch --debug
+"$AFOOT_BIN" watch --debug
 ```
 
 To estimate remote impacts and measure local energy, provision the managed
-Python runtime once with `"$AF_BIN" python setup`; otherwise add
+Python runtime once with `"$AFOOT_BIN" python setup`; otherwise add
 `--no-sidecars`.
 
-The extension writes to `$AF_STATE_DIR/spool/` when Pi's environment sets
-`AF_STATE_DIR`, otherwise to af's default state directory. If `af watch`
-runs with a non-default `AF_STATE_DIR`, export the same value in the shell
+The extension writes to `$AFOOT_STATE_DIR/spool/` when Pi's environment sets
+`AFOOT_STATE_DIR`, otherwise to afoot's default state directory. If `afoot watch`
+runs with a non-default `AFOOT_STATE_DIR`, export the same value in the shell
 that starts Pi.
 
 ## 4. Verify collection
@@ -91,11 +91,11 @@ that starts Pi.
 Run any Pi session, then:
 
 ```sh
-"$AF_BIN" status      # Pi: waiting, then receiving
-"$AF_BIN" summary     # by_agent lists Pi with its calls and tokens
+"$AFOOT_BIN" status      # Pi: waiting, then receiving
+"$AFOOT_BIN" summary     # by_agent lists Pi with its calls and tokens
 ```
 
-The spool file is `$AF_STATE_DIR/spool/pi.<session-id>.jsonl`. `af watch`
+The spool file is `$AFOOT_STATE_DIR/spool/pi.<session-id>.jsonl`. `afoot watch`
 writes to the store once a minute, so results can lag a live session by that
 much. In the [debug console](debug-console.md), the **Stream** tab lists one
 row per fact with collector `pi@0.1.0`.
@@ -114,25 +114,25 @@ collector ignores both so that every model call is counted once.
 
 The extension never reads prompts, message content, tool arguments or tool
 results. A failure inside it is logged to
-`$AF_STATE_DIR/tmp/pi-collector-errors.log` and never reaches the Pi
+`$AFOOT_STATE_DIR/tmp/pi-collector-errors.log` and never reaches the Pi
 session.
 
 ## Troubleshooting
 
-### `af setup` reports Pi as not installed
+### `afoot setup` reports Pi as not installed
 
-`pi` is not on `PATH` in the shell that runs `af setup`.
+`pi` is not on `PATH` in the shell that runs `afoot setup`.
 
-### `af status` reports Pi as `misconfigured`
+### `afoot status` reports Pi as `misconfigured`
 
-The installed extension comes from another `af` version. Rerun
-`af setup --agents pi`.
+The installed extension comes from another `afoot` version. Rerun
+`afoot setup --agents pi`.
 
 ### No `pi.*.jsonl` file appears
 
 Check that Pi loads the extension: it must be in the extensions directory
 above (or passed with `--extension`), and Pi reads `PI_CODING_AGENT_DIR`
-from its own environment. Then check that Pi's `AF_STATE_DIR` matches the
+from its own environment. Then check that Pi's `AFOOT_STATE_DIR` matches the
 receiver's.
 
 ### LLM calls stay `unknown_model`
