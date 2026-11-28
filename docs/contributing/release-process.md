@@ -1,8 +1,6 @@
 # Release process
 
-Releases are produced only from tags matching `v*.*.*`. No release has been
-published yet; until the first one, afoot is installed from a source checkout
-and `afoot self update` has nothing to install.
+Releases are produced only from tags matching `v*.*.*`.
 
 ## Maintainer checklist
 
