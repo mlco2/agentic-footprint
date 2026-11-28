@@ -1223,8 +1223,12 @@ fn status_is_served_before_any_session_and_backlog_is_not_receiving() {
         ],
     );
 
-    // Served as soon as the port is bound, with no session required.
-    let status = watch.poll_json("/debug/status", |status| status["boot_id"].is_string());
+    // Served as soon as the port is bound, with no session required. The
+    // status can be published before the OTLP receiver has bound its port
+    // (its endpoint is null until then), so wait for both.
+    let status = watch.poll_json("/debug/status", |status| {
+        status["boot_id"].is_string() && status["receiver"]["endpoint"].is_string()
+    });
     assert_eq!(status["boot_id"].as_str().unwrap().len(), 16);
     assert_eq!(status["receiver"]["endpoint"], receiver.to_string());
     let claude = agent_row(&status, "claude-code");

@@ -446,7 +446,16 @@ mod tests {
             env!("CARGO_MANIFEST_DIR"),
             "/../../tests/fixtures/fake_sidecar.py"
         );
-        Sidecar::spawn(Path::new("python3"), script, &[]).expect("spawn fake_sidecar.py")
+        let mut sidecar =
+            Sidecar::spawn(Path::new("python3"), script, &[]).expect("spawn fake_sidecar.py");
+        // Wait until the interpreter is up, under the sidecar's own default
+        // timeout, before the worker applies its 5s one: a cold Python start
+        // on a loaded CI runner can exceed 10s, which timed out the worker's
+        // first two requests and failed a test about something else.
+        sidecar
+            .request(&serde_json::json!({"op": "echo"}))
+            .expect("fake_sidecar.py answers");
+        sidecar
     }
 
     fn llm_call(event_id: &str) -> Envelope {
