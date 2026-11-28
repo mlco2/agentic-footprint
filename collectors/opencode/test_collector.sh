@@ -3,12 +3,12 @@ set -eu
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
-AF_BIN="$REPO_ROOT/target/debug/af"
+AFOOT_BIN="$REPO_ROOT/target/debug/afoot"
 STATE_DIR="$(mktemp -d)"
 trap 'rm -rf "$STATE_DIR"' EXIT
 
-(cd "$REPO_ROOT" && cargo build -p af-cli -q)
-AF_STATE_DIR="$STATE_DIR" "$AF_BIN" collect opencode \
+(cd "$REPO_ROOT" && cargo build -p afoot-cli -q)
+AFOOT_STATE_DIR="$STATE_DIR" "$AFOOT_BIN" collect opencode \
   --session-id ses_fixture \
   --input "$SCRIPT_DIR/test-data/session.sse" \
   --pid 4242 \
@@ -25,7 +25,7 @@ SPOOL="$STATE_DIR/spool/opencode.ses_fixture.jsonl"
 test "$(wc -l <"$SPOOL" | tr -d ' ')" = 5
 
 while IFS= read -r line; do
-  printf '%s' "$line" | "$AF_BIN" validate-line >/dev/null
+  printf '%s' "$line" | "$AFOOT_BIN" validate-line >/dev/null
 done <"$SPOOL"
 
 jq -e 'select(.type == "llm_call") | .payload.provider == "test-provider" and .payload.usage.cached_read_tokens == 3 and .payload.duration_ms == 1000' "$SPOOL" >/dev/null

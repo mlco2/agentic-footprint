@@ -1,20 +1,20 @@
-# Install the agentic-footprint `af.exe` binary on Windows, then run its
+# Install the agentic-footprint `afoot.exe` binary on Windows, then run its
 # native setup wizard — the PowerShell counterpart of install.sh, plus the
 # upgrade/uninstall handling the spec asks of the Windows installer.
 #
 # Distribution-neutral inputs (parameters win over environment variables):
-#   AF_INSTALL_BINARY=C:\path\to\af.exe   install an already-built binary
-#   AF_BINARY_URL=https://.../af.exe      download a release binary directly
-#   AF_BINARY_SHA256=<hex>                required SHA-256 of AF_BINARY_URL
+#   AFOOT_INSTALL_BINARY=C:\path\to\afoot.exe   install an already-built binary
+#   AFOOT_BINARY_URL=https://.../afoot.exe      download a release binary directly
+#   AFOOT_BINARY_SHA256=<hex>                required SHA-256 of AFOOT_BINARY_URL
 #
 # From a source checkout, nothing is needed:
-#   .\install.ps1        (builds target\release\af.exe with cargo)
+#   .\install.ps1        (builds target\release\afoot.exe with cargo)
 #
 # Upgrade: re-running against an existing install compares SHA-256 first —
 # identical binaries are a no-op, different ones are replaced (with the old
-# and new `af --version` reported). Replacement goes through a temp file +
+# and new `afoot --version` reported). Replacement goes through a temp file +
 # renaming the old executable before Move-Item, so a currently running
-# af.exe (which Windows locks against overwrite but not rename) does not
+# afoot.exe (which Windows locks against overwrite but not rename) does not
 # block placing the new version.
 #
 # Uninstall: .\install.ps1 -Uninstall removes the binary and its PATH entry;
@@ -22,10 +22,10 @@
 
 [CmdletBinding()]
 param(
-    [string]$BinaryPath = $env:AF_INSTALL_BINARY,
-    [string]$BinaryUrl = $env:AF_BINARY_URL,
-    [string]$BinarySha256 = $env:AF_BINARY_SHA256,
-    [string]$BinDir = $(if ($env:AF_INSTALL_BIN_DIR) { $env:AF_INSTALL_BIN_DIR }
+    [string]$BinaryPath = $env:AFOOT_INSTALL_BINARY,
+    [string]$BinaryUrl = $env:AFOOT_BINARY_URL,
+    [string]$BinarySha256 = $env:AFOOT_BINARY_SHA256,
+    [string]$BinDir = $(if ($env:AFOOT_INSTALL_BIN_DIR) { $env:AFOOT_INSTALL_BIN_DIR }
                        else { Join-Path $env:LOCALAPPDATA 'Programs\agentic-footprint' }),
     [string]$Project = (Get-Location).Path,
     [switch]$Yes,
@@ -35,13 +35,13 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$target = Join-Path $BinDir 'af.exe'
+$target = Join-Path $BinDir 'afoot.exe'
 
 function Get-Sha256([string]$Path) {
     (Get-FileHash -Algorithm SHA256 -LiteralPath $Path).Hash.ToLowerInvariant()
 }
 
-function Get-AfVersion([string]$Path) {
+function Get-AfootVersion([string]$Path) {
     try { (& $Path --version) 2>$null | Select-Object -First 1 } catch { '(version unavailable)' }
 }
 
@@ -80,18 +80,18 @@ if ($Uninstall) {
 
 # --- obtain the new binary (into a temp file, never straight onto target) --
 
-$staging = Join-Path ([System.IO.Path]::GetTempPath()) "af-install-$PID.exe"
+$staging = Join-Path ([System.IO.Path]::GetTempPath()) "afoot-install-$PID.exe"
 
 if ($BinaryPath) {
     if (-not (Test-Path -LiteralPath $BinaryPath)) {
-        throw "AF_INSTALL_BINARY points at $BinaryPath, which does not exist"
+        throw "AFOOT_INSTALL_BINARY points at $BinaryPath, which does not exist"
     }
     Copy-Item -LiteralPath $BinaryPath -Destination $staging -Force
 } elseif ($BinaryUrl) {
     # A URL alone is not a source of trust: whoever serves it decides what
     # runs next, with the user's permissions.
     if (-not $BinarySha256) {
-        throw 'AF_BINARY_URL needs AF_BINARY_SHA256, the SHA-256 of what it points at (from the release''s SHA256SUMS); nothing was downloaded'
+        throw 'AFOOT_BINARY_URL needs AFOOT_BINARY_SHA256, the SHA-256 of what it points at (from the release''s SHA256SUMS); nothing was downloaded'
     }
     Write-Host "Downloading $BinaryUrl"
     Invoke-WebRequest -Uri $BinaryUrl -OutFile $staging
@@ -102,17 +102,17 @@ if ($BinaryPath) {
     }
     Write-Host 'Checksum verified.'
 } elseif (Test-Path (Join-Path $PSScriptRoot 'Cargo.toml')) {
-    Write-Host 'Building af.exe from this checkout (cargo build --release -p af-cli)'
+    Write-Host 'Building afoot.exe from this checkout (cargo build --release -p afoot-cli)'
     Push-Location $PSScriptRoot
     try {
-        cargo build --release -p af-cli
+        cargo build --release -p afoot-cli
         if ($LASTEXITCODE -ne 0) { throw "cargo build failed with exit code $LASTEXITCODE" }
     } finally {
         Pop-Location
     }
-    Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'target\release\af.exe') -Destination $staging -Force
+    Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'target\release\afoot.exe') -Destination $staging -Force
 } else {
-    throw 'No input: set AF_INSTALL_BINARY or AF_BINARY_URL, or run from a source checkout'
+    throw 'No input: set AFOOT_INSTALL_BINARY or AFOOT_BINARY_URL, or run from a source checkout'
 }
 
 # --- upgrade detection ----------------------------------------------------
@@ -121,11 +121,11 @@ $installNeeded = $true
 if (Test-Path -LiteralPath $target) {
     if ((Get-Sha256 $target) -eq (Get-Sha256 $staging)) {
         Remove-Item -LiteralPath $staging -Force
-        Write-Host "af.exe at $target is already up to date."
+        Write-Host "afoot.exe at $target is already up to date."
         $installNeeded = $false
     } else {
-        $oldVersion = Get-AfVersion $target
-        $newVersion = Get-AfVersion $staging
+        $oldVersion = Get-AfootVersion $target
+        $newVersion = Get-AfootVersion $staging
         Write-Host "Upgrading: $oldVersion -> $newVersion"
         if (-not $Yes) {
             $answer = Read-Host "Replace $target? [y/N]"
@@ -158,15 +158,15 @@ if ($installNeeded) {
     if ($previous) {
         Remove-Item -LiteralPath $previous -Force -ErrorAction SilentlyContinue
     }
-    Write-Host "Installed $(Get-AfVersion $target) at $target"
+    Write-Host "Installed $(Get-AfootVersion $target) at $target"
 }
 Add-ToUserPath $BinDir
 
 # Only a published release binary can be self-updated later; a source build
-# or AF_INSTALL_BINARY copy must be updated the way it was installed.
+# or AFOOT_INSTALL_BINARY copy must be updated the way it was installed.
 if ($BinaryUrl -like 'https://github.com/mlco2/agentic-footprint/releases/download/*') {
     & $target self record-install --binary $target
-    if ($LASTEXITCODE -ne 0) { throw "af self record-install exited with $LASTEXITCODE" }
+    if ($LASTEXITCODE -ne 0) { throw "afoot self record-install exited with $LASTEXITCODE" }
 }
 
 # --- wizard ---------------------------------------------------------------
@@ -175,9 +175,9 @@ if (-not $NoSetup) {
     $setupArgs = @('setup', '--project', $Project)
     if ($Yes) { $setupArgs += '--yes' }
     & $target @setupArgs
-    if ($LASTEXITCODE -ne 0) { throw "af setup exited with $LASTEXITCODE" }
+    if ($LASTEXITCODE -ne 0) { throw "afoot setup exited with $LASTEXITCODE" }
 }
 if (-not $NoPython) {
     & $target python setup
-    if ($LASTEXITCODE -ne 0) { throw "af python setup exited with $LASTEXITCODE" }
+    if ($LASTEXITCODE -ne 0) { throw "afoot python setup exited with $LASTEXITCODE" }
 }

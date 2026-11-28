@@ -21,7 +21,7 @@ anyhow = "1"
 time = { version = "0.3", features = ["formatting", "parsing"] }
 
 # No `panic = "abort"`: the debug server isolates panicking requests with
-# `catch_unwind` (af-cli/src/cmd/debug_server.rs), which abort would defeat.
+# `catch_unwind` (afoot-cli/src/cmd/debug_server.rs), which abort would defeat.
 [profile.release]
 strip = "symbols"
 opt-level = "z"

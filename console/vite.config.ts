@@ -10,11 +10,11 @@ import { stripRemoteImports } from "./dev/strip-remote-imports";
 // plain `npm run dev` / `npm run preview` stay on the default "development"
 // mode, unchanged):
 //
-//   default (mock): mockDebugServer() stands in for the real Rust af
+//   default (mock): mockDebugServer() stands in for the real Rust afoot
 //   `/debug/*` endpoints, wired into both the dev and preview servers.
 //
-//   real: `/debug/*` is proxied to a real `af watch --debug` process
-//   instead (AF_DEBUG_TARGET env var, default http://127.0.0.1:9414) and
+//   real: `/debug/*` is proxied to a real `afoot watch --debug` process
+//   instead (AFOOT_DEBUG_TARGET env var, default http://127.0.0.1:9414) and
 //   the mock plugin is not loaded AT ALL — not just unattached. Importing
 //   ./dev/mock-plugin runs its own top-level `setInterval` broadcast loop
 //   as a side effect of the module loading, so "disabled" has to mean
@@ -24,7 +24,7 @@ import { stripRemoteImports } from "./dev/strip-remote-imports";
 // Nothing under console/dev/ is ever bundled into console/src/.
 export default defineConfig(async ({ mode }) => {
   const isReal = mode === "real";
-  const debugTarget = process.env.AF_DEBUG_TARGET ?? "http://127.0.0.1:9414";
+  const debugTarget = process.env.AFOOT_DEBUG_TARGET ?? "http://127.0.0.1:9414";
 
   const plugins: Plugin[] = [stripRemoteImports()];
   if (!isReal) {

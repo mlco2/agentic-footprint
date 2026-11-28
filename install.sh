@@ -1,21 +1,21 @@
 #!/bin/sh
-# Install the agentic-footprint `af` binary, then run its native setup wizard.
+# Install the agentic-footprint `afoot` binary, then run its native setup wizard.
 #
 # Current distribution-neutral inputs:
-#   AF_INSTALL_BINARY=/path/to/af       install an already-built binary
-#   AF_BINARY_URL=https://.../af        download a release binary directly
-#   AF_BINARY_SHA256=<hex>               required SHA-256 of AF_BINARY_URL
-#   AF_SOURCE_URL=https://.../src.tar.gz download source and build with Cargo
-#   AF_SOURCE_SHA256=<hex>               required SHA-256 of AF_SOURCE_URL
+#   AFOOT_INSTALL_BINARY=/path/to/afoot       install an already-built binary
+#   AFOOT_BINARY_URL=https://.../afoot        download a release binary directly
+#   AFOOT_BINARY_SHA256=<hex>               required SHA-256 of AFOOT_BINARY_URL
+#   AFOOT_SOURCE_URL=https://.../src.tar.gz download source and build with Cargo
+#   AFOOT_SOURCE_SHA256=<hex>               required SHA-256 of AFOOT_SOURCE_URL
 #
 # From a source checkout, no environment variable is needed:
 #   ./install.sh
 #
 # Once a canonical release host exists, the public curl command only needs to
-# set AF_BINARY_URL and AF_BINARY_SHA256 before piping this script.
+# set AFOOT_BINARY_URL and AFOOT_BINARY_SHA256 before piping this script.
 set -eu
 
-BIN_DIR="${AF_INSTALL_BIN_DIR:-$HOME/.local/bin}"
+BIN_DIR="${AFOOT_INSTALL_BIN_DIR:-$HOME/.local/bin}"
 RUN_SETUP=1
 RUN_PYTHON_SETUP=1
 ASSUME_YES=0
@@ -24,22 +24,22 @@ SETUP_ARGS=""
 
 usage() {
   cat <<'USAGE'
-Usage: install.sh [options] [-- <af setup arguments>]
+Usage: install.sh [options] [-- <afoot setup arguments>]
 
 Options:
-  --bin-dir DIR     install `af` into DIR (default: ~/.local/bin)
-  --project DIR     project directory passed to `af setup`
+  --bin-dir DIR     install `afoot` into DIR (default: ~/.local/bin)
+  --project DIR     project directory passed to `afoot setup`
   --yes             apply wizard changes without prompting
   --no-python       skip managed Python runtime provisioning
-  --no-setup        install only; do not run `af setup`
+  --no-setup        install only; do not run `afoot setup`
   -h, --help        show this help
 
 Inputs for non-checkout installation:
-  AF_INSTALL_BINARY path to an existing `af` binary
-  AF_BINARY_URL     URL of a standalone `af` binary
-  AF_BINARY_SHA256  SHA-256 of the AF_BINARY_URL download (required)
-  AF_SOURCE_URL     source archive URL to build when no binary URL is available
-  AF_SOURCE_SHA256  SHA-256 of the AF_SOURCE_URL download (required)
+  AFOOT_INSTALL_BINARY path to an existing `afoot` binary
+  AFOOT_BINARY_URL     URL of a standalone `afoot` binary
+  AFOOT_BINARY_SHA256  SHA-256 of the AFOOT_BINARY_URL download (required)
+  AFOOT_SOURCE_URL     source archive URL to build when no binary URL is available
+  AFOOT_SOURCE_SHA256  SHA-256 of the AFOOT_SOURCE_URL download (required)
 USAGE
 }
 
@@ -103,7 +103,7 @@ binary_version() {
 confirm_upgrade() {
   [ "$ASSUME_YES" -eq 0 ] || return 0
 
-  prompt="Upgrade af at $DEST? [Y/n] "
+  prompt="Upgrade afoot at $DEST? [Y/n] "
   answer=""
   if [ -r /dev/tty ] && [ -w /dev/tty ] && tty </dev/tty >/dev/null 2>&1; then
     printf '%s' "$prompt" >/dev/tty
@@ -129,15 +129,15 @@ build_source_checkout() {
   need npm
   echo "Building console assets"
   (cd "$source_dir" && npm --prefix console ci && npm --prefix console run build)
-  echo "Building af from source"
-  (cd "$source_dir" && cargo build --release -p af-cli)
+  echo "Building afoot from source"
+  (cd "$source_dir" && cargo build --release -p afoot-cli)
 }
 
 make_temp_dir() {
   if command -v mktemp >/dev/null 2>&1; then
-    mktemp -d "${TMPDIR:-/tmp}/af-install.XXXXXX"
+    mktemp -d "${TMPDIR:-/tmp}/afoot-install.XXXXXX"
   else
-    dir="${TMPDIR:-/tmp}/af-install.$$"
+    dir="${TMPDIR:-/tmp}/afoot-install.$$"
     (umask 077 && mkdir "$dir")
     printf '%s\n' "$dir"
   fi
@@ -180,52 +180,52 @@ WORK="$(make_temp_dir)"
 trap 'rm -rf "$WORK"' EXIT HUP INT TERM
 SOURCE_BINARY=""
 
-if [ -n "${AF_INSTALL_BINARY:-}" ]; then
-  SOURCE_BINARY=$AF_INSTALL_BINARY
+if [ -n "${AFOOT_INSTALL_BINARY:-}" ]; then
+  SOURCE_BINARY=$AFOOT_INSTALL_BINARY
   [ -f "$SOURCE_BINARY" ] || {
-    echo "install.sh: AF_INSTALL_BINARY does not exist: $SOURCE_BINARY" >&2
+    echo "install.sh: AFOOT_INSTALL_BINARY does not exist: $SOURCE_BINARY" >&2
     exit 1
   }
-elif [ -n "${AF_BINARY_URL:-}" ]; then
-  require_checksum AF_BINARY_URL "${AF_BINARY_SHA256:-}"
+elif [ -n "${AFOOT_BINARY_URL:-}" ]; then
+  require_checksum AFOOT_BINARY_URL "${AFOOT_BINARY_SHA256:-}"
   need curl
-  SOURCE_BINARY="$WORK/af"
-  echo "Downloading af from $AF_BINARY_URL"
-  curl --fail --location --silent --show-error "$AF_BINARY_URL" --output "$SOURCE_BINARY"
-  verify_download "$SOURCE_BINARY" "$AF_BINARY_SHA256" "$AF_BINARY_URL"
-elif [ -f "Cargo.toml" ] && [ -f "crates/af-cli/Cargo.toml" ]; then
+  SOURCE_BINARY="$WORK/afoot"
+  echo "Downloading afoot from $AFOOT_BINARY_URL"
+  curl --fail --location --silent --show-error "$AFOOT_BINARY_URL" --output "$SOURCE_BINARY"
+  verify_download "$SOURCE_BINARY" "$AFOOT_BINARY_SHA256" "$AFOOT_BINARY_URL"
+elif [ -f "Cargo.toml" ] && [ -f "crates/afoot-cli/Cargo.toml" ]; then
   build_source_checkout "$PWD"
-  SOURCE_BINARY="$PWD/target/release/af"
-elif [ -n "${AF_SOURCE_URL:-}" ]; then
-  require_checksum AF_SOURCE_URL "${AF_SOURCE_SHA256:-}"
+  SOURCE_BINARY="$PWD/target/release/afoot"
+elif [ -n "${AFOOT_SOURCE_URL:-}" ]; then
+  require_checksum AFOOT_SOURCE_URL "${AFOOT_SOURCE_SHA256:-}"
   need curl
   need cargo
   need tar
   ARCHIVE="$WORK/source.tar.gz"
   SOURCE_DIR="$WORK/source"
   mkdir -p "$SOURCE_DIR"
-  echo "Downloading af source from $AF_SOURCE_URL"
-  curl --fail --location --silent --show-error "$AF_SOURCE_URL" --output "$ARCHIVE"
-  verify_download "$ARCHIVE" "$AF_SOURCE_SHA256" "$AF_SOURCE_URL"
+  echo "Downloading afoot source from $AFOOT_SOURCE_URL"
+  curl --fail --location --silent --show-error "$AFOOT_SOURCE_URL" --output "$ARCHIVE"
+  verify_download "$ARCHIVE" "$AFOOT_SOURCE_SHA256" "$AFOOT_SOURCE_URL"
   tar -xzf "$ARCHIVE" -C "$SOURCE_DIR" --strip-components=1
   build_source_checkout "$SOURCE_DIR"
-  SOURCE_BINARY="$SOURCE_DIR/target/release/af"
+  SOURCE_BINARY="$SOURCE_DIR/target/release/afoot"
 else
   cat >&2 <<'ERROR'
 install.sh: no install source is available.
 
 Run this script from an agentic-footprint source checkout, or provide one of:
-  AF_INSTALL_BINARY=/path/to/af
-  AF_BINARY_URL=https://host/path/to/af
-  AF_SOURCE_URL=https://host/path/to/source.tar.gz
+  AFOOT_INSTALL_BINARY=/path/to/afoot
+  AFOOT_BINARY_URL=https://host/path/to/afoot
+  AFOOT_SOURCE_URL=https://host/path/to/source.tar.gz
 ERROR
   exit 1
 fi
 
 [ -x "$SOURCE_BINARY" ] || chmod +x "$SOURCE_BINARY"
 mkdir -p "$BIN_DIR"
-DEST="$BIN_DIR/af"
-TEMP_DEST="$BIN_DIR/.af.$$.tmp"
+DEST="$BIN_DIR/afoot"
+TEMP_DEST="$BIN_DIR/.afoot.$$.tmp"
 
 if [ -e "$DEST" ]; then
   [ -f "$DEST" ] || {
@@ -233,9 +233,9 @@ if [ -e "$DEST" ]; then
     exit 1
   }
   if cmp -s "$SOURCE_BINARY" "$DEST"; then
-    echo "af is already up to date at $DEST ($(binary_version "$DEST"))"
+    echo "afoot is already up to date at $DEST ($(binary_version "$DEST"))"
   else
-    echo "Existing af installation detected at $DEST"
+    echo "Existing afoot installation detected at $DEST"
     echo "  installed: $(binary_version "$DEST")"
     echo "  candidate: $(binary_version "$SOURCE_BINARY")"
     if ! confirm_upgrade; then
@@ -249,23 +249,23 @@ cp "$SOURCE_BINARY" "$TEMP_DEST"
 chmod +x "$TEMP_DEST"
 mv "$TEMP_DEST" "$DEST"
 
-echo "Installed af to $DEST ($(binary_version "$DEST"))"
+echo "Installed afoot to $DEST ($(binary_version "$DEST"))"
 case ":${PATH:-}:" in
   *":$BIN_DIR:"*) ;;
-  *) echo "Add $BIN_DIR to PATH to invoke af directly." ;;
+  *) echo "Add $BIN_DIR to PATH to invoke afoot directly." ;;
 esac
 
 # Only a published release binary can be self-updated later; a source build
-# or AF_INSTALL_BINARY copy must be updated the way it was installed.
-case "${AF_BINARY_URL:-}" in
+# or AFOOT_INSTALL_BINARY copy must be updated the way it was installed.
+case "${AFOOT_BINARY_URL:-}" in
   https://github.com/mlco2/agentic-footprint/releases/download/*)
     "$DEST" self record-install --binary "$DEST"
     ;;
 esac
 
-RESOLVED_AF="$(command -v af 2>/dev/null || true)"
-if [ -n "$RESOLVED_AF" ] && [ "$RESOLVED_AF" != "$DEST" ]; then
-  echo "Warning: your shell currently resolves af to $RESOLVED_AF" >&2
+RESOLVED_AFOOT="$(command -v afoot 2>/dev/null || true)"
+if [ -n "$RESOLVED_AFOOT" ] && [ "$RESOLVED_AFOOT" != "$DEST" ]; then
+  echo "Warning: your shell currently resolves afoot to $RESOLVED_AFOOT" >&2
   echo "         put $BIN_DIR earlier in PATH or invoke $DEST directly" >&2
 fi
 
@@ -282,7 +282,7 @@ if [ "$ASSUME_YES" -eq 1 ]; then
 fi
 if [ -n "$SETUP_ARGS" ]; then
   # Setup passthrough is intentionally shell-word based for curl convenience.
-  # Users needing literal whitespace can invoke the installed `af setup`.
+  # Users needing literal whitespace can invoke the installed `afoot setup`.
   # shellcheck disable=SC2086
   set -- "$@" $SETUP_ARGS
 fi

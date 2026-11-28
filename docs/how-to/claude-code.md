@@ -6,23 +6,23 @@ For a new installation, prefer the unified installer and project setup wizard:
 
     ```sh
     ./install.sh
-    # or, when af is already installed:
-    af setup --agents claude-code --global
+    # or, when afoot is already installed:
+    afoot setup --agents claude-code --global
     ```
 
 === "Windows 11"
 
     ```powershell
     .\install.ps1
-    af watch
+    afoot watch
     # in another PowerShell window:
-    af setup --agents claude-code --global --yes
+    afoot setup --agents claude-code --global --yes
     ```
 
 The wizard checks receiver health before inspecting Claude Code. On
 macOS/Linux it can install a per-user receiver; Windows uses the foreground
 receiver shown above. The wizard installs a shell hook on Unix or configures
-the built-in `af hook` collector on Windows, merges `.claude/settings.json`,
+the built-in `afoot hook` collector on Windows, merges `.claude/settings.json`,
 and backs up an existing settings file. The manual procedure below remains
 useful for auditing or custom deployments.
 
@@ -31,12 +31,12 @@ The complete collection path uses three complementary inputs:
 
 - Claude Code hooks record session and local tool-call lifecycle events;
 - Claude Code OTLP logs provide model and token-usage facts for LLM calls;
-- `af watch` runs the local machine sampler and joins measured local energy
+- `afoot watch` runs the local machine sampler and joins measured local energy
   with remotely estimated inference impacts.
 
 All data remains under one local state directory. The default is
 `~/.local/state/agentic-footprint` on macOS/Linux and
-`%LOCALAPPDATA%\agentic-footprint` on Windows; set `AF_STATE_DIR` everywhere
+`%LOCALAPPDATA%\agentic-footprint` on Windows; set `AFOOT_STATE_DIR` everywhere
 if you want another location.
 
 ## 1. Prerequisites
@@ -57,26 +57,26 @@ claude --version
 ```
 
 On macOS/Linux, also verify `jq --version`. Windows setup uses the built-in
-`af hook` collector and does not require `jq` or a Unix shell.
+`afoot hook` collector and does not require `jq` or a Unix shell.
 
-## 2. Build and expose `af`
+## 2. Build and expose `afoot`
 
 Build the release binary:
 
 ```sh
-cargo build --release -p af-cli
+cargo build --release -p afoot-cli
 ```
 
 For the commands below, either use its absolute path or add it to your
 shell's `PATH`:
 
 ```sh
-export AF_REPO="$(pwd)"
-export AF_BIN="$AF_REPO/target/release/af"
-"$AF_BIN" --help
+export AFOOT_REPO="$(pwd)"
+export AFOOT_BIN="$AFOOT_REPO/target/release/afoot"
+"$AFOOT_BIN" --help
 ```
 
-Keep `AF_REPO` and `AF_BIN` pointed at absolute paths. Claude Code hooks must
+Keep `AFOOT_REPO` and `AFOOT_BIN` pointed at absolute paths. Claude Code hooks must
 not depend on the current repository being the agentic-footprint repository.
 
 ## 3. Provision the estimator and sampler
@@ -85,8 +85,8 @@ Create the managed Python environment with the pinned CodeCarbon, EcoLogits,
 and supporting dependencies:
 
 ```sh
-"$AF_BIN" python setup
-"$AF_BIN" python doctor
+"$AFOOT_BIN" python setup
+"$AFOOT_BIN" python doctor
 ```
 
 `python doctor` should report the managed environment as usable. Collection
@@ -96,13 +96,13 @@ calls will remain pending until the environment is repaired and replayed.
 ## 4. Install the Claude Code hooks
 
 The manual shell-hook instructions in this section apply to macOS/Linux. On
-Windows, use `af setup --agents claude-code`; it registers the native
-`"C:\path\to\af.exe" hook` command instead.
+Windows, use `afoot setup --agents claude-code`; it registers the native
+`"C:\path\to\afoot.exe" hook` command instead.
 
 Make the hook executable:
 
 ```sh
-chmod +x "$AF_REPO/collectors/claude-code/af-hook.sh"
+chmod +x "$AFOOT_REPO/collectors/claude-code/afoot-hook.sh"
 ```
 
 Add the following to the Claude Code settings for the projects you want to
@@ -121,7 +121,7 @@ replacing the whole file.
         "hooks": [
           {
             "type": "command",
-            "command": "/absolute/path/to/agentic-footprint/collectors/claude-code/af-hook.sh"
+            "command": "/absolute/path/to/agentic-footprint/collectors/claude-code/afoot-hook.sh"
           }
         ]
       }
@@ -132,7 +132,7 @@ replacing the whole file.
         "hooks": [
           {
             "type": "command",
-            "command": "/absolute/path/to/agentic-footprint/collectors/claude-code/af-hook.sh"
+            "command": "/absolute/path/to/agentic-footprint/collectors/claude-code/afoot-hook.sh"
           }
         ]
       }
@@ -143,7 +143,7 @@ replacing the whole file.
         "hooks": [
           {
             "type": "command",
-            "command": "/absolute/path/to/agentic-footprint/collectors/claude-code/af-hook.sh"
+            "command": "/absolute/path/to/agentic-footprint/collectors/claude-code/afoot-hook.sh"
           }
         ]
       }
@@ -154,7 +154,7 @@ replacing the whole file.
         "hooks": [
           {
             "type": "command",
-            "command": "/absolute/path/to/agentic-footprint/collectors/claude-code/af-hook.sh"
+            "command": "/absolute/path/to/agentic-footprint/collectors/claude-code/afoot-hook.sh"
           }
         ]
       }
@@ -164,7 +164,7 @@ replacing the whole file.
         "hooks": [
           {
             "type": "command",
-            "command": "/absolute/path/to/agentic-footprint/collectors/claude-code/af-hook.sh"
+            "command": "/absolute/path/to/agentic-footprint/collectors/claude-code/afoot-hook.sh"
           }
         ]
       }
@@ -174,7 +174,7 @@ replacing the whole file.
         "hooks": [
           {
             "type": "command",
-            "command": "/absolute/path/to/agentic-footprint/collectors/claude-code/af-hook.sh"
+            "command": "/absolute/path/to/agentic-footprint/collectors/claude-code/afoot-hook.sh"
           }
         ]
       }
@@ -193,7 +193,7 @@ process, and an extra shell would replace that parent.
 
 The hook always exits successfully and is designed never to interrupt a
 Claude Code session. Internal hook errors are written best-effort to
-`$AF_STATE_DIR/tmp/hook-errors.log`.
+`$AFOOT_STATE_DIR/tmp/hook-errors.log`.
 
 ## 5. Start the control plane
 
@@ -201,7 +201,7 @@ On macOS/Linux, the unified installer starts the resident receiver
 automatically. Verify it before launching Claude Code:
 
 ```sh
-af service status
+afoot service status
 ```
 
 On Windows, for a manual development checkout, or when no supported service
@@ -209,8 +209,8 @@ manager is available, choose the state directory and keep a foreground
 receiver running:
 
 ```sh
-export AF_STATE_DIR="$HOME/.local/state/agentic-footprint"
-"$AF_BIN" watch
+export AFOOT_STATE_DIR="$HOME/.local/state/agentic-footprint"
+"$AFOOT_BIN" watch
 ```
 
 By default:
@@ -218,16 +218,16 @@ By default:
 - Claude Code exports OTLP logs to `http://127.0.0.1:4318`;
 - the debug console is served at `http://127.0.0.1:9414` when `--debug` is
   enabled;
-- hooks append JSONL facts under `$AF_STATE_DIR/spool/`;
+- hooks append JSONL facts under `$AFOOT_STATE_DIR/spool/`;
 - OTLP telemetry is normalized by the receiver and stored directly in
-  `$AF_STATE_DIR/state.db`, with the ingested hook facts, estimates, and
+  `$AFOOT_STATE_DIR/state.db`, with the ingested hook facts, estimates, and
   derived joins.
 
 `--otlp-addr` and `--debug-addr` accept loopback addresses only (`127.0.0.1`,
 `::1`); anything else is refused at startup, because neither listener has
 authentication.
 
-`af watch` writes to the store once a minute, not on every received batch (see
+`afoot watch` writes to the store once a minute, not on every received batch (see
 [why writes are batched](../explanation/rebuild-architecture.md#why-writes-are-batched)).
 A new session is written at once; after that, the report, statusline, and
 debug console can lag the session by up to a minute.
@@ -236,17 +236,17 @@ Optional location settings:
 
 ```sh
 # Local machine electricity grid. --zone remains a compatibility alias.
-"$AF_BIN" watch --debug --local-grid-zone FRA
+"$AFOOT_BIN" watch --debug --local-grid-zone FRA
 
 # Audit override for the remote inference electricity region. If omitted,
 # the estimator owns remote-region detection/defaulting.
-"$AF_BIN" watch --debug --remote-region FRA
+"$AFOOT_BIN" watch --debug --remote-region FRA
 ```
 
 The installed macOS/Linux background service does not enable debug mode. On macOS inspect
-`$AF_STATE_DIR/logs/watch.stderr.log`; on Linux run
+`$AFOOT_STATE_DIR/logs/watch.stderr.log`; on Linux run
 `journalctl --user -u agentic-footprint-watch.service`. For the debug console, run
-`af console`: it attaches to the running service (see
+`afoot console`: it attaches to the running service (see
 [Open the debug console](debug-console.md)).
 
 Use `--no-sidecars` only when you intentionally want ingestion and
@@ -254,11 +254,11 @@ attribution without CodeCarbon sampling or EcoLogits estimation.
 
 ## 6. Launch Claude Code with OTLP enabled
 
-In the shell that launches Claude Code, use the same `AF_STATE_DIR` as the
+In the shell that launches Claude Code, use the same `AFOOT_STATE_DIR` as the
 watch process and enable its OTLP log exporter:
 
 ```sh
-export AF_STATE_DIR="$HOME/.local/state/agentic-footprint"
+export AFOOT_STATE_DIR="$HOME/.local/state/agentic-footprint"
 export CLAUDE_CODE_ENABLE_TELEMETRY=1
 export OTEL_LOGS_EXPORTER=otlp
 export OTEL_EXPORTER_OTLP_PROTOCOL=http/json
@@ -270,9 +270,9 @@ claude
 
 The hooks and OTLP exporter are independent but complementary:
 
-- hooks write `$AF_STATE_DIR/spool/cc-hooks.<session-id>.jsonl`, which
+- hooks write `$AFOOT_STATE_DIR/spool/cc-hooks.<session-id>.jsonl`, which
   describes local actions;
-- the OTLP exporter posts to the receiver in `af watch`, which stores the
+- the OTLP exporter posts to the receiver in `afoot watch`, which stores the
   normalized LLM-call facts (collector `otlp-cc`) in the SQLite store. There
   is no spool file for them.
 
@@ -281,7 +281,7 @@ joins the facts into one session.
 
 ## 7. Inspect the results
 
-While `af watch` is running, open the debug console or inspect stderr:
+While `afoot watch` is running, open the debug console or inspect stderr:
 
 ```text
 http://127.0.0.1:9414
@@ -292,20 +292,20 @@ the report and the resident watch to overlap. The report sees what the watch
 has flushed, so the last minute of token telemetry may not be in it yet:
 
 ```sh
-export AF_STATE_DIR="$HOME/.local/state/agentic-footprint"
-"$AF_BIN" report --format text
-"$AF_BIN" report --format json
+export AFOOT_STATE_DIR="$HOME/.local/state/agentic-footprint"
+"$AFOOT_BIN" report --format text
+"$AFOOT_BIN" report --format json
 ```
 
 After changing methodology or an explicit remote-region override, replay all
 derived records from the preserved raw facts:
 
 ```sh
-"$AF_BIN" replay --format json
-"$AF_BIN" replay --format json --remote-region FRA
+"$AFOOT_BIN" replay --format json
+"$AFOOT_BIN" replay --format json --remote-region FRA
 ```
 
-Stop `af watch` with `Ctrl-C`. It stores the telemetry it has received,
+Stop `afoot watch` with `Ctrl-C`. It stores the telemetry it has received,
 performs a final ingest pass, rebuilds the affected sessions, and shuts down
 its sidecars. If you are ending a short scripted Claude Code run, allow a few
 seconds for the OTLP exporter to flush before stopping the watch process:
@@ -317,7 +317,7 @@ flushed, up to a minute of it.
 
 The included statusline reads already-computed local data; it performs no
 network request and does not ingest or estimate anything itself. It shows what
-`af watch` last flushed, so its values can be up to a minute behind the
+`afoot watch` last flushed, so its values can be up to a minute behind the
 session.
 
 On macOS/Linux, create an executable wrapper so the richer shell statusline
@@ -327,9 +327,9 @@ always knows the absolute binary and script paths:
 mkdir -p "$HOME/.claude"
 cat > "$HOME/.claude/agentic-footprint-statusline.sh" <<EOF
 #!/usr/bin/env bash
-export AF_BIN="$AF_BIN"
-export AF_STATE_DIR="${AF_STATE_DIR:-$HOME/.local/state/agentic-footprint}"
-exec "$AF_REPO/statusline/ecologits-bar.sh"
+export AFOOT_BIN="$AFOOT_BIN"
+export AFOOT_STATE_DIR="${AFOOT_STATE_DIR:-$HOME/.local/state/agentic-footprint}"
+exec "$AFOOT_REPO/statusline/ecologits-bar.sh"
 EOF
 chmod +x "$HOME/.claude/agentic-footprint-statusline.sh"
 ```
@@ -369,7 +369,7 @@ directly, replacing the path with the installed executable:
 {
   "statusLine": {
     "type": "command",
-    "command": "\"C:\\Users\\you\\AppData\\Local\\Programs\\agentic-footprint\\af.exe\" statusline"
+    "command": "\"C:\\Users\\you\\AppData\\Local\\Programs\\agentic-footprint\\afoot.exe\" statusline"
   }
 }
 ```
@@ -380,18 +380,18 @@ After starting one Claude Code session and running at least one tool, wait
 for the next flush (up to a minute), then check:
 
 ```sh
-ls "$AF_STATE_DIR"/spool/cc-hooks.*.jsonl
-"$AF_BIN" report --format text
-"$AF_BIN" doctor
+ls "$AFOOT_STATE_DIR"/spool/cc-hooks.*.jsonl
+"$AFOOT_BIN" report --format text
+"$AFOOT_BIN" doctor
 ```
 
 For the complete setup, expect a `cc-hooks.*.jsonl` spool file for the
 session; token telemetry has no file, it is stored in `state.db`. The text
 report's `EVENT_COUNTS` column should include both `action_span=` and
 `llm_call=` for the session; impact estimates may appear
-shortly after ingestion because `af watch` estimates asynchronously.
-`af doctor` lists recent sessions that recorded tool activity but no token
-telemetry. With a foreground `af watch --debug`, the `otlp_receiver` counters
+shortly after ingestion because `afoot watch` estimates asynchronously.
+`afoot doctor` lists recent sessions that recorded tool activity but no token
+telemetry. With a foreground `afoot watch --debug`, the `otlp_receiver` counters
 in `http://127.0.0.1:9414/debug/health` show whether the exporter is reaching
 the receiver (`logs_requests`) and whether its records became events
 (`logs_accepted`), and the collectors list shows an `otlp-cc` row once the
@@ -403,19 +403,19 @@ session's telemetry is stored.
 
 - On macOS/Linux, confirm `jq` is available in the environment inherited by
   Claude Code and that the hook path is absolute and executable.
-- On Windows, rerun `af setup --agents claude-code` and confirm the configured
-  command points to the installed `af.exe hook`.
+- On Windows, rerun `afoot setup --agents claude-code` and confirm the configured
+  command points to the installed `afoot.exe hook`.
 - Confirm the hook is registered directly, without `sh -c`.
-- Inspect `$AF_STATE_DIR/tmp/hook-errors.log`.
+- Inspect `$AFOOT_STATE_DIR/tmp/hook-errors.log`.
 - Run `collectors/claude-code/test_hooks.sh` from the repository root.
 
 ### No LLM calls in the report
 
-- Wait for the next flush: `af watch` writes received telemetry once a minute.
-- Run `af doctor`: it checks the receiver and reports a Claude Code process
+- Wait for the next flush: `afoot watch` writes received telemetry once a minute.
+- Run `afoot doctor`: it checks the receiver and reports a Claude Code process
   that started before its telemetry configuration last changed (restart it).
-- Run `af setup --check` and confirm the receiver is reachable. On
-  macOS/Linux, `af service status` also diagnoses the installed service.
+- Run `afoot setup --check` and confirm the receiver is reachable. On
+  macOS/Linux, `afoot service status` also diagnoses the installed service.
 - Confirm telemetry and OTLP variables are exported in the Claude Code
   process's environment.
 - Confirm the endpoint is `http://127.0.0.1:4318` and the protocol is
@@ -425,9 +425,9 @@ session's telemetry is stored.
 
 ### LLM calls remain pending
 
-- Run `"$AF_BIN" python doctor`.
-- Repair the environment with `"$AF_BIN" python setup`.
-- Run `"$AF_BIN" replay --format json` after the estimator is available.
+- Run `"$AFOOT_BIN" python doctor`.
+- Repair the environment with `"$AFOOT_BIN" python setup`.
+- Run `"$AFOOT_BIN" replay --format json` after the estimator is available.
 
 ### Local energy is absent
 
@@ -437,10 +437,10 @@ session's telemetry is stored.
 
 ### The statusline always shows zero
 
-- Confirm the wrapper uses the same `AF_STATE_DIR` as `af watch`.
-- Confirm `AF_BIN` points to an executable `af` binary.
+- Confirm the wrapper uses the same `AFOOT_STATE_DIR` as `afoot watch`.
+- Confirm `AFOOT_BIN` points to an executable `afoot` binary.
 - Confirm the Claude Code statusline input reaches the script unchanged.
-- Run `printf '%s\n' '<status JSON>' | "$AF_BIN" statusline` to test the
+- Run `printf '%s\n' '<status JSON>' | "$AFOOT_BIN" statusline` to test the
   read-only backend separately.
 
 For collector internals and payload details, see

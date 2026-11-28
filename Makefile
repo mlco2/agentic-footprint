@@ -19,7 +19,7 @@ build: console-build ## Build the console and Rust workspace
 	$(CARGO) build --workspace
 
 build-release: console-build ## Build the release CLI with locked dependencies
-	$(CARGO) build --release --locked -p af-cli
+	$(CARGO) build --release --locked -p afoot-cli
 
 fmt: ## Format Rust sources
 	$(CARGO) fmt --all
@@ -51,7 +51,7 @@ test-console-e2e: console-install ## Run console Playwright tests
 	$(NPM) --prefix console run e2e
 
 test-python: ## Run Python sidecar tests
-	AF_REQUIRE_ECOLOGITS=1 $(UV) run --frozen --group test --group runtime pytest python/tests -q
+	AFOOT_REQUIRE_ECOLOGITS=1 $(UV) run --frozen --group test --group runtime pytest python/tests -q
 
 test-collectors: ## Run collector and statusline shell tests
 	collectors/claude-code/test_hooks.sh

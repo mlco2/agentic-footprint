@@ -1,9 +1,9 @@
-# Pins for the managed Python venv that `af-sidecar` provisions via `uv`.
+# Pins for the managed Python venv that `afoot-sidecar` provisions via `uv`.
 #
-# `crates/af-sidecar` embeds this file at compile time (`include_str!`) so
-# the `af` binary is self-contained — no external file lookup at runtime.
-# These are floors: the versions this binary is tested with. `af python
-# upgrade` (run by `af self update`) installs newer releases outside the
+# `crates/afoot-sidecar` embeds this file at compile time (`include_str!`) so
+# the `afoot` binary is self-contained — no external file lookup at runtime.
+# These are floors: the versions this binary is tested with. `afoot python
+# upgrade` (run by `afoot self update`) installs newer releases outside the
 # 7-day cooldown above them; nothing is ever installed below them. Sidecar protocol and provisioning
 # are owned by the Rust control plane and documented in
 # docs/contributing/api-boundaries.md.
@@ -17,8 +17,8 @@ codecarbon = "3.3.1"
 psutil = ">=6"
 
 # Security floors for packages the three above bring with them: the lowest
-# version without a known vulnerability. `af python setup` and `af python
-# upgrade` install at least these, and `af doctor` / `af status` report an
+# version without a known vulnerability. `afoot python setup` and `afoot python
+# upgrade` install at least these, and `afoot doctor` / `afoot status` report an
 # environment that is below one.
 [minimums]
 # GHSA-6q48-6c7w-9gw2: certificates of compromised intermediates removed.

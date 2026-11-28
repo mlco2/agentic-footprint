@@ -33,7 +33,7 @@ async function gotoTab(page: Page, tab: string): Promise<void> {
 
 test.describe.configure({ mode: "serial" });
 
-test.describe("af debug console", () => {
+test.describe("afoot debug console", () => {
   let page: Page;
   const consoleErrors: string[] = [];
 
@@ -55,7 +55,7 @@ test.describe("af debug console", () => {
   // depends only on `uiStore.selectedId === null`, not on any data having
   // arrived yet) is visible pre-click on both Layout-A tabs.
   test("all five tabs render and switch without console errors", async () => {
-    await expect(page.locator(".masthead__title")).toHaveText("af · debug console");
+    await expect(page.locator(".masthead__title")).toHaveText("afoot · debug console");
     await expect(page.locator(".tabbar .tab")).toHaveCount(TABS.length);
 
     for (const tab of TABS) {
@@ -233,8 +233,8 @@ test.describe("watcher status and reconnect", () => {
     await expect(codexProcess).toHaveCount(1);
     await expect(codexProcess).toContainText("PID 7447 · ~/work/api");
     await expect(codexProcess).toContainText("not configured");
-    await expect(codexProcess.locator("code")).toHaveText("af setup --agents codex --project /Users/dev/work/api");
-    await expect(page.locator('.health__main .agent-row[data-agent="opencode"]')).toContainText("af setup");
+    await expect(codexProcess.locator("code")).toHaveText("afoot setup --agents codex --project /Users/dev/work/api");
+    await expect(page.locator('.health__main .agent-row[data-agent="opencode"]')).toContainText("afoot setup");
     await gotoTab(page, "timeline");
   });
 

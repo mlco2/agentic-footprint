@@ -8,23 +8,23 @@ network API: it has no authentication and only answers reads.
 
 | Started as | Served on | Diagnostics built |
 |---|---|---|
-| `af watch --debug` | TCP `--debug-addr`, default `127.0.0.1:9414` | For the life of the process. |
-| `af watch` (the background service) | `console.sock` in the state directory | Only while a console is attached. |
-| `af console` | TCP `--addr`, default `127.0.0.1:9414`, relayed to `console.sock` | By the collector it attaches to. |
+| `afoot watch --debug` | TCP `--debug-addr`, default `127.0.0.1:9414` | For the life of the process. |
+| `afoot watch` (the background service) | `console.sock` in the state directory | Only while a console is attached. |
+| `afoot console` | TCP `--addr`, default `127.0.0.1:9414`, relayed to `console.sock` | By the collector it attaches to. |
 
-On macOS and Linux every `af watch` serves these routes on `console.sock`,
+On macOS and Linux every `afoot watch` serves these routes on `console.sock`,
 a Unix socket in the state directory that only its owner can read and write
 (mode `0600`, inside a `0700` directory). The background service listens on
-no debug TCP port. `af console` binds a loopback port and relays each
+no debug TCP port. `afoot console` binds a loopback port and relays each
 connection to the socket, byte for byte, so a browser can reach it; see
 [Open the debug console](../how-to/debug-console.md).
 
 A socket file left by a collector that died is replaced at the next start. A
 socket that a running collector answers on is left alone. When the socket
 cannot be created, for example because the state directory's path is too
-long for a Unix socket (about 100 bytes), `af watch` prints `no console
+long for a Unix socket (about 100 bytes), `afoot watch` prints `no console
 socket` with the reason on stderr and carries on without it. Windows has no
-console socket; use `af watch --debug` there.
+console socket; use `afoot watch --debug` there.
 
 ## Routes
 
@@ -46,7 +46,7 @@ not held answers `404`.
 ## Attaching and detaching
 
 Behind `console.sock`, the collector builds diagnostics on demand. A console
-is attached for as long as it holds a `/debug/stream` open. `af console`
+is attached for as long as it holds a `/debug/stream` open. `afoot console`
 holds one for its whole life, and each browser tab on it holds another.
 
 When the first stream opens, the collector notices on its next loop, within
@@ -65,12 +65,12 @@ except its status, and stops building. Sequence numbers keep counting, so a
 client that reconnects with a cursor from before is answered `reset` and
 takes a new snapshot.
 
-With `af watch --debug` none of this applies: diagnostics are built from
+With `afoot watch --debug` none of this applies: diagnostics are built from
 startup until the process exits.
 
 ## On-demand sessions
 
-Behind `af console`, a session nothing has described since a console attached
+Behind `afoot console`, a session nothing has described since a console attached
 answers `null` on `/debug/session?session_id=…` and
 `/debug/report?session_id=…`. Asking is what makes the collector publish it:
 its `session` and `report` frames follow on the stream, built from what the
@@ -105,17 +105,17 @@ collector has listed its sessions has already fetched an empty
 
 ## Watcher status
 
-`GET /debug/status` describes the `af watch` process itself. It is available
+`GET /debug/status` describes the `afoot watch` process itself. It is available
 from startup, before any session exists.
 
 | Field | Meaning |
 |---|---|
 | `boot_id` | Identifier of this process, different for any other. A client compares it across reconnects to learn that the collector restarted. |
 | `started_at` | When the process started. |
-| `af_version` | Version of the collector. |
+| `afoot_version` | Version of the collector. |
 | `flush_interval_ms` | How often the collector writes to the store. |
 | `receiver` | `endpoint` and `note` of this process's OTLP receiver. |
-| `agents` | One row per supported agent, in the shape `af status` prints; see [agent rows](machine-readable-output.md#agent-rows). |
+| `agents` | One row per supported agent, in the shape `afoot status` prints; see [agent rows](machine-readable-output.md#agent-rows). |
 
 Here the agent rows know what the collector has received since it started:
 `state` can be `receiving`, and `sessions` and `last_event_at` are filled in.
@@ -124,7 +124,7 @@ diagnostics are being built.
 
 ## Access rules
 
-`--debug-addr` and `af console --addr` must be loopback addresses
+`--debug-addr` and `afoot console --addr` must be loopback addresses
 (`127.0.0.1`, `::1`); anything else is refused at startup. The server also:
 
 - refuses a request whose `Host` header is present and not loopback, with
@@ -134,7 +134,7 @@ diagnostics are being built.
 - answers `405` to any method other than `GET` and `OPTIONS`;
 - answers `503` with `too_many_connections` above 32 concurrent requests.
 
-`af console` relays at most 64 connections at once and answers `503` with
+`afoot console` relays at most 64 connections at once and answers `503` with
 `too_many_connections` above that. While the collector is not running it
 answers `503` with `collector_not_running`, and attaches again when the
 collector comes back.
@@ -146,7 +146,7 @@ collector comes back.
 `otlp_receiver` (`logs_requests`, `logs_accepted`, `logs_dropped`,
 `logs_unclaimed`, `bodies_quarantined`, and `bodies_timed_out`: requests
 given up on because their body did not arrive within ten seconds), and the most recent rejects, which
-carry metadata only. Values come from what `af watch` has flushed to the store,
+carry metadata only. Values come from what `afoot watch` has flushed to the store,
 so they can be up to one flush interval (a minute) old; the receiver counters
 are live.
 

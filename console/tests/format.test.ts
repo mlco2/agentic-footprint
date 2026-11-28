@@ -151,8 +151,8 @@ describe("fmtBytes", () => {
   });
 });
 
-// Real-server tolerance (docs/design-log.md, "af watch resident mode…"):
-// both fields the real `af watch --debug` server sends as `null` render an
+// Real-server tolerance (docs/design-log.md, "afoot watch resident mode…"):
+// both fields the real `afoot watch --debug` server sends as `null` render an
 // honest, explained string — never a fabricated number, never "0".
 describe("fmtEventsPerS", () => {
   it('renders "—" for the real server\'s null rate, never "0/s" or NaN', () => {

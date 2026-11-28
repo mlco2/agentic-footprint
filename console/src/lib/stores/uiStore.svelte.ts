@@ -3,10 +3,10 @@
 // non-reactive structure behind a `rev` counter (that pattern is reserved
 // for EventStore/AllocStore's actual bulk data).
 //
-// `nowMs` is the one place outside AfClient allowed to read the wall clock
+// `nowMs` is the one place outside AfootClient allowed to read the wall clock
 // (architecture rule: "No Date.now() outside the client/uiStore tick
 // path") — and even here, only from `tick()`, called once per second by
-// AfClient's single setInterval, never from a query or a render path.
+// AfootClient's single setInterval, never from a query or a render path.
 import { SvelteSet } from "svelte/reactivity";
 
 export type Tab = "timeline" | "stream" | "attribution" | "impact" | "health";
@@ -39,7 +39,7 @@ export class UiStore {
     else this.hiddenTypes.add(type);
   }
 
-  /** Called once per second by AfClient's single interval. Freezes `nowMs`
+  /** Called once per second by AfootClient's single interval. Freezes `nowMs`
    * while paused (global-constraints.md #6: "pause = freeze now"). */
   tick(): void {
     if (this.live) this.nowMs = Date.now();

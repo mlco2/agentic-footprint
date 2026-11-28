@@ -1,13 +1,13 @@
 # Pi collector
 
-`af-collector.ts` is a Pi extension that turns
+`afoot-collector.ts` is a Pi extension that turns
 Pi's in-process lifecycle events into Contract #1 facts and appends them to
-`$AF_STATE_DIR/spool/pi.<session-id>.jsonl`, the same file transport the
-Claude Code hook and the OpenCode collector use. `af watch` / `af report`
+`$AFOOT_STATE_DIR/spool/pi.<session-id>.jsonl`, the same file transport the
+Claude Code hook and the OpenCode collector use. `afoot watch` / `afoot report`
 ingest the spool; nothing is estimated in the extension.
 
-`af` recognises the `pi` collector as the Pi agent in `af status` and
-`af summary`.
+`afoot` recognises the `pi` collector as the Pi agent in `afoot status` and
+`afoot summary`.
 
 ## Event boundaries
 
@@ -27,29 +27,29 @@ tool mode, so spans are paired by `toolCallId`, never by order.
 
 The extension never reads prompts, message content, tool arguments or tool
 results. Every handler is wrapped so a collector failure can never break a
-Pi turn; failures are appended to `$AF_STATE_DIR/tmp/pi-collector-errors.log`.
+Pi turn; failures are appended to `$AFOOT_STATE_DIR/tmp/pi-collector-errors.log`.
 
 ## Use it
 
 ```sh
-af setup --agents pi
+afoot setup --agents pi
 ```
 
-detects `pi` on `PATH` and installs the collector (embedded in `af`) as
+detects `pi` on `PATH` and installs the collector (embedded in `afoot`) as
 `agentic-footprint.ts` in Pi's global extensions directory,
 `$PI_CODING_AGENT_DIR/extensions/` or `~/.pi/agent/extensions/`, where Pi
-loads it for every session. Rerunning setup replaces a copy from another af
-version (after a backup); `af setup --check` and `af status` report whether
+loads it for every session. Rerunning setup replaces a copy from another afoot
+version (after a backup); `afoot setup --check` and `afoot status` report whether
 it is installed (`not_configured`, `waiting`, `receiving`, or
 `misconfigured` for an outdated copy).
 
-Like the Claude Code hook, the extension writes to `$AF_STATE_DIR` when Pi's
-environment sets it, otherwise to af's default state directory.
+Like the Claude Code hook, the extension writes to `$AFOOT_STATE_DIR` when Pi's
+environment sets it, otherwise to afoot's default state directory.
 
 Without setup, load it for one run:
 
 ```sh
-pi --extension /absolute/path/to/collectors/pi/af-collector.ts
+pi --extension /absolute/path/to/collectors/pi/afoot-collector.ts
 ```
 
 ## Tests
@@ -58,11 +58,11 @@ pi --extension /absolute/path/to/collectors/pi/af-collector.ts
 collectors/pi/test_collector.sh
 ```
 
-It runs the unit tests (`node --test collectors/pi/af-collector.test.ts`,
+It runs the unit tests (`node --test collectors/pi/afoot-collector.test.ts`,
 Node >= 23.6 runs TypeScript directly), replays `test-data/session.jsonl`
 through the extension with a fake Pi (`test-data/replay.ts`), validates every
-spooled line with `af validate-line`, ingests the spool with `af report` and
-checks that `af summary` reports it as Pi.
+spooled line with `afoot validate-line`, ingests the spool with `afoot report` and
+checks that `afoot summary` reports it as Pi.
 
 The fixture is hand-written from Pi's documented event shapes
 (`docs/extensions.md`, `docs/session-format.md` in `@mariozechner/pi-coding-agent`)
@@ -76,7 +76,7 @@ Checked against a real Pi 0.73.1 session on 17 Nov 2026 (provider
 answer). Pi fired three assistant `message_end`s, each repeated in its
 `turn_end`; the spool held exactly 1 `session_meta`, 3 `llm_call` and 2
 `action_span` (`bash` → `bash`, `read` → `file_op`), all valid, and
-`af report` ingested 6 events with 0 rejected. A provider error (an
+`afoot report` ingested 6 events with 0 rejected. A provider error (an
 unsupported model) produced one `llm_call` with `status: "error"`, zero
 tokens and its duration.
 
@@ -113,7 +113,7 @@ ordering and structural metadata while excluding prompts, tool arguments, tool
 outputs, and message content:
 
 ```sh
-AF_PI_CAPTURE=/tmp/pi-events.jsonl \
+AFOOT_PI_CAPTURE=/tmp/pi-events.jsonl \
   pi --extension /absolute/path/to/collectors/pi/capture-events.ts \
   --print "Run one harmless bash command and then stop."
 ```

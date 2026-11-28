@@ -131,7 +131,7 @@ export function fmtPct(share: number): string {
 }
 
 /** A collector's `events_per_s` (DATA-CONTRACT §2.7). The real
- * `af watch --debug` server always sends `null` here — "a rate over a
+ * `afoot watch --debug` server always sends `null` here — "a rate over a
  * session's whole span is not the rate anyone reads it as"
  * (docs/design-log.md) — so this renders "—" rather than fabricating a
  * rate client-side (which would violate global-constraints.md #1: the
@@ -153,7 +153,7 @@ export function fmtGridIntensity(gCo2ePerKwh: number | null, source: string): st
   return `${withCommas(v, Math.abs(v) < 10 ? 1 : 0)} gCO2e/kWh`;
 }
 
-/** The Impact tab's `af statusline` preview values ONLY (selectors/impact.ts:
+/** The Impact tab's `afoot statusline` preview values ONLY (selectors/impact.ts:
  * `buildStatusline` — the single sanctioned client-side mean, docs/design-log.md
  * "statusline contract": "Missing or unmeasured impacts print as `nan`.").
  * Unlike every other formatter in this file, a non-finite input renders the

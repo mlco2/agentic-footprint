@@ -11,18 +11,18 @@ The project has two different reliability obligations:
 Human diagnostics written to stderr use:
 
 ```text
-af[component] <level>: message
+afoot[component] <level>: message
 ```
 
 Levels are `info`, `warn`, and `error`. Examples:
 
 ```text
-af[opencode] warn: sequence gap for ses_...: expected 4, received 6
-af[otlp] warn: dropped 2 claimed OTLP record(s) that failed to normalize
-af[claude-hook] warn: skipped 1 corrupt open-span file
+afoot[opencode] warn: sequence gap for ses_...: expected 4, received 6
+afoot[otlp] warn: dropped 2 claimed OTLP record(s) that failed to normalize
+afoot[claude-hook] warn: skipped 1 corrupt open-span file
 ```
 
-Top-level command failures remain `af <command>: <context>` and exit non-zero.
+Top-level command failures remain `afoot <command>: <context>` and exit non-zero.
 Machine-readable data stays on stdout; diagnostics never share stdout with JSON
 or cursor output.
 
@@ -38,7 +38,7 @@ Collectors and receiver request handlers are best-effort relative to the agent:
 - spool append and cursor persistence failures are errors and must not advance
   durable source state;
 - hook collectors always exit successfully so they cannot fail the host agent;
-  persistent hook errors go to `$AF_STATE_DIR/tmp/hook-errors.log`.
+  persistent hook errors go to `$AFOOT_STATE_DIR/tmp/hook-errors.log`.
 
 A warning must correspond to an observable counter, reject row, or specific
 skipped source item whenever practical.
@@ -71,7 +71,7 @@ missing estimators produce `pending`, unknown execution locations stay
   exceptions are limits, not content: a body over the size cap gets `413`, as
   does a request with more log records than the receiver normalizes in one go,
   and a full queue or unreadable body gets a retryable `503`.
-- OTLP rejects reach the `rejects` table with the next flush of `af watch`,
+- OTLP rejects reach the `rejects` table with the next flush of `afoot watch`,
   like the facts beside them; until then they are visible only in the
   receiver's counters (`/debug/health`).
 - A reject that cannot be recorded is logged and never costs the accepted

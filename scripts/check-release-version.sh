@@ -16,10 +16,10 @@ WORKSPACE_VERSION=$(sed -n 's/^version = "\([^"]*\)"/\1/p' Cargo.toml | head -n 
 }
 
 LOCK_VERSION=$(awk '
-  $0 == "name = \"af-cli\"" { found = 1; next }
+  $0 == "name = \"afoot-cli\"" { found = 1; next }
   found && /^version = / { gsub(/^version = \"|\"$/, ""); print; exit }
 ' Cargo.lock)
 [ "$VERSION" = "$LOCK_VERSION" ] || {
-  echo "tag version $VERSION does not match Cargo.lock af-cli version $LOCK_VERSION" >&2
+  echo "tag version $VERSION does not match Cargo.lock afoot-cli version $LOCK_VERSION" >&2
   exit 1
 }

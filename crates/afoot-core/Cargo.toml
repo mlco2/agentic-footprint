@@ -1,0 +1,23 @@
+[package]
+name = "afoot-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "Correlation, estimation, and energy attribution for Agentic Footprint"
+
+[dependencies]
+afoot-events = { path = "../afoot-events" }
+afoot-sidecar = { path = "../afoot-sidecar" }
+afoot-store = { path = "../afoot-store" }
+anyhow.workspace = true
+serde_json = "1"
+time.workspace = true
+
+[dev-dependencies]
+afoot-events = { path = "../afoot-events", features = ["test-support"] }
+rusqlite = { version = "0.41", features = ["bundled"] }
+proptest = "1"
+tempfile = "3"

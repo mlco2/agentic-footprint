@@ -5,10 +5,10 @@
 //
 // Each fixture line is {"event": <pi event name>, "payload": <event object>}.
 // The clock advances one second per fixture line, so output is deterministic.
-// Writes to $AF_STATE_DIR/spool/pi.<session-id>.jsonl.
+// Writes to $AFOOT_STATE_DIR/spool/pi.<session-id>.jsonl.
 
 import { readFileSync } from "node:fs";
-import { createCollector, type PiContext, type PiEvent } from "../af-collector.ts";
+import { createCollector, type PiContext, type PiEvent } from "../afoot-collector.ts";
 
 const [fixture, sessionId] = process.argv.slice(2);
 if (!fixture || !sessionId) {

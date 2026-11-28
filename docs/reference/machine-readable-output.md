@@ -1,6 +1,6 @@
 # Machine-readable output
 
-`af summary` and `af status` each print one JSON document on stdout, on a
+`afoot summary` and `afoot status` each print one JSON document on stdout, on a
 single line, for other programs to read. Both are read-only. Diagnostics, if
 any, go to stderr.
 
@@ -19,29 +19,29 @@ numbers are independent.
 - Treat a document whose `protocol_version` is not one you were written for
   as unsupported, and do not guess at its contents.
 
-`af_version` is the version of the `af` binary that produced the document. It
+`afoot_version` is the version of the `afoot` binary that produced the document. It
 is informative and is not the compatibility signal.
 
-`af summary` has a JSON Schema, `schemas/summary/v1.schema.json`. `af status`
+`afoot summary` has a JSON Schema, `schemas/summary/v1.schema.json`. `afoot status`
 has no schema file yet; this page is its description.
 
 All timestamps are RFC 3339 in UTC with milliseconds, for example
 `2026-03-12T16:41:07.512Z`.
 
-## `af summary`
+## `afoot summary`
 
 ```sh
-af summary --period 7d
+afoot summary --period 7d
 ```
 
-Options and exit status are in the [CLI reference](cli.md#af-summary).
+Options and exit status are in the [CLI reference](cli.md#afoot-summary).
 
 ### Top-level fields
 
 | Field | Type | Meaning |
 |---|---|---|
 | `protocol_version` | integer | `1`. See [Versioning](#versioning). |
-| `af_version` | string | Version of the binary. |
+| `afoot_version` | string | Version of the binary. |
 | `generated_at` | string | When the document was built. |
 | `period` | object | What the document covers; see below. |
 | `collector` | object | Whether a collector is running, and its last stored event. |
@@ -69,7 +69,7 @@ the other side of the change are cut an hour off local midnight; see
 
 | Field | Type | Meaning |
 |---|---|---|
-| `running` | boolean or null | Whether an `af watch` answers on its console socket in the state directory. `null` on Windows, where there is no such socket to ask. |
+| `running` | boolean or null | Whether an `afoot watch` answers on its console socket in the state directory. `null` on Windows, where there is no such socket to ask. |
 | `last_event_at` | string or null | Timestamp of the most recent event in the store, of any kind and regardless of the period. `null` when the store is empty or missing. |
 
 ### Figures
@@ -133,7 +133,7 @@ A `today` summary with one unknown model. The values are invented.
 ```json
 {
   "protocol_version": 1,
-  "af_version": "0.1.0",
+  "afoot_version": "0.1.0",
   "generated_at": "2026-03-12T16:41:07.512Z",
   "period": {
     "name": "today",
@@ -295,10 +295,10 @@ A `today` summary with one unknown model. The values are invented.
 Here the day's impacts cover 40 of 50 calls. A reader should be told that the
 `remote` totals leave out `example-model-b`.
 
-## `af status`
+## `afoot status`
 
 ```sh
-af status
+afoot status
 ```
 
 It takes no options and exits 0.
@@ -308,19 +308,19 @@ It takes no options and exits 0.
 | Field | Type | Meaning |
 |---|---|---|
 | `protocol_version` | integer | `1`. See [Versioning](#versioning). |
-| `af_version` | string | Version of the binary. |
-| `binary` | string or null | Path of the running `af` executable; `null` when it cannot be resolved. |
-| `state_dir` | string | The state directory in use (`AF_STATE_DIR` or the platform default). |
-| `self_update.managed` | boolean | Whether `af self update` manages this binary: `true` only when the installer placed it from a release binary. `false` for a build from a source checkout. |
-| `service.supported` | boolean | Whether `af service` can manage a background receiver here: macOS (launchd), Linux with a systemd user session, or Windows (Task Scheduler). |
+| `afoot_version` | string | Version of the binary. |
+| `binary` | string or null | Path of the running `afoot` executable; `null` when it cannot be resolved. |
+| `state_dir` | string | The state directory in use (`AFOOT_STATE_DIR` or the platform default). |
+| `self_update.managed` | boolean | Whether `afoot self update` manages this binary: `true` only when the installer placed it from a release binary. `false` for a build from a source checkout. |
+| `service.supported` | boolean | Whether `afoot service` can manage a background receiver here: macOS (launchd), Linux with a systemd user session, or Windows (Task Scheduler). |
 | `service.installed` | boolean | Whether the per-user service definition file exists. It does not say the service is running; `receiver.reachable` and `collector.running` do. |
 | `receiver.endpoint` | string | The OTLP logs endpoint that was checked: the installed service's, otherwise `http://127.0.0.1:4318/v1/logs`. |
-| `receiver.reachable` | boolean | Whether that endpoint answered as the receiver of this af version. |
-| `receiver.note` | string or null | When not reachable, the reason, as a sentence for a person: nothing listening, another program on the port, or an af of another version. `null` when reachable. |
-| `collector.running` | boolean or null | Whether an `af watch` answers on its console socket in the state directory. `null` on Windows. |
+| `receiver.reachable` | boolean | Whether that endpoint answered as the receiver of this afoot version. |
+| `receiver.note` | string or null | When not reachable, the reason, as a sentence for a person: nothing listening, another program on the port, or an afoot of another version. `null` when reachable. |
+| `collector.running` | boolean or null | Whether an `afoot watch` answers on its console socket in the state directory. `null` on Windows. |
 | `python.ready` | boolean | Whether the managed Python runtime (CodeCarbon and EcoLogits) is installed and works. Without it tokens are still recorded; there are no impact figures. |
 | `python.problem` | string or null | What is wrong with the runtime, as a sentence for a person. `null` when ready. |
-| `python.fix` | string or null | What to do about it, for example ``run `af python setup` ``, or to install uv first when nothing on this machine can build the runtime. `null` when ready. |
+| `python.fix` | string or null | What to do about it, for example ``run `afoot python setup` ``, or to install uv first when nothing on this machine can build the runtime. `null` when ready. |
 | `python.provisioner` | string or null | What would build the runtime here: `uv`, or `python` (a system Python with the `venv` module). `null` when neither was found, and when the runtime is ready (it is not looked for then). |
 | `python.uv_install_url` | string | Where uv's install instructions are. |
 | `storage.database_bytes` | integer | Size of the store (`state.db` and its write-ahead files), in bytes. `0` when there is none. |
@@ -330,7 +330,7 @@ It takes no options and exits 0.
 | `agents` | array | One row per supported agent (`claude-code`, `codex`), installed or not. Empty when the home directory cannot be determined. |
 
 `receiver.reachable` and `collector.running` answer different questions. An
-`af watch` started with `--no-otlp`, or one whose receiver port was taken, is
+`afoot watch` started with `--no-otlp`, or one whose receiver port was taken, is
 a running collector with no reachable receiver.
 
 ### Agent rows
@@ -341,7 +341,7 @@ a running collector with no reachable receiver.
 | `name` | string | Display name. |
 | `state` | string | See [agent states](#agent-states). |
 | `detail` | string or null | What is wrong with the user-scope configuration file, when `state` was read from it. |
-| `action` | string or null | A command or instruction that addresses the state, for example `af setup` or `restart claude`. `null` when the state was read from a process, whose row carries its own. |
+| `action` | string or null | A command or instruction that addresses the state, for example `afoot setup` or `restart claude`. `null` when the state was read from a process, whose row carries its own. |
 | `config_path` | string or null | The user-scope configuration file that carries telemetry configuration; `null` when there is none. |
 | `processes` | array or null | One row per running process of the agent; `null` where processes cannot be listed (Windows). |
 | `sessions` | integer | Sessions with an event in the last 24 hours. |
@@ -358,7 +358,7 @@ Each element of `processes`:
 | `config_path` | string or null | The configuration file this process loads, when known. |
 | `state` | string | The state of this process; see [agent states](#agent-states). |
 | `detail` | string or null | The reason for the state, when there is one. |
-| `action` | string or null | What addresses it, for example `af setup --agents codex --project /path/to/project`. |
+| `action` | string or null | What addresses it, for example `afoot setup --agents codex --project /path/to/project`. |
 | `session_id` | string or null | The agent session tied to this process, when known. |
 | `last_event_at` | string or null | The most recent event of this process's session in the last 24 hours, when the session is known. |
 
@@ -366,10 +366,10 @@ Each element of `processes`:
 
 | State | Meaning | Where |
 |---|---|---|
-| `receiving` | An event from this agent has arrived (`af status`: in the last 24 hours). | Agent and process. |
+| `receiving` | An event from this agent has arrived (`afoot status`: in the last 24 hours). | Agent and process. |
 | `needs_restart` | Configured, but the process started before the configuration last changed, so it has not loaded it. Restart the agent. | Agent and process. |
 | `misconfigured` | Telemetry configuration is present but will not reach this receiver. `detail` says why. | Agent and process. |
-| `not_configured` | Installed or running, with no telemetry configuration. Run `af setup`. | Agent and process. |
+| `not_configured` | Installed or running, with no telemetry configuration. Run `afoot setup`. | Agent and process. |
 | `waiting` | Configured; nothing more is known. | Agent and process. |
 | `not_installed` | The agent's command is not on `PATH` and it has no configuration. | Agent only. |
 | `unknown` | The process could not be inspected. | Process only. |
@@ -380,8 +380,8 @@ order `needs_restart`, `misconfigured`, `not_configured`, `waiting`. With no
 process that says one of these, it comes from the user-scope configuration
 file and `PATH`.
 
-!!! note "What `receiving` means in `af status`"
-    `af status` reads the store: an agent with a stored event in the last 24
+!!! note "What `receiving` means in `afoot status`"
+    `afoot status` reads the store: an agent with a stored event in the last 24
     hours is `receiving`, with `sessions` and `last_event_at` counted over
     those 24 hours. An agent used yesterday and misconfigured since is still
     `receiving` until the 24 hours have passed. The running collector reports
@@ -396,8 +396,8 @@ and running, and Codex not installed. The values are invented.
 ```json
 {
   "protocol_version": 1,
-  "af_version": "0.1.0",
-  "binary": "/home/alex/.local/bin/af",
+  "afoot_version": "0.1.0",
+  "binary": "/home/alex/.local/bin/afoot",
   "state_dir": "/home/alex/.local/state/agentic-footprint",
   "self_update": {"managed": false},
   "service": {"supported": true, "installed": true},

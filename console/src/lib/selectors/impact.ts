@@ -17,9 +17,9 @@
 //   1. Criteria-table split-bar proportions (`buildSplit`) — a MEAN of each
 //      side's own range used ONLY to size a bar's width; never rendered as a
 //      number or a percentage string.
-//   2. The `af statusline` preview's range means (`buildStatusline`) — the
+//   2. The `afoot statusline` preview's range means (`buildStatusline`) — the
 //      ONE sanctioned client-side mean anywhere in the console
-//      (DATA-CONTRACT §2.6: "only the af statusline preview shows a range
+//      (DATA-CONTRACT §2.6: "only the afoot statusline preview shows a range
 //      mean, because that surface is specified that way"), routed through
 //      `fmtStatuslineFloat` (the only formatter allowed to print `"nan"`).
 // Every other number this file renders is `format.ts` applied to a report
@@ -30,7 +30,7 @@ import type { DebugReport, ModelImpactGroup, ReportEstimationStatus, SessionInfo
 import { fmtGridIntensity, fmtJoules, fmtPct, fmtRange, fmtStatuslineFloat } from "../format";
 import { memo1 } from "./memo";
 
-/** The five Contract #2 criteria, in the `af statusline` field order minus
+/** The five Contract #2 criteria, in the `afoot statusline` field order minus
  * the reordering that line's own format applies (gwp, water, energy, adpe,
  * pe) — kept here in the schema's own declared order (`Impacts`) since the
  * criteria table and per-model table are not the statusline. */
@@ -356,7 +356,7 @@ export interface MethodologyModel {
 export interface ImpactAsideModel {
   tokenOnlyMisses: AsideRow[];
   histogram: HistogramRow[];
-  /** Exact two-line `af statusline` preview text (docs/design-log.md
+  /** Exact two-line `afoot statusline` preview text (docs/design-log.md
    * "statusline contract"): line 1 the fixed header, line 2 five
    * space-separated range means (`nan` when unmeasured). */
   statuslineLines: readonly [string, string];
@@ -432,7 +432,7 @@ function rangeMean(c: Criterion | undefined): number {
   return (c.total.min + c.total.max) / 2;
 }
 
-/** Sourcing fallback per docs/design-log.md "af statusline contract
+/** Sourcing fallback per docs/design-log.md "afoot statusline contract
  * (final)": gwp/energy prefer `combined_total` (only ever present when both
  * paradigms are genuinely complete) before falling back; gwp does NOT fall
  * back to the local measurement (a local-only gwp reads as "session emitted
@@ -440,7 +440,7 @@ function rangeMean(c: Criterion | undefined): number {
  * exist only on the remote side. This preview renders `nan` for "nothing to
  * source", per the brief and the (superseded, but still normative for THIS
  * preview panel) "statusline contract" entry — not `0`, which is the real
- * `af statusline` CLI's own later, unrelated formatting choice for its
+ * `afoot statusline` CLI's own later, unrelated formatting choice for its
  * awk-consuming bar. */
 function buildStatusline(join: ImpactJoin): readonly [string, string] {
   const gwp = rangeMean(join.combined_total?.gwp ?? join.remote_estimated?.impacts?.gwp);
@@ -489,7 +489,7 @@ function computeAside(report: DebugReport | undefined, session: SessionInfo | nu
 const memoAside = memo1((report: DebugReport | undefined, session: SessionInfo | null) => computeAside(report, session));
 
 /** "What token-only misses" (6 rows) + estimation-status histogram +
- * `af statusline` preview + methodology block. `report`/`session` double as
+ * `afoot statusline` preview + methodology block. `report`/`session` double as
  * the memo key (both are replace-on-arrival singleton objects), exactly
  * like `selectImpactCards`. */
 export function selectImpactAside(report: DebugReport | undefined, session: SessionInfo | null): ImpactAsideModel {

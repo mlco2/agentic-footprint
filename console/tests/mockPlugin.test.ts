@@ -79,7 +79,7 @@ describe("mock watcher status", () => {
   it("serves a status with every contract field and one agent in each onboarding-relevant state", () => {
     const status: WatcherStatus = buildStatus("boot-a", Date.parse("2026-11-16T09:00:00.000Z"));
     expect(status.boot_id).toBe("boot-a");
-    expect(status.af_version).toMatch(/^\d+\.\d+\.\d+/);
+    expect(status.afoot_version).toMatch(/^\d+\.\d+\.\d+/);
     expect(status.flush_interval_ms).toBe(60000);
     expect(status.receiver.endpoint).toBe("127.0.0.1:4318");
     expect(Date.parse(status.started_at)).not.toBeNaN();

@@ -1,7 +1,7 @@
 <script lang="ts">
-  // `af statusline` stdout preview (SCREENS.md §4; docs/design-log.md
+  // `afoot statusline` stdout preview (SCREENS.md §4; docs/design-log.md
   // "statusline contract"): exactly two lines, serif (DESIGN-SYSTEM §4:
-  // "there is no monospace anywhere — including... the af statusline
+  // "there is no monospace anywhere — including... the afoot statusline
   // preview"), pre-wrap. The two strings are already the exact final text —
   // this component performs no formatting of its own.
   let { lines }: { lines: readonly [string, string] } = $props();

@@ -7,7 +7,7 @@ stored as `unknown_model` and carries no inference impact — so without this
 test a new default model silently zeroes most of a user's footprint (it did:
 `claude-opus-5-5` was unknown to ecologits 0.11.1 for weeks).
 
-Set `AF_REQUIRE_ECOLOGITS=1` (CI does) to fail instead of skipping when
+Set `AFOOT_REQUIRE_ECOLOGITS=1` (CI does) to fail instead of skipping when
 ecologits is not importable.
 """
 import json
@@ -19,13 +19,13 @@ from pathlib import Path
 
 import pytest
 
-if os.environ.get("AF_REQUIRE_ECOLOGITS") == "1":
+if os.environ.get("AFOOT_REQUIRE_ECOLOGITS") == "1":
     import ecologits
 else:
     ecologits = pytest.importorskip("ecologits")
 
 ROOT = Path(__file__).resolve().parents[2]
-MAIN = ROOT / "python" / "af_estimator" / "__main__.py"
+MAIN = ROOT / "python" / "afoot_estimator" / "__main__.py"
 MANIFEST = tomllib.loads((ROOT / "python" / "manifest.toml").read_text())
 AGENT_MODELS = json.loads((ROOT / "tests" / "fixtures" / "models" / "agent-models.json").read_text())
 
@@ -63,7 +63,7 @@ def _estimate(provider: str, model: str) -> dict:
 
 
 def test_installed_ecologits_is_the_manifest_pin():
-    # Coverage is only meaningful against the version `af` actually ships.
+    # Coverage is only meaningful against the version `afoot` actually ships.
     assert ecologits.__version__ == MANIFEST["packages"]["ecologits"]
 
 

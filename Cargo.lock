@@ -9,16 +9,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
 
 [[package]]
-name = "af-cli"
+name = "afoot-cli"
 version = "0.1.0"
 dependencies = [
- "af-console",
- "af-core",
- "af-events",
- "af-otlp",
- "af-sidecar",
- "af-spool",
- "af-store",
+ "afoot-console",
+ "afoot-core",
+ "afoot-events",
+ "afoot-otlp",
+ "afoot-sidecar",
+ "afoot-spool",
+ "afoot-store",
  "anyhow",
  "assert_cmd",
  "clap",
@@ -40,19 +40,19 @@ dependencies = [
 ]
 
 [[package]]
-name = "af-console"
+name = "afoot-console"
 version = "0.1.0"
 dependencies = [
  "include_dir",
 ]
 
 [[package]]
-name = "af-core"
+name = "afoot-core"
 version = "0.1.0"
 dependencies = [
- "af-events",
- "af-sidecar",
- "af-store",
+ "afoot-events",
+ "afoot-sidecar",
+ "afoot-store",
  "anyhow",
  "proptest",
  "rusqlite",
@@ -62,10 +62,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "af-events"
+name = "afoot-events"
 version = "0.1.0"
 dependencies = [
- "af-events",
+ "afoot-events",
  "jsonschema",
  "serde",
  "serde_json",
@@ -73,10 +73,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "af-otlp"
+name = "afoot-otlp"
 version = "0.1.0"
 dependencies = [
- "af-events",
+ "afoot-events",
  "anyhow",
  "serde_json",
  "tempfile",
@@ -85,7 +85,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "af-sidecar"
+name = "afoot-sidecar"
 version = "0.1.0"
 dependencies = [
  "anyhow",
@@ -96,18 +96,18 @@ dependencies = [
 ]
 
 [[package]]
-name = "af-spool"
+name = "afoot-spool"
 version = "0.1.0"
 dependencies = [
- "af-events",
+ "afoot-events",
  "tempfile",
 ]
 
 [[package]]
-name = "af-store"
+name = "afoot-store"
 version = "0.1.0"
 dependencies = [
- "af-events",
+ "afoot-events",
  "rusqlite",
  "serde_json",
  "tempfile",

@@ -2,30 +2,30 @@
 // Manual timing harness: does vite.config.ts's `/debug` proxy (`ws: false`,
 // a `configure()` hook that forces `Connection: keep-alive`) add material
 // first-frame latency to `GET /debug/stream` versus talking to the real
-// `af watch --debug` process directly? README.md's "Running against the
+// `afoot watch --debug` process directly? README.md's "Running against the
 // real server" section already claims the proxy was "verified end-to-end...
 // to not introduce buffering" — this script is that verification, committed
 // so the check can be re-run by hand instead of re-derived from scratch.
 //
 // Usage (from console/):
-//   1. Start a real af watch --debug process (README.md's "Running against
+//   1. Start a real afoot watch --debug process (README.md's "Running against
 //      the real server" section has the exact command).
-//   2. Point the dev server at it: AF_DEBUG_TARGET=http://127.0.0.1:9414
+//   2. Point the dev server at it: AFOOT_DEBUG_TARGET=http://127.0.0.1:9414
 //      npm run dev:real (or preview:real).
 //   3. node dev/check-sse-proxy.mjs [directUrl] [proxyUrl]
-//      Defaults: directUrl = $AF_DEBUG_TARGET or http://127.0.0.1:9414,
+//      Defaults: directUrl = $AFOOT_DEBUG_TARGET or http://127.0.0.1:9414,
 //      proxyUrl = http://127.0.0.1:5173 (vite's default dev port).
 //
 // Connects to GET /debug/stream on both legs, measures wall-clock ms from
 // request-sent to the first SSE `data:` frame received on each, and prints
 // both plus the delta and a verdict. Deliberately built on node:http alone
 // (no EventSource/extra deps) so it has nothing else to install. NOT wired
-// into CI: it needs a live af process and a live vite dev server, neither
+// into CI: it needs a live afoot process and a live vite dev server, neither
 // available headless — this is a human-run diagnostic, not an automated gate.
 import http from "node:http";
 import { URL } from "node:url";
 
-const directBase = process.argv[2] ?? process.env.AF_DEBUG_TARGET ?? "http://127.0.0.1:9414";
+const directBase = process.argv[2] ?? process.env.AFOOT_DEBUG_TARGET ?? "http://127.0.0.1:9414";
 const proxyBase = process.argv[3] ?? "http://127.0.0.1:5173";
 
 /** A few hundred ms of scheduling/networking noise is normal on localhost;
@@ -79,7 +79,7 @@ async function main() {
   if (proxyResult.status === "rejected") console.error(`proxy leg failed: ${proxyResult.reason.message}`);
 
   if (directResult.status === "rejected" || proxyResult.status === "rejected") {
-    console.log("\nverdict: INCONCLUSIVE — one or both legs failed (see errors above). Is af watch --debug and npm run dev:real/preview:real both actually running?");
+    console.log("\nverdict: INCONCLUSIVE — one or both legs failed (see errors above). Is afoot watch --debug and npm run dev:real/preview:real both actually running?");
     process.exitCode = 1;
     return;
   }

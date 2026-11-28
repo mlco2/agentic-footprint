@@ -5,7 +5,7 @@ Start with [`docs/contributing/developer-guide.md`](docs/contributing/developer-
 Before opening a change:
 
 ```sh
-cargo test -p af-cli --test cli
+cargo test -p afoot-cli --test cli
 scripts/test-install.sh
 cargo fmt --all -- --check
 git diff --check

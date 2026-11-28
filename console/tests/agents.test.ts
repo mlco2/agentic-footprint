@@ -26,7 +26,7 @@ function status(agents: AgentStatus[], overrides: Partial<WatcherStatus> = {}): 
   return {
     boot_id: "b1",
     started_at: new Date(NOW - 4 * 60_000).toISOString(),
-    af_version: "0.1.0",
+    afoot_version: "0.1.0",
     flush_interval_ms: 60000,
     receiver: { endpoint: "127.0.0.1:4318", note: null },
     agents,
@@ -113,7 +113,7 @@ describe("selectAgentRows", () => {
 
   it("misconfigured carries the server's detail; not_configured its action", () => {
     expect(row(agent("misconfigured", { detail: "exports telemetry to http://x, not to http://y" })).note).toBe("exports telemetry to http://x, not to http://y");
-    expect(row(agent("not_configured", { action: "af setup" })).action).toBe("af setup");
+    expect(row(agent("not_configured", { action: "afoot setup" })).action).toBe("afoot setup");
   });
 
   it("an unknown state from a newer watcher is shown as-is, not dropped", () => {
@@ -142,8 +142,8 @@ describe("selectWatcherLine", () => {
   });
 
   it("says so when the watcher has no receiver", () => {
-    const line = selectWatcherLine(status([], { receiver: { endpoint: null, note: "no OTLP receiver is running in this af watch process" } }), NOW);
-    expect(line).toBe("up 4m · no receiver (no OTLP receiver is running in this af watch process) · flushes every 60s");
+    const line = selectWatcherLine(status([], { receiver: { endpoint: null, note: "no OTLP receiver is running in this afoot watch process" } }), NOW);
+    expect(line).toBe("up 4m · no receiver (no OTLP receiver is running in this afoot watch process) · flushes every 60s");
   });
 
   it("a zero flush interval is 'flushes immediately'", () => {
@@ -187,7 +187,7 @@ describe("per-process rows", () => {
             cwd: "/Users/dev/oss/codecarbon",
             state: "not_configured",
             detail: "/Users/dev/oss/codecarbon/.codex/config.toml has no telemetry configuration",
-            action: "af setup --agents codex --project /Users/dev/oss/codecarbon",
+            action: "afoot setup --agents codex --project /Users/dev/oss/codecarbon",
           }),
         ],
       }),
@@ -199,7 +199,7 @@ describe("per-process rows", () => {
         mark: "○",
         label: "not configured",
         note: "~/oss/codecarbon/.codex/config.toml has no telemetry configuration",
-        action: "af setup --agents codex --project /Users/dev/oss/codecarbon",
+        action: "afoot setup --agents codex --project /Users/dev/oss/codecarbon",
       },
     ]);
     expect(r.note, "the process row says it; the agent row does not repeat it").toBeNull();

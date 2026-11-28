@@ -5,7 +5,7 @@ and opens the local debug console.
 
 ## Before you start
 
-No release has been published yet, so `af` is built from a source checkout.
+No release has been published yet, so `afoot` is built from a source checkout.
 You need:
 
 - `git`;
@@ -26,14 +26,14 @@ You need:
     ./install.sh --yes
     ```
 
-    `af` is installed to `~/.local/bin`. If the installer says that directory
+    `afoot` is installed to `~/.local/bin`. If the installer says that directory
     is not on your `PATH`, add it, then open a new terminal:
 
     ```sh
     echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc   # or ~/.bashrc
     ```
 
-    The installer builds `af`, provisions the managed CodeCarbon and EcoLogits
+    The installer builds `afoot`, provisions the managed CodeCarbon and EcoLogits
     runtime, starts the per-user receiver, and configures detected Claude Code
     and Codex installations.
 
@@ -45,21 +45,21 @@ You need:
     .\install.ps1 -Yes
     ```
 
-    The installer adds `af` to your user `PATH` (open a new terminal) and
+    The installer adds `afoot` to your user `PATH` (open a new terminal) and
     registers a scheduled task that starts the receiver when you log on. If
-    the task cannot be registered, run `af watch` in a PowerShell window you
-    keep open, then `af setup --yes` in another.
+    the task cannot be registered, run `afoot watch` in a PowerShell window you
+    keep open, then `afoot setup --yes` in another.
 
 ## 2. Verify the receiver
 
 ```sh
-af setup --check
-af doctor
+afoot setup --check
+afoot doctor
 ```
 
-`af doctor` checks the receiver, the managed CodeCarbon/EcoLogits runtime, and
+`afoot doctor` checks the receiver, the managed CodeCarbon/EcoLogits runtime, and
 whether running agents predate their telemetry configuration, and says how to
-fix each. `af service status` also checks the installed per-user service.
+fix each. `afoot service status` also checks the installed per-user service.
 
 To remove everything later, see [Uninstall](../how-to/uninstall.md).
 
@@ -71,19 +71,19 @@ usage facts and action spans while the receiver is running.
 ## 4. Inspect the result
 
 ```sh
-af report
+afoot report
 ```
 
 For a live diagnostic view:
 
-- with a macOS/Linux background receiver, run `af console`: it attaches to
+- with a macOS/Linux background receiver, run `afoot console`: it attaches to
   the receiver that is already running and stops when you press Ctrl-C;
-- with a foreground receiver, start it as `af watch --debug` instead.
+- with a foreground receiver, start it as `afoot watch --debug` instead.
 
 Open `http://127.0.0.1:9414/` in a browser. See
 [Open the debug console](../how-to/debug-console.md).
 
-For totals over a day, a week or a month as JSON, run `af summary`.
+For totals over a day, a week or a month as JSON, run `afoot summary`.
 
 ## Next steps
 

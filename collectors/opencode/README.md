@@ -1,13 +1,13 @@
 # OpenCode collector
 
-OpenCode collection is part of the default `af` build; `af setup` installs
+OpenCode collection is part of the default `afoot` build; `afoot setup` installs
 the plugin below. The user guide is
 [`docs/how-to/opencode.md`](../../docs/how-to/opencode.md). The live test procedure is in
 [`docs/contributing/testing-live.md`](../../docs/contributing/testing-live.md).
 
 There are two collectors:
 
-- **The plugin** (`af-plugin.ts`, temporary), which `af setup` installs as
+- **The plugin** (`afoot-plugin.ts`, temporary), which `afoot setup` installs as
   `agentic-footprint.ts` in OpenCode's global plugin directory
   (`$XDG_CONFIG_HOME/opencode/plugin/`, default `~/.config/opencode/plugin/`).
   It turns OpenCode's bus events into facts: `session.created` →
@@ -16,15 +16,15 @@ There are two collectors:
   one `action_span`. It reads no prompts, text, tool inputs, outputs or
   error messages. Checked live on OpenCode 1.19.5 (`opencode run`). A model
   call that fails before its step finishes is not counted. Tests:
-  `node --test collectors/opencode/af-plugin.test.ts`.
-- **`af collect opencode`** (below), which follows OpenCode's durable
+  `node --test collectors/opencode/afoot-plugin.test.ts`.
+- **`afoot collect opencode`** (below), which follows OpenCode's durable
   per-session event stream. Released OpenCode (1.19.5) only writes that
   stream for sessions created through `/api/session`, not for the TUI's or
   `opencode run`'s sessions, so the plugin is what collects in practice.
 
-`af collect opencode` subscribes to OpenCode's durable per-session SSE route
+`afoot collect opencode` subscribes to OpenCode's durable per-session SSE route
 and appends raw Contract #1 facts to
-`$AF_STATE_DIR/spool/opencode.<session-id>.jsonl`.
+`$AFOOT_STATE_DIR/spool/opencode.<session-id>.jsonl`.
 
 The collector treats these boundaries as authoritative:
 
@@ -35,15 +35,15 @@ The collector treats these boundaries as authoritative:
 ## Live collection
 
 ```sh
-af collect opencode \
+afoot collect opencode \
   --url http://127.0.0.1:4096 \
   --session-id ses_... \
   --directory "$PWD" \
-  --pid "$(cat /tmp/af-opencode-server.pid)"
+  --pid "$(cat /tmp/afoot-opencode-server.pid)"
 ```
 
 The native Rust collector persists an atomic cursor under
-`$AF_STATE_DIR/cursors/opencode/`, keyed by the canonical server URL and
+`$AFOOT_STATE_DIR/cursors/opencode/`, keyed by the canonical server URL and
 session ID. The cursor contains both the exclusive durable sequence and any
 unmatched step/tool/shell starts needed to settle events after a restart.
 Live mode reconnects indefinitely with bounded exponential backoff and jitter.
@@ -64,7 +64,7 @@ instead risk permanent fact loss.
 ## Offline fixtures
 
 ```sh
-AF_STATE_DIR="$(mktemp -d)" af collect opencode \
+AFOOT_STATE_DIR="$(mktemp -d)" afoot collect opencode \
   --session-id ses_fixture \
   --input collectors/opencode/test-data/session.sse \
   --pid 4242 \

@@ -1,8 +1,8 @@
 # Release process
 
 Releases are produced only from tags matching `v*.*.*`. No release has been
-published yet; until the first one, af is installed from a source checkout
-and `af self update` has nothing to install.
+published yet; until the first one, afoot is installed from a source checkout
+and `afoot self update` has nothing to install.
 
 ## Maintainer checklist
 
@@ -28,7 +28,7 @@ and `af self update` has nothing to install.
   write the time of the build into it.
 - Unix release archives use sorted entries, fixed ownership, fixed permissions,
   and `SOURCE_DATE_EPOCH` as their timestamp. Windows publishes the reproducible
-  `af-x86_64-pc-windows-msvc.exe` binary directly.
+  `afoot-x86_64-pc-windows-msvc.exe` binary directly.
 - Checksums, keyless signatures, and GitHub provenance are attached to the
   release.
 
@@ -45,7 +45,7 @@ outputs across infrastructures.
   and `attestations: write`.
 - Each archive, binary, and `SHA256SUMS` gets a Sigstore bundle signed with
   the workflow's GitHub OIDC identity, plus a GitHub build-provenance
-  attestation. `af self update` verifies the bundle before installing; see
+  attestation. `afoot self update` verifies the bundle before installing; see
   [Verify a release](../how-to/verify-release.md).
 - Dependencies come from releases at least seven days old, and CI checks the
   Rust, console, and Python locks for advisories; see the

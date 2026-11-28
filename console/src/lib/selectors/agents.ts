@@ -3,7 +3,7 @@
 // (`GET /debug/status`). Pure module: no Svelte imports, no `Date.now()` —
 // `nowMs` arrives as an argument from `uiStore.nowMs`.
 //
-// The state itself is decided by the watcher (crates/af-cli/src/cmd/
+// The state itself is decided by the watcher (crates/afoot-cli/src/cmd/
 // agents.rs); nothing here second-guesses it. What this module adds is
 // wording, and recency: `receiving` is sticky server-side for the watcher's
 // lifetime, so "3s ago" versus "idle 12m" is derived here from

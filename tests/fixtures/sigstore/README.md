@@ -1,6 +1,6 @@
 # Sigstore fixture
 
-A real, publicly signed artifact for `af self update`'s signature tests:
+A real, publicly signed artifact for `afoot self update`'s signature tests:
 `fulcio_checksums.txt` and its keyless bundle from the
 [sigstore/fulcio v1.9.0 release](https://github.com/sigstore/fulcio/releases/tag/v1.9.0)
 (Apache-2.0), saved here as `fulcio_checksums.txt.sigstore.json` (published as
