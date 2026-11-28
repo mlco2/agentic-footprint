@@ -103,9 +103,11 @@ fn session_join(state_dir: Option<&Path>, input: &str) -> Option<Value> {
 ///   absence means the local gwp (which needs the zone's emission factor)
 ///   or some estimate is missing; the remote figure is then the honest
 ///   best-known number rather than a local-only one dressed up as a total.
-/// * **energy** — `combined_total`, else the local measurement, else the
-///   remote estimate. Unlike gwp, local energy needs no methodology beyond
-///   the sampler, so it is a real number on its own.
+/// * **energy** — the same order: `combined_total`, else the remote
+///   estimate, else the local measurement. Remote inference is most of a
+///   session's energy, so without a combined total the local share alone
+///   would understate it many times over; it is shown only when nothing
+///   remote was estimated.
 /// * **water / adpe / pe** — remote only. Nothing local measures them.
 ///
 /// Anything unavailable is `0`, which the bar renders as `0` rather than as
@@ -119,8 +121,8 @@ fn render(join: &Value) -> String {
         .or_else(|| mean(&remote["gwp"]))
         .unwrap_or(0.0);
     let energy = mean(&combined["energy"])
-        .or_else(|| mean(&local["energy"]))
         .or_else(|| mean(&remote["energy"]))
+        .or_else(|| mean(&local["energy"]))
         .unwrap_or(0.0);
     let water = mean(&remote["water"]).unwrap_or(0.0);
     let adpe = mean(&remote["adpe"]).unwrap_or(0.0);
@@ -183,15 +185,30 @@ mod tests {
     }
 
     #[test]
-    fn falls_back_to_remote_gwp_and_local_energy_when_no_combined_total() {
+    fn falls_back_to_remote_gwp_and_energy_when_no_combined_total() {
+        // A session with some calls of a model the estimator does not know
+        // has no combined total. Its remote inference energy dwarfs the
+        // local measurement, so energy follows gwp to the remote estimate:
+        // showing the local share alone would understate it many times.
         let join = json!({
             "combined_total": {},
             "local_measured": {"energy": range(7.0, 7.0)},
-            "remote_estimated": {"impacts": {"gwp": range(1.0, 2.0)}},
+            "remote_estimated": {"impacts": {
+                "gwp": range(1.0, 2.0),
+                "energy": range(30.0, 50.0),
+            }},
         });
-        // gwp from remote, energy from the local measurement, the
-        // remote-only criteria absent → 0.
-        assert_eq!(render(&join), "1.5 0 7 0 0");
+        assert_eq!(render(&join), "1.5 0 40 0 0");
+    }
+
+    #[test]
+    fn falls_back_to_local_energy_when_nothing_remote_was_estimated() {
+        let join = json!({
+            "combined_total": {},
+            "local_measured": {"energy": range(7.0, 7.0)},
+            "remote_estimated": {"impacts": {}},
+        });
+        assert_eq!(render(&join), "0 0 7 0 0");
     }
 
     #[test]
