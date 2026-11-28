@@ -19,12 +19,27 @@
     {
       "agent": "claude-code",
       "provider": "anthropic",
+      "model": "claude-fable-5-2"
+    },
+    {
+      "agent": "claude-code",
+      "provider": "anthropic",
       "model": "claude-haiku-4-5-20251001"
+    },
+    {
+      "agent": "claude-code",
+      "provider": "anthropic",
+      "model": "claude-haiku-5-5"
     },
     {
       "agent": "codex",
       "provider": "openai",
       "model": "gpt-6-astra"
+    },
+    {
+      "agent": "codex",
+      "provider": "openai",
+      "model": "gpt-6.2-astra"
     },
     {
       "agent": "codex",

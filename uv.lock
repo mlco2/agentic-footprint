@@ -30,7 +30,7 @@ test = [
 runtime = [
     { name = "certifi", specifier = ">=2026.10.18" },
     { name = "codecarbon", specifier = "==3.3.1" },
-    { name = "ecologits", specifier = "==0.11.2" },
+    { name = "ecologits", specifier = "==0.12.0" },
     { name = "joserfc", specifier = ">=1.7.6" },
     { name = "psutil", specifier = ">=6" },
 ]
@@ -250,16 +250,16 @@ wheels = [
 
 [[package]]
 name = "ecologits"
-version = "0.11.2"
+version = "0.12.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "packaging" },
     { name = "pydantic" },
     { name = "wrapt" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/f5/45/c7cd0930cc93dbf3a9f2f76fe8dd4c8b7e7662c6b76d6d25f4d7c4a37e9d/ecologits-0.11.2.tar.gz", hash = "sha256:518969a1ec84d4336168645416033617bc515f061d7c13b9b9c53add9f4f0a5c", size = 1083066, upload-time = "2026-09-29T19:36:49.661Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/db/29/146ca6a454dcdeb4e3e4eb757f7546d88ef83686e279c3b0f37e70e756ed/ecologits-0.12.0.tar.gz", hash = "sha256:3b3babb4650b19d93413628b29ccc5cae6d8f9b7a0bf5ea0097e93954c058999", size = 1135971, upload-time = "2026-11-26T19:15:07.979Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/d9/6a/47f53b723a9eaddb8d416cdd614f61fbe65d800b5c9e7c9c6c84e9d84463/ecologits-0.11.2-py3-none-any.whl", hash = "sha256:cb495ab27f57419e9271133f3414c10468a23b741bf22040a6923bf64aac6b92", size = 57562, upload-time = "2026-09-29T19:36:48.369Z" },
+    { url = "https://files.pythonhosted.org/packages/e3/1f/6e6497a4a71a415349403143883b12651886964f119255cc5c6121ff30e2/ecologits-0.12.0-py3-none-any.whl", hash = "sha256:b6304830de76ed2e4f09f7949b9cdeebd4eaf64def467fa6a3c9c6a9d27444b7", size = 66663, upload-time = "2026-11-26T19:15:06.725Z" },
 ]
 
 [[package]]

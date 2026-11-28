@@ -12,7 +12,7 @@
 version = "3.12"
 
 [packages]
-ecologits = "0.11.2"
+ecologits = "0.12.0"
 codecarbon = "3.3.1"
 psutil = ">=6"
 

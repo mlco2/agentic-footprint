@@ -727,7 +727,7 @@ mod tests {
     fn manifest_parses_expected_pins() {
         let m = manifest();
         assert_eq!(m.python.version, "3.12");
-        assert_eq!(m.packages.ecologits, "0.11.2");
+        assert_eq!(m.packages.ecologits, "0.12.0");
         assert_eq!(m.packages.codecarbon, "3.3.1");
         assert_eq!(m.packages.psutil, ">=6");
     }
