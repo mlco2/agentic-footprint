@@ -1,12 +1,11 @@
 # Agentic Footprint
 
-> **Alpha software.** Interfaces, schemas and results may change between
+> **Beta software.** Interfaces, schemas and results may change between
 > releases.
 
-Agentic Footprint (`afoot`) measures and attributes the environmental impact of
-coding agents. It combines measured local energy, process-level attribution
-of each agent action, and modeled impacts of remote inference, and keeps
-uncertainty and coverage gaps explicit instead of hiding them.
+Agentic Footprint (`afoot`) measures local machine energy and estimates remote
+inference impacts for coding-agent sessions, separating measured local energy
+from modeled remote ranges and reporting unestimated calls alongside totals.
 
 ## What it measures
 
@@ -17,19 +16,20 @@ uncertainty and coverage gaps explicit instead of hiding them.
 - **Remote inference, modeled.** Token counts per model call are turned into
   energy and emission estimates with EcoLogits.
 
-Measured and modeled numbers are kept apart, and gaps in coverage are
-reported rather than filled in. See
-[energy attribution](docs/explanation/energy-attribution.md) and the
-[known limitations](docs/reference/known-limitations.md).
+Local measurements and remote estimates are reported in separate fields. Calls
+without an estimate remain counted in token totals and are listed under
+`models_not_estimated`. See
+[energy attribution](docs/contributing/architecture/energy-attribution.md) and
+the [known limitations](docs/reference/known-limitations.md).
 
 ## Supported agents
 
 | Agent | How `afoot` collects | Guide |
 |---|---|---|
-| Claude Code | Native OpenTelemetry logs, plus hooks for actions | [Claude Code](docs/how-to/claude-code.md) |
-| Codex | Native OpenTelemetry logs | [Codex](docs/how-to/codex.md) |
-| OpenCode | A plugin `afoot setup` installs | [OpenCode](docs/how-to/opencode.md) |
-| Pi | An extension `afoot setup` installs | [Pi](docs/how-to/pi.md) |
+| Claude Code | Native OpenTelemetry logs, plus hooks for actions | [Claude Code](docs/agents/claude-code.md) |
+| Codex | Native OpenTelemetry logs | [Codex](docs/agents/codex.md) |
+| OpenCode | A plugin `afoot setup` installs | [OpenCode](docs/agents/opencode.md) |
+| Pi | An extension `afoot setup` installs | [Pi](docs/agents/pi.md) |
 
 `afoot setup` detects which of these are installed and configures them.
 
@@ -42,8 +42,8 @@ Platforms: macOS (Apple silicon and Intel), Linux (x86-64), Windows 11
 
 Binaries for every platform, with checksums and Sigstore signatures, are on
 the [releases page](https://github.com/mlco2/agentic-footprint/releases).
-[Verify a release](docs/how-to/verify-release.md) explains how to check
-one, and [Install and configure](docs/how-to/installation.md#curl-ready-inputs)
+[Verify a release](docs/guides/verify-release.md) explains how to check
+one, and [Install and configure](docs/get-started/installation.md#curl-ready-inputs)
 how to install a downloaded binary with the installer.
 
 ### From source
@@ -65,9 +65,9 @@ The installer builds `afoot` and puts it in `~/.local/bin` on macOS and Linux
 adds it to the user `PATH` on Windows. It then provisions the managed
 CodeCarbon/EcoLogits runtime and runs the setup wizard, which checks the
 receiver first and can install it as a per-user background service. The
-[quickstart](docs/tutorials/quickstart.md) lists what a source build needs.
+[quickstart](docs/get-started/quickstart.md) lists what a source build needs.
 
-To remove everything, see [Uninstall](docs/how-to/uninstall.md).
+To remove everything, see [Uninstall](docs/get-started/uninstall.md).
 
 ## Usage
 
@@ -82,7 +82,7 @@ afoot console                # debug console of the running receiver (macOS, Lin
 ```
 
 `afoot summary` and `afoot status` are read-only and meant for scripts; see
-[use afoot from another program](docs/how-to/integrate.md) and the
+[use afoot from another program](docs/guides/integrate.md) and the
 [CLI reference](docs/reference/cli.md).
 
 ## How it works
@@ -98,8 +98,8 @@ afoot console                # debug console of the running receiver (macOS, Lin
    read the aggregated results.
 
 Facts follow versioned [event schemas](schemas/v0.1/) (Contract #1). More in
-the [architecture overview](docs/explanation/rebuild-architecture.md) and
-[crate boundaries](docs/contributing/api-boundaries.md).
+the [architecture overview](docs/contributing/architecture/rebuild-architecture.md) and
+[crate boundaries](docs/contributing/architecture/api-boundaries.md).
 
 ## Documentation
 

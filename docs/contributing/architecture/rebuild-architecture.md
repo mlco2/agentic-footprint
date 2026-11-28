@@ -58,14 +58,14 @@ flowchart LR
 ```
 
 There are two transports. File-based collectors (the Claude Code hook, the
-CodeCarbon sampler, the OpenCode collectors) append JSONL to
-`$AFOOT_STATE_DIR/spool/<collector>.<session>.jsonl`. OTLP telemetry (Claude
-Code and Codex token usage and LLM calls) is posted to the receiver inside
-`afoot watch`, which normalizes it and writes it straight into `raw_events`; it
-never touches the spool. Within `afoot watch` the loop owns the one database
-connection, so the receiver hands its facts to that loop through a bounded
-queue rather than writing anything itself; when the queue is full it answers
-with a retryable `503`.
+CodeCarbon sampler, the OpenCode plugin/SSE collector, and the Pi extension)
+append JSONL to `$AFOOT_STATE_DIR/spool/<collector>.<session>.jsonl`. OTLP
+telemetry (Claude Code and Codex token usage and LLM calls) is posted to the
+receiver inside `afoot watch`, which normalizes it and writes it straight into
+`raw_events`; it never touches the spool. Within `afoot watch` the loop owns the
+one database connection, so the receiver hands its facts to that loop through a
+bounded queue rather than writing anything itself; when the queue is full it
+answers with a retryable `503`.
 
 ## The three operations people often confuse
 
@@ -281,8 +281,8 @@ until a console attaches:
 
 `afoot watch --debug` keeps the earlier behaviour for development: a TCP debug
 port, and diagnostics built for the life of the process. The routes and
-frames are in the [debug API reference](../reference/debug-api.md), and
-[Open the debug console](../how-to/debug-console.md) shows how to use it.
+frames are in the [debug API reference](../../reference/debug-api.md), and
+[Open the debug console](../../guides/debug-console.md) shows how to use it.
 
 ## Why keep raw and derived data separate?
 
@@ -292,11 +292,11 @@ An EcoLogits version, model dataset, electricity factor, or attribution policy
 can change. Keeping raw observations allows the project to recalculate history
 instead of permanently freezing the first answer it produced.
 
-### Honest degradation
+### Partial availability
 
-Local measurement does not depend on the remote-impact estimator. If Python or
-EcoLogits is unavailable, joins can still report local energy while remote
-calls remain explicitly `pending`.
+Local energy measurement runs independently of EcoLogits. If Python or
+EcoLogits is unavailable, local energy is still recorded while remote
+calls remain `pending`.
 
 ### Auditability
 
@@ -305,7 +305,7 @@ samples, and energy windows that produced it.
 
 ### Multiple presentation layers
 
-The statusline, CLI report, debug console, and a future remote exporter can all
+The statusline, CLI report, debug console, and external consumers (`afoot summary`)
 read the same stored derived view instead of implementing environmental
 methodology independently.
 
@@ -313,7 +313,7 @@ methodology independently.
 
 | Data | Deleted by normal report/watch? | Deleted by replay? | Reconstructable from raw facts alone? |
 |---|---:|---:|---:|
-| JSONL spool | No | No | Original transport for hooks, the sampler, and OpenCode (OTLP telemetry is not spooled) |
+| JSONL spool | No | No | Original transport for hooks, the sampler, OpenCode, and Pi (OTLP telemetry is not spooled) |
 | `raw_events` | No | No | Source of truth |
 | `ingest_offsets` | No | No | Operational cursor, not an impact result |
 | `rejects` | Trimmed to the newest 1,000 | No | No: metadata only, the rejected content is never kept |
@@ -323,19 +323,3 @@ methodology independently.
 The final row explains the replay safety check: deleting estimates without a
 working estimator would remove information the Rust core cannot regenerate by
 itself. Replay therefore refuses before deletion unless `--force` is explicit.
-
-## A useful mental model
-
-Think of the system as a small event-sourced application:
-
-- the spool is the transport log for file-based collectors, and the OTLP
-  receiver is a second, in-memory transport into the same ledger;
-- `raw_events` is the durable fact ledger;
-- `impact_estimates` is a methodology-dependent enrichment cache;
-- `impact_joins` is a materialized read model;
-- rebuild is materialized-view refresh;
-- replay is dropping and regenerating the methodology-dependent views.
-
-That model also suggests the main performance direction: preserve the immutable
-fact ledger, but track which sessions and derived units are dirty so ordinary
-watch passes refresh only affected materialized views.

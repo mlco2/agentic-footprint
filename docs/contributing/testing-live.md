@@ -81,7 +81,7 @@ Each test builds its own world:
 - `smoke_fresh_session_reaches_debug_console` — `--no-sidecars`, no Python:
   hook spans + OTLP token usage must reach `/debug/health`,
   `/debug/snapshot`, `/debug/session` and `/debug/report`, with zero
-  rejects. Estimates staying `pending` is the documented honest degradation.
+  rejects. Estimates remain `pending` when sidecars are disabled.
 - `energy_sampling_attributes_local_compute` — full sidecars; needs
   `afoot python setup` (the harness symlinks the real managed venv into the
   temp state dir). Asserts `energy_sample`s and allocation traces exist.
@@ -91,7 +91,7 @@ Each test builds its own world:
 - `durable_sse_reaches_debug_console` — starts an isolated OpenCode server,
   creates a session through its HTTP API, subscribes with the durable SSE
   collector, and verifies an `llm_call` reaches the debug snapshot. Provider
-  failure is acceptable when it is represented honestly as an errored call.
+  failure is acceptable when recorded with `status: error`.
 - Requires either an installed `opencode` binary or
   `AFOOT_LIVE_OPENCODE_REPO=/absolute/path/to/opencode` for a source checkout.
 

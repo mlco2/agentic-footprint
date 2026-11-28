@@ -4,8 +4,7 @@
 single line, for other programs to read. Both are read-only. Diagnostics, if
 any, go to stderr.
 
-The examples on this page are hand-written to show the shape. They are not
-output from a real machine.
+Example payloads below use illustrative values.
 
 ## Versioning
 
@@ -22,8 +21,9 @@ numbers are independent.
 `afoot_version` is the version of the `afoot` binary that produced the document. It
 is informative and is not the compatibility signal.
 
-`afoot summary` has a JSON Schema, `schemas/summary/v1.schema.json`. `afoot status`
-has no schema file yet; this page is its description.
+`afoot summary` has a JSON Schema,
+[`schemas/summary/v1.schema.json`](https://github.com/mlco2/agentic-footprint/blob/main/schemas/summary/v1.schema.json).
+`afoot status` has no schema file yet; this page is its description.
 
 All timestamps are RFC 3339 in UTC with milliseconds, for example
 `2026-03-12T16:41:07.512Z`.
@@ -46,7 +46,7 @@ Options and exit status are in the [CLI reference](cli.md#afoot-summary).
 | `period` | object | What the document covers; see below. |
 | `collector` | object | Whether a collector is running, and its last stored event. |
 | `totals` | figures | Every call of the period. |
-| `by_agent` | array of figures | One element per agent, largest token total first. Each adds `agent` (`claude-code`, `codex`, or `other` for a collector that belongs to no supported agent) and `name` (display name). |
+| `by_agent` | array of figures | One element per agent, largest token total first. Each adds `agent` (`claude-code`, `codex`, `opencode`, `pi`, or `other` for a collector that belongs to no supported agent) and `name` (display name). |
 | `by_model` | array of figures | One element per agent and model, largest token total first. Each adds `agent` and `model`. `model` is the model the provider reported serving, or the requested model when that is not known. |
 | `models_not_estimated` | array | Models with calls that have no impact figure for a lasting reason; see below. |
 | `by_day` | array of figures | One element per local day of the period, oldest first, including days with no call. Each adds `date` (`YYYY-MM-DD`). |
@@ -61,9 +61,8 @@ Options and exit status are in the [CLI reference](cli.md#afoot-summary).
 | `utc_offset_minutes` | integer | Minutes east of UTC that days are cut in, for the whole period. |
 
 A call belongs to the period when its timestamp is between `from` and `to`.
-Days are cut with one offset. Across a daylight-saving change, the days on
-the other side of the change are cut an hour off local midnight; see
-[known limitations](known-limitations.md#daily-totals-use-one-utc-offset).
+Days are cut with one offset; across a daylight-saving change, days on the
+other side of the change are cut an hour off local midnight.
 
 ### `collector`
 
@@ -128,7 +127,7 @@ impacts are in no `remote` sum.
 
 ### Example
 
-A `today` summary with one unknown model. The values are invented.
+A `today` summary with one unknown model:
 
 ```json
 {
@@ -327,7 +326,7 @@ It takes no options and exits 0.
 | `storage.spool_bytes` | integer | Size of the files in the spool folder (what hooks wrote), in bytes. |
 | `storage.spool_files` | integer | How many files the spool folder holds. |
 | `storage.logs_bytes` | integer | Size of the service's log files, in bytes. |
-| `agents` | array | One row per supported agent (`claude-code`, `codex`), installed or not. Empty when the home directory cannot be determined. |
+| `agents` | array | One row per supported agent (`claude-code`, `codex`, `opencode`, `pi`), installed or not. Empty when the home directory cannot be determined. |
 
 `receiver.reachable` and `collector.running` answer different questions. An
 `afoot watch` started with `--no-otlp`, or one whose receiver port was taken, is
@@ -337,7 +336,7 @@ a running collector with no reachable receiver.
 
 | Field | Type | Meaning |
 |---|---|---|
-| `id` | string | `claude-code` or `codex`. |
+| `id` | string | `claude-code`, `codex`, `opencode`, or `pi`. |
 | `name` | string | Display name. |
 | `state` | string | See [agent states](#agent-states). |
 | `detail` | string or null | What is wrong with the user-scope configuration file, when `state` was read from it. |
@@ -391,7 +390,7 @@ file and `PATH`.
 ### Example
 
 A Linux machine with the background service installed, Claude Code configured
-and running, and Codex not installed. The values are invented.
+and running, and Codex not installed:
 
 ```json
 {

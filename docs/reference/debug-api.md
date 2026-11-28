@@ -17,7 +17,7 @@ a Unix socket in the state directory that only its owner can read and write
 (mode `0600`, inside a `0700` directory). The background service listens on
 no debug TCP port. `afoot console` binds a loopback port and relays each
 connection to the socket, byte for byte, so a browser can reach it; see
-[Open the debug console](../how-to/debug-console.md).
+[Open the debug console](../guides/debug-console.md).
 
 A socket file left by a collector that died is replaced at the next start. A
 socket that a running collector answers on is left alone. When the socket

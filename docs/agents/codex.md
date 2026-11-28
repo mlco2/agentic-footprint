@@ -24,11 +24,12 @@ afoot setup
 ```
 
 The wizard verifies that an `afoot watch` receiver is healthy before inspecting
-agents. On macOS/Linux it can install a per-user service; on Windows start
-`afoot watch` in a persistent PowerShell window first. It then detects Codex and
-Claude Code, configures Codex OTLP automatically when safe, and installs or
-merges Claude Code collection. See
-[`installation.md`](installation.md) for automation flags.
+agents and can install a per-user background service (launchd on macOS, systemd
+on Linux, Task Scheduler on Windows; if Task Scheduler is restricted by policy,
+start `afoot watch` in a PowerShell window first). It then detects Codex, Claude
+Code, OpenCode, and Pi, configures Codex OTLP automatically when safe, and
+installs the other detected collectors. See
+[Install and configure](../get-started/installation.md) for automation flags.
 
 Confirm receiver health:
 
@@ -77,7 +78,7 @@ The installed launchd/systemd service runs without `--debug`. On macOS inspect
 `$AFOOT_STATE_DIR/logs/`; on Linux use
 `journalctl --user -u agentic-footprint-watch.service`. Run
 `afoot console` to open the debug UI on the running service (see
-[Open the debug console](debug-console.md)).
+[Open the debug console](../guides/debug-console.md)).
 
 ## 2. Configure Codex
 

@@ -2,7 +2,7 @@
 
 OpenCode collection is part of the default `afoot` build; `afoot setup` installs
 the plugin below. The user guide is
-[`docs/how-to/opencode.md`](../../docs/how-to/opencode.md). The live test procedure is in
+[`docs/agents/opencode.md`](../../docs/agents/opencode.md). The live test procedure is in
 [`docs/contributing/testing-live.md`](../../docs/contributing/testing-live.md).
 
 There are two collectors:
@@ -81,4 +81,4 @@ collectors/opencode/test_collector.sh
 ```
 
 Collector degradation and control-plane failures follow the shared
-[`error-handling policy`](../../docs/contributing/error-handling.md).
+[`error-handling policy`](../../docs/contributing/architecture/error-handling.md).

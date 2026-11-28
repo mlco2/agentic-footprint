@@ -44,7 +44,7 @@ attach:
 Numbers can be up to a minute old, because `afoot watch` writes to the store
 once a minute. When you close the console, the collector discards what it had
 built for it. See
-[why diagnostics are on demand](../explanation/rebuild-architecture.md#why-diagnostics-are-on-demand).
+[why diagnostics are on demand](../contributing/architecture/rebuild-architecture.md#why-diagnostics-are-on-demand).
 
 ## Use another port
 

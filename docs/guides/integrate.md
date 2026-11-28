@@ -70,18 +70,18 @@ that often.
 request to the local receiver and runs the managed Python runtime's import
 check. It can take a few seconds; do not run it on a thread that must stay responsive.
 
-## Read the result honestly
+## Interpreting results
 
 - Impacts in `afoot summary` cover `estimated_calls` only. When
-  `unestimated_calls` is not zero the `remote` ranges are a lower bound; show
-  `models_not_estimated` so a reader knows what is left out.
-- Each impact is a range (`min`, `max`) from a model of remote inference. It
-  is not a measurement. Read `unit` from the document.
-- In `afoot status` an agent is `receiving` when the store has an event from it
-  in the last 24 hours; `last_event_at` says when the latest one was.
-- `collector.running` is `null` on Windows.
-- When `python.ready` is `false` in `afoot status`, tokens are recorded but no
-  impact is estimated: every call stays `pending`. Show `python.fix`.
+  `unestimated_calls` is not zero, `remote` ranges are a lower bound; display
+  `models_not_estimated` alongside them so users see which models are excluded.
+- Each impact is a modeled range (`min`, `max`) for remote inference, not a
+  local measurement. Read `unit` from the payload rather than hardcoding it.
+- In `afoot status`, an agent is `receiving` when the store has an event from it
+  in the last 24 hours; `last_event_at` gives the latest timestamp.
+- `collector.running` is `null` on Windows (no Unix console socket).
+- When `python.ready` is `false` in `afoot status`, tokens are still recorded
+  but impacts stay `pending`. Show `python.fix` to the user.
 
 See [known limitations](../reference/known-limitations.md).
 
@@ -95,12 +95,13 @@ empty directory.
 
 ## Commands that change the machine
 
-Running these is a decision for the user. Ask first.
+!!! warning "Require explicit user consent"
+    The commands below modify files, install services, or download packages. Run them only in response to an explicit user action.
 
 | Command | What it changes |
 |---|---|
-| `afoot setup` | Edits agent configuration files (Claude Code settings, Codex configuration), after making a timestamped backup of each file it changes; installs or registers the Claude Code hook; on macOS and Linux can install and start the background service. Interactive unless `--yes` is passed. |
-| `afoot service install` | Writes a per-user launchd or systemd service definition and starts `afoot watch` under it. macOS and Linux only. |
+| `afoot setup` | Edits agent configuration files (Claude Code settings, Codex configuration) and installs the OpenCode plugin and Pi extension, backing up each existing file it changes; installs or registers the Claude Code hook; can install and start the per-user background service. Interactive unless `--yes` is passed. |
+| `afoot service install` | Writes a per-user service definition (launchd on macOS, systemd user session on Linux, Task Scheduler logon task on Windows) and starts `afoot watch` under it. |
 | `afoot service start` | Starts or restarts that service. |
 | `afoot self update` | Replaces the `afoot` binary, refreshes the managed Python runtime, and restarts the background receiver. Works only for an afoot installed from a release binary. |
 | `afoot report` | Ingests pending facts and writes derived results to the store before printing. |
@@ -125,6 +126,9 @@ attention. For a program, `afoot status` carries the same kind of findings as
 data.
 
 ## Do not read the store directly
+
+!!! warning "Under active development"
+    The local store layout and programmatic export interfaces are still evolving and may change in upcoming releases. Rely on the versioned CLI outputs (`afoot summary`, `afoot status`) rather than coupling to internal files.
 
 The SQLite store (`state.db`), the spool and the other files in the state
 directory are internal. Their layout is not a contract and can change in any

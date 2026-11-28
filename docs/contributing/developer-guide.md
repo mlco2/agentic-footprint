@@ -38,7 +38,7 @@ deterministic Rust tests do not need agent credentials or network access.
 | `console/` | Debug console source and frontend tests |
 | `schemas/` | Versioned external event contracts |
 
-See [`api-boundaries.md`](api-boundaries.md) for dependency and public API
+See [`architecture/api-boundaries.md`](architecture/api-boundaries.md) for dependency and public API
 rules.
 
 ## Canonical commands
@@ -104,7 +104,7 @@ are manual and documented in [`testing-live.md`](testing-live.md).
 5. Add deterministic fixtures before a live test.
 6. Add one `afoot setup` adapter or setup guidance; do not create a standalone
    installer for one integration.
-7. Follow [`error-handling.md`](error-handling.md): collectors preserve the
+7. Follow [`architecture/error-handling.md`](architecture/error-handling.md): collectors preserve the
    agent session, while control-plane configuration/startup failures are fatal.
 8. Update the relevant user guide and this documentation index.
 

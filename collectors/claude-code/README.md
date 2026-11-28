@@ -3,7 +3,7 @@
 For an end-to-end installation and usage walkthrough—including building
 `afoot`, provisioning Python, configuring OTLP, running `afoot watch`, and adding
 the optional statusline—see
-[`docs/how-to/claude-code.md`](../../docs/how-to/claude-code.md).
+[`docs/agents/claude-code.md`](../../docs/agents/claude-code.md).
 
 `afoot-hook.sh` is a POSIX `sh` shim that turns Claude Code's six lifecycle
 hooks into Contract #1 events, appended to
@@ -155,7 +155,7 @@ assume a nonzero span duration.
 | `Stop` / `SessionEnd` | Closes every remaining open-span with `status: "unknown"` and deletes its file; a stray file that doesn't parse as JSON is counted, deleted, and skipped (nothing emitted for it) rather than crashing the sweep |
 
 Collector degradation and control-plane failures follow the shared
-[`error-handling policy`](../../docs/contributing/error-handling.md).
+[`error-handling policy`](../../docs/contributing/architecture/error-handling.md).
 
 ## Test fixtures (`test-data/`)
 
