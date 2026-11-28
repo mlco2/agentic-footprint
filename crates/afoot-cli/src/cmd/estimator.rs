@@ -5,9 +5,9 @@
 //! report, with the remote half honestly marked `pending` — so this module
 //! returns a *reason* rather than an error, for the caller to print.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
-use afoot_sidecar::{venv_python, Sidecar};
+use afoot_sidecar::{find_python, venv_python, Sidecar};
 
 use super::sidecar_script;
 
@@ -43,10 +43,20 @@ impl Estimator {
 /// estimator tests use, moved up to the process boundary.
 pub fn spawn(state_dir: &Path) -> Estimator {
     if let Ok(script) = std::env::var("AFOOT_ESTIMATOR_SCRIPT") {
-        let python = std::env::var("AFOOT_ESTIMATOR_PYTHON").unwrap_or_else(|_| "python3".into());
+        let python = match std::env::var("AFOOT_ESTIMATOR_PYTHON") {
+            Ok(path) => PathBuf::from(path),
+            Err(_) => match find_python() {
+                Some(path) => path,
+                None => {
+                    return Estimator::missing(
+                        "AFOOT_ESTIMATOR_SCRIPT needs a usable Python interpreter (install uv/Python or set AFOOT_ESTIMATOR_PYTHON)",
+                    );
+                }
+            },
+        };
         let raw_args = std::env::var("AFOOT_ESTIMATOR_ARGS").unwrap_or_default();
         let args: Vec<&str> = raw_args.split('\n').filter(|a| !a.is_empty()).collect();
-        return match Sidecar::spawn(Path::new(&python), &script, &args) {
+        return match Sidecar::spawn(&python, &script, &args) {
             Ok(sidecar) => Estimator {
                 sidecar: Some(sidecar),
                 note: None,

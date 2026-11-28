@@ -1,4 +1,4 @@
-# Exercises install.ps1 against a tempdir: fresh install, idempotent
+﻿# Exercises install.ps1 against a tempdir: fresh install, idempotent
 # re-run, upgrade, and uninstall — with stub binaries so no build or
 # network is involved. The PowerShell sibling of scripts/test-install.sh.
 #
@@ -11,6 +11,9 @@
 $ErrorActionPreference = 'Stop'
 $root = Join-Path ([System.IO.Path]::GetTempPath()) "afoot-install-test-$PID"
 New-Item -ItemType Directory -Force -Path $root | Out-Null
+# Save the real user PATH so the PATH-repair test below never clobbers it on
+# a developer machine (ephemeral CI runners hid this).
+$originalUserPath = [Environment]::GetEnvironmentVariable('Path', 'User')
 
 function Assert([bool]$Condition, [string]$Message) {
     if (-not $Condition) {
@@ -82,11 +85,14 @@ try {
 
     Write-Host 'test-install.ps1: all assertions passed'
 } finally {
-    # The test touched the real user PATH; make sure the tempdir entry is
-    # gone even when an assertion failed mid-way.
+    # Restore the exact pre-test user PATH even when an assertion failed
+    # mid-way (especially after clearing Path to test PATH repair).
     $binDir = Join-Path $root 'bin'
-    $parts = ([Environment]::GetEnvironmentVariable('Path', 'User') -split ';') |
-        Where-Object { $_ -and $_ -ne $binDir }
-    [Environment]::SetEnvironmentVariable('Path', ($parts -join ';'), 'User')
+    $restored = if ($null -ne $originalUserPath) {
+        (($originalUserPath -split ';') | Where-Object { $_ -and $_ -ne $binDir }) -join ';'
+    } else {
+        $null
+    }
+    [Environment]::SetEnvironmentVariable('Path', $restored, 'User')
     Remove-Item -Recurse -Force $root -ErrorAction SilentlyContinue
 }

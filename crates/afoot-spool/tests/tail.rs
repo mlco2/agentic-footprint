@@ -4,7 +4,7 @@ use std::io::Write;
 use std::path::PathBuf;
 
 use afoot_events::RejectReason;
-use afoot_spool::{scan, spool_file_from_path, tail, tail_at_most};
+use afoot_spool::{scan, tail, tail_at_most};
 
 mod common;
 use common::{event_id, spool_file, valid_line};
@@ -214,6 +214,8 @@ fn spool_file_name_and_parse_spool_filename_round_trip() {
 #[test]
 fn targeted_path_accepts_an_alias_of_the_same_spool_directory() {
     use std::os::unix::fs::symlink;
+
+    use afoot_spool::spool_file_from_path;
 
     let dir = tempfile::tempdir().unwrap();
     let spool = dir.path().join("spool");
