@@ -56,9 +56,10 @@ CLI configuration/startup operations fail fast and return non-zero for:
 Errors should add operation and path context before reaching `main`. The CLI
 adds the command prefix once; lower layers should not duplicate it.
 
-Resident processing degrades only where missing data is an honest state:
-missing estimators produce `pending`, unknown execution locations stay
-`unknown`, and missing provider correlation stays `unknown`.
+Resident processing continues with partial output only when missing data is
+explicitly represented in the schema: missing estimators produce `pending`,
+unknown execution locations stay `unknown`, and missing provider correlation
+stays `unknown`.
 
 ## Rejected data
 

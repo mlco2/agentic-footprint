@@ -5,16 +5,14 @@ and opens the local debug console.
 
 ## Before you start
 
-No release has been published yet, so `afoot` is built from a source checkout.
-You need:
+This tutorial builds `afoot` from a source checkout; to install a signed release
+binary instead, see [Install and configure](installation.md#curl-ready-inputs).
 
-- `git`;
-- Rust, through [rustup](https://rustup.rs) (the checkout pins its own
-  toolchain, which rustup downloads on the first build);
-- Node.js 22 with `npm`, to build the debug console (macOS and Linux);
-- [uv](https://docs.astral.sh/uv/getting-started/installation/), which builds
-  the Python runtime the impact estimates use and brings the right Python
-  with it. Without uv, a Python 3.12 with the `venv` module is used.
+!!! info "Prerequisites for building from source"
+    - `git`
+    - Rust, via [rustup](https://rustup.rs) (the repository pins its own toolchain, downloaded automatically on first build)
+    - Node.js 22 with `npm`, to build the debug console (`install.sh` runs this automatically on macOS and Linux; on Windows source builds, run `npm --prefix console ci && npm --prefix console run build` before `.\install.ps1` if you want the debug UI instead of the placeholder page)
+    - [uv](https://docs.astral.sh/uv/getting-started/installation/), which creates the managed Python runtime and fetches Python automatically (without `uv`, a system Python 3.12 with `venv` is used)
 
 ## 1. Install from a checkout
 
@@ -34,8 +32,8 @@ You need:
     ```
 
     The installer builds `afoot`, provisions the managed CodeCarbon and EcoLogits
-    runtime, starts the per-user receiver, and configures detected Claude Code
-    and Codex installations.
+    runtime, starts the per-user receiver, and configures detected Claude Code,
+    Codex, OpenCode, and Pi installations.
 
 === "Windows 11"
 
@@ -58,15 +56,16 @@ afoot doctor
 ```
 
 `afoot doctor` checks the receiver, the managed CodeCarbon/EcoLogits runtime, and
-whether running agents predate their telemetry configuration, and says how to
-fix each. `afoot service status` also checks the installed per-user service.
+whether running agents predate their telemetry configuration, and prints the
+fix for each issue. `afoot service status` checks the installed per-user service.
 
-To remove everything later, see [Uninstall](../how-to/uninstall.md).
+!!! tip "Removing `afoot` later"
+    See [Uninstall](uninstall.md) for per-platform removal steps and how to keep or delete recorded history.
 
 ## 3. Run an agent session
 
-Start a new Claude Code or Codex session after setup. Agentic Footprint records
-usage facts and action spans while the receiver is running.
+Start a new Claude Code, Codex, OpenCode, or Pi session after setup. Agentic
+Footprint records usage facts and action spans while the receiver is running.
 
 ## 4. Inspect the result
 
@@ -81,14 +80,13 @@ For a live diagnostic view:
 - with a foreground receiver, start it as `afoot watch --debug` instead.
 
 Open `http://127.0.0.1:9414/` in a browser. See
-[Open the debug console](../how-to/debug-console.md).
+[Open the debug console](../guides/debug-console.md).
 
 For totals over a day, a week or a month as JSON, run `afoot summary`.
 
 ## Next steps
 
-- [Install and configure](../how-to/installation.md)
-- [Claude Code setup](../how-to/claude-code.md)
-- [Codex setup](../how-to/codex.md)
+- [Install and configure](installation.md)
+- [Claude Code](../agents/claude-code.md) · [Codex](../agents/codex.md) · [OpenCode](../agents/opencode.md) · [Pi](../agents/pi.md)
 - [Known limitations](../reference/known-limitations.md)
-- [Understand energy attribution](../explanation/energy-attribution.md)
+- [Energy attribution](../contributing/architecture/energy-attribution.md)

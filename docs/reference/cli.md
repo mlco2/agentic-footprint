@@ -25,7 +25,7 @@ version.
 `afoot summary`, `afoot status`, `afoot doctor`, `afoot statusline` and `afoot setup --check`
 change nothing. `afoot setup`, `afoot service install`, `afoot service start` and
 `afoot self update` change the machine; see
-[Use afoot from another program](../how-to/integrate.md#commands-that-change-the-machine).
+[Use afoot from another program](../guides/integrate.md#commands-that-change-the-machine).
 
 ## `afoot watch`
 
@@ -35,7 +35,7 @@ change nothing. `afoot setup`, `afoot service install`, `afoot service start` an
 address fails at startup with `afoot listens on loopback addresses only
 (127.0.0.1, ::1)`. It writes to the store once a minute, not per received
 batch; see
-[why writes are batched](../explanation/rebuild-architecture.md#why-writes-are-batched).
+[why writes are batched](../contributing/architecture/rebuild-architecture.md#why-writes-are-batched).
 
 ## `afoot summary`
 
@@ -62,7 +62,8 @@ It exits 0 with a document even when the state directory holds no store yet
 (every count is then zero). It exits 1, with the reason on stderr, when the
 store exists and cannot be read. The fields are described in
 [machine-readable output](machine-readable-output.md#afoot-summary);
-`schemas/summary/v1.schema.json` is the contract.
+[`schemas/summary/v1.schema.json`](https://github.com/mlco2/agentic-footprint/blob/main/schemas/summary/v1.schema.json)
+is the contract.
 
 ## `afoot status`
 
@@ -106,7 +107,7 @@ cannot attach to it.
 
 When `afoot watch --debug` is started beside a running collector that already
 holds the receiver port, it exits and points to `afoot console`. See
-[Open the debug console](../how-to/debug-console.md).
+[Open the debug console](../guides/debug-console.md).
 
 ## `afoot setup`
 
@@ -115,8 +116,7 @@ propose agent-specific changes until the local OTLP receiver responds.
 
 ## Supported integrations
 
-The default release configures Claude Code and Codex. Experimental integrations
-are excluded from the default build and public setup surface.
+The default release configures Claude Code, Codex, OpenCode, and Pi.
 
 ## State directory
 

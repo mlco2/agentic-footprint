@@ -1,36 +1,19 @@
 # Known limitations
 
-Agentic Footprint is alpha software. Commands and stored data can change
+Agentic Footprint is in beta. Commands and stored data can still change
 between versions; the JSON documents for other programs follow the
 [versioning rule](machine-readable-output.md#versioning). This page lists
-what afoot does not do yet.
-
-## No release has been published yet
-
-There is no published release. Until there is one:
-
-- the only way to install is from a source checkout, with `./install.sh` or
-  `.\install.ps1`;
-- `afoot self update` cannot be used. It updates only an afoot that the installer
-  placed from a release binary, and exits 2 with an explanation for a build
-  from a checkout. Update a checkout build by pulling and rerunning the
-  installer;
-- the release inputs of the installer (`AFOOT_BINARY_URL`, `AFOOT_BINARY_SHA256`)
-  and the steps in [Verify a release](../how-to/verify-release.md) have no
-  published artifact to point at.
-
-The [release process](release-process.md) describes how releases will be
-produced.
+what `afoot` does not do yet.
 
 ## Impacts are modelled, not measured
 
 The impact figures for model calls (energy, greenhouse gas emissions, water,
 abiotic resource depletion, primary energy) are estimates of remote
-inference from EcoLogits. Each is a range with a minimum and a maximum. afoot
+inference from EcoLogits. Each is a range with a minimum and a maximum. `afoot`
 does not measure them.
 
 Local machine energy is measured by sampling, then attributed to sessions
-and actions; see [energy attribution](../explanation/energy-attribution.md).
+and actions; see [energy attribution](../contributing/architecture/energy-attribution.md).
 `afoot summary` carries the remote estimates only.
 
 ## Unknown models have no impact figure
@@ -48,7 +31,7 @@ A call can also be `pending` for a short time, until the estimator has
 processed it. When no estimator is available (`afoot watch --no-sidecars`, or no
 managed Python runtime), calls stay `pending`.
 
-## `afoot console` is macOS and Linux only; the Windows service is new
+## `afoot console` is macOS and Linux only
 
 `afoot service` uses launchd on macOS, a systemd user session on Linux and a
 Task Scheduler logon task on Windows. On Linux without a systemd user
@@ -68,30 +51,12 @@ A state directory whose path is too long for a Unix socket (about 100 bytes)
 gets no console socket. The collector works; `afoot console` cannot attach to
 it.
 
-## No command to stop, uninstall or revert
-
-`afoot service` can install, start and report on the background service. There
-is no command yet to stop it or remove it. There is also no command to revert
-what `afoot setup` wrote to agent configuration files. `afoot setup` makes a
-timestamped backup (`<file>.bak.<timestamp>`) beside each existing file
-before changing it; restoring one is a manual step.
-[Uninstall](../how-to/uninstall.md) gives the manual steps for each system.
-
 ## History is kept without limit
 
 `afoot` keeps every recorded event, and the spool files they came from. There is
 no retention, archive or compaction yet. `afoot status` reports what they take
-under `storage`; [Uninstall](../how-to/uninstall.md#4-keep-or-remove-the-data)
+under `storage`; [Uninstall](../get-started/uninstall.md#4-keep-or-remove-the-data)
 says which files hold the history.
-
-## Daily totals use one UTC offset
-
-`afoot summary` cuts local days with a single UTC offset for the whole period:
-the machine's offset when the command runs, or `--utc-offset-minutes`. When a
-daylight-saving change falls inside the period, the days before the change
-are cut an hour away from local midnight. Calls within an hour of midnight on
-those days can be counted in the neighbouring day, and the period then starts
-an hour away from local midnight.
 
 ## `receiving` in `afoot status` covers the last 24 hours
 
@@ -105,13 +70,17 @@ debug console and on `GET /debug/status`.
 
 `afoot watch` writes to the store once a minute. `afoot summary`, `afoot report`, the
 status line and the debug console can be that far behind a live session; see
-[why writes are batched](../explanation/rebuild-architecture.md#why-writes-are-batched).
+[why writes are batched](../contributing/architecture/rebuild-architecture.md#why-writes-are-batched).
 
 ## Supported agents
 
 The default build configures Claude Code, Codex,
-[OpenCode](../how-to/opencode.md) and [Pi](../how-to/pi.md).
+[OpenCode](../agents/opencode.md) and [Pi](../agents/pi.md).
 
-Pi's context compaction and branch summaries call the model directly, without
-the `message_end` event the collector listens to, so their tokens are not
-collected: Pi sessions that compact are undercounted.
+- **Local process-tree attribution (L2):** only Claude Code currently emits
+  session root PIDs for CPU-weighted local attribution. Codex, OpenCode, and Pi
+  record remote inference and action spans, and fall back to wall-clock/baseline
+  local attribution.
+- **Pi compaction:** Pi's context compaction and branch summaries call the model
+  directly, without the `message_end` event the collector listens to, so their
+  tokens are not collected. Pi sessions that compact are undercounted.

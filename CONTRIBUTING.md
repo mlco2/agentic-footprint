@@ -15,9 +15,9 @@ scripts/docs.sh build
 
 Use the narrower package/collector tests listed in the developer guide while
 iterating. Follow
-[`docs/contributing/api-boundaries.md`](docs/contributing/api-boundaries.md)
+[`docs/contributing/architecture/api-boundaries.md`](docs/contributing/architecture/api-boundaries.md)
 for crate ownership and
-[`docs/contributing/error-handling.md`](docs/contributing/error-handling.md)
+[`docs/contributing/architecture/error-handling.md`](docs/contributing/architecture/error-handling.md)
 for runtime failure behavior.
 
 By participating, contributors agree to follow [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md).

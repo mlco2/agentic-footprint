@@ -46,7 +46,7 @@ outputs across infrastructures.
 - Each archive, binary, and `SHA256SUMS` gets a Sigstore bundle signed with
   the workflow's GitHub OIDC identity, plus a GitHub build-provenance
   attestation. `afoot self update` verifies the bundle before installing; see
-  [Verify a release](../how-to/verify-release.md).
+  [Verify a release](../guides/verify-release.md).
 - Dependencies come from releases at least seven days old, and CI checks the
   Rust, console, and Python locks for advisories; see the
-  [developer guide](../contributing/developer-guide.md#dependencies-and-ci-security).
+  [developer guide](developer-guide.md#dependencies-and-ci-security).

@@ -14,17 +14,23 @@ For a new installation, prefer the unified installer and project setup wizard:
 
     ```powershell
     .\install.ps1
-    afoot watch
-    # in another PowerShell window:
+    # or, when afoot is already installed:
     afoot setup --agents claude-code --global --yes
     ```
 
-The wizard checks receiver health before inspecting Claude Code. On
-macOS/Linux it can install a per-user receiver; Windows uses the foreground
-receiver shown above. The wizard installs a shell hook on Unix or configures
-the built-in `afoot hook` collector on Windows, merges `.claude/settings.json`,
-and backs up an existing settings file. The manual procedure below remains
-useful for auditing or custom deployments.
+The wizard checks receiver health before inspecting Claude Code and can install
+a per-user background receiver (launchd on macOS, systemd user session on Linux,
+Task Scheduler on Windows). If Task Scheduler is restricted by policy on
+Windows, start `afoot watch` in a PowerShell window first and rerun setup. The
+wizard installs a shell hook on Unix or configures the built-in `afoot hook`
+collector on Windows, merges `.claude/settings.json`, and backs up an existing
+settings file.
+
+---
+
+## Manual setup (advanced)
+
+Use the manual procedure below only for auditing or custom deployments.
 
 This guide installs and runs `agentic-footprint` locally for Claude Code.
 The complete collection path uses three complementary inputs:
@@ -228,7 +234,7 @@ By default:
 authentication.
 
 `afoot watch` writes to the store once a minute, not on every received batch (see
-[why writes are batched](../explanation/rebuild-architecture.md#why-writes-are-batched)).
+[why writes are batched](../contributing/architecture/rebuild-architecture.md#why-writes-are-batched)).
 A new session is written at once; after that, the report, statusline, and
 debug console can lag the session by up to a minute.
 
@@ -247,7 +253,7 @@ The installed macOS/Linux background service does not enable debug mode. On macO
 `$AFOOT_STATE_DIR/logs/watch.stderr.log`; on Linux run
 `journalctl --user -u agentic-footprint-watch.service`. For the debug console, run
 `afoot console`: it attaches to the running service (see
-[Open the debug console](debug-console.md)).
+[Open the debug console](../guides/debug-console.md)).
 
 Use `--no-sidecars` only when you intentionally want ingestion and
 attribution without CodeCarbon sampling or EcoLogits estimation.

@@ -14,7 +14,7 @@ on OpenCode 1.19.5.
 
 ## 1. Install `afoot`
 
-Install `afoot` as described in [Install and configure](installation.md), or,
+Install `afoot` as described in [Install and configure](../get-started/installation.md), or,
 for manual development, from the repository root:
 
 ```sh
@@ -51,7 +51,7 @@ startup.
 
 Like every agent, setup needs a healthy receiver first: on macOS and Linux it
 offers to install the background service (see
-[Install and configure](installation.md)).
+[Install and configure](../get-started/installation.md)).
 
 ### Manually
 
@@ -94,7 +94,7 @@ Run any OpenCode session (the TUI or `opencode run`), then:
 
 The spool file is `$AFOOT_STATE_DIR/spool/opencode.<session-id>.jsonl`.
 `afoot watch` writes to the store once a minute, so results can lag a live
-session by that much. In the [debug console](debug-console.md), the
+session by that much. In the [debug console](../guides/debug-console.md), the
 **Stream** tab lists one row per fact with collector `opencode@0.1.0-plugin`.
 
 ## What is collected

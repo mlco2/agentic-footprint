@@ -61,59 +61,50 @@ Custom install and project paths:
 
 ## Curl-ready inputs
 
-!!! note "No release has been published yet"
-    Installing from a source checkout, as above, is the only way to install
-    today. The inputs in this section are for release binaries and source
-    archives, and have nothing published to point at until the first
-    release. See [known limitations](../reference/known-limitations.md).
+Signed and checksummed release binaries are published on the
+[GitHub releases page](https://github.com/mlco2/agentic-footprint/releases).
 
-Release archives will be signed and checksummed. The installer accepts
-explicit release inputs:
+!!! warning "SHA-256 verification is required for URL installs"
+    Both `install.sh` and `install.ps1` refuse a URL download unless you pass its SHA-256 (`AFOOT_BINARY_SHA256` or `AFOOT_SOURCE_SHA256`) from the release's `SHA256SUMS`. On mismatch, installation stops before anything is placed or built. See [Verify a release](../guides/verify-release.md) to verify Sigstore signatures and provenance.
 
-A URL input always needs its SHA-256 (`AFOOT_BINARY_SHA256`, `AFOOT_SOURCE_SHA256`,
-from the release's `SHA256SUMS`); the installer refuses before downloading
-anything without it. After the download it compares the file's SHA-256 with
-the one supplied, case-insensitively, and stops with both values on a
-mismatch, before anything is installed or built. A URL by itself is not a
-source of trust: whoever serves it decides what runs next. The checksum is only
-as trustworthy as where you copied it from, so take it from the release page,
-or check the release first as described in
-[Verify a release](verify-release.md). `AFOOT_INSTALL_BINARY` and source-checkout
-installs are not checksummed: you already have the file.
+=== "macOS / Linux"
 
-```sh
-curl -LsSf https://example.invalid/install.sh | \
-  AFOOT_BINARY_URL=https://example.invalid/releases/afoot \
-  AFOOT_BINARY_SHA256=<sha256> \
-  sh -s -- --yes
-```
+    ```sh
+    curl -LsSf https://raw.githubusercontent.com/mlco2/agentic-footprint/main/install.sh | \
+      AFOOT_BINARY_URL=https://github.com/mlco2/agentic-footprint/releases/download/vX.Y.Z/afoot-<target> \
+      AFOOT_BINARY_SHA256=<sha256> \
+      sh -s -- --yes
+    ```
 
-It can also install a locally supplied binary or build a source archive:
+    You can also install a local binary or build from a verified source archive:
 
-```sh
-AFOOT_INSTALL_BINARY=/absolute/path/to/afoot ./install.sh
-AFOOT_SOURCE_URL=https://example.invalid/source.tar.gz AFOOT_SOURCE_SHA256=<sha256> ./install.sh
-```
+    ```sh
+    AFOOT_INSTALL_BINARY=/absolute/path/to/afoot ./install.sh
+    AFOOT_SOURCE_URL=https://github.com/mlco2/agentic-footprint/archive/refs/tags/vX.Y.Z.tar.gz \
+      AFOOT_SOURCE_SHA256=<sha256> ./install.sh
+    ```
+
+=== "Windows 11"
+
+    From a PowerShell prompt in a source checkout:
+
+    ```powershell
+    .\install.ps1
+    ```
+
+    For a published release binary, provide its URL and checksum:
+
+    ```powershell
+    $env:AFOOT_BINARY_URL = 'https://github.com/mlco2/agentic-footprint/releases/download/vX.Y.Z/afoot-x86_64-pc-windows-msvc.exe'
+    $env:AFOOT_BINARY_SHA256 = '<sha256>'
+    .\install.ps1 -Yes
+    ```
 
 The shell script only obtains and places the binary. All agent detection and
-configuration logic lives in `afoot setup`, so future curl, Homebrew, npm, and
-other distribution methods share exactly the same onboarding behavior.
+configuration logic lives in `afoot setup`, so future distribution channels share
+the same onboarding behavior.
 
-## Windows 11
-
-From a PowerShell prompt in a source checkout:
-
-```powershell
-.\install.ps1
-```
-
-For a published release binary, provide its URL and checksum:
-
-```powershell
-$env:AFOOT_BINARY_URL = 'https://example.invalid/releases/afoot-x86_64-pc-windows-msvc.exe'
-$env:AFOOT_BINARY_SHA256 = '<sha256>'
-.\install.ps1 -Yes
-```
+## Windows 11 service notes
 
 The installer upgrades `%LOCALAPPDATA%\Programs\agentic-footprint\afoot.exe`
 atomically and adds that directory to the user `PATH`. On Windows the
@@ -133,7 +124,7 @@ afoot setup --dry-run
 afoot setup --check
 afoot setup --yes
 afoot setup --global
-afoot setup --agents codex,claude-code
+afoot setup --agents codex,claude-code,opencode,pi
 afoot setup --project /absolute/path/to/project
 afoot setup --endpoint http://127.0.0.1:5000/v1/logs
 ```
@@ -148,7 +139,7 @@ The current wizard:
 - verifies `POST /v1/logs` is answered by this version of the afoot receiver
   (the `X-Agentic-Footprint` response header) before detecting or proposing
   agent changes;
-- detects Codex and Claude Code on `PATH`;
+- detects Codex, Claude Code, OpenCode, and Pi on `PATH`;
 - safely appends Codex native OTLP configuration when no `[otel]` table
   exists, in the primary Codex home and in `<project>/.codex/` when present;
 - refuses to overwrite an existing conflicting Codex exporter or invalid TOML;
@@ -160,6 +151,9 @@ The current wizard:
   collector;
 - merges Claude hooks and OTLP environment into either the selected project's
   `.claude/settings.json` or, with `--global`, `~/.claude/settings.json`;
+- installs the OpenCode collector plugin under OpenCode's global `plugin/`
+  directory (backing up any previous copy in the parent config directory);
+- installs the Pi collector extension under Pi's global `extensions/` directory;
 - creates timestamped backups before changing existing configuration files;
 
 `--check` exits non-zero when the resident receiver is unreachable, an
@@ -213,7 +207,7 @@ too; restarting it is harmless. It exits 1 when anything needs attention.
 started can be reported for a minute before its first token telemetry is
 stored.
 
-On macOS and Linux, service commands are idempotent:
+Service commands are idempotent across macOS, Linux, and Windows:
 
 ```sh
 afoot service install
@@ -227,7 +221,7 @@ definitions set a `077` umask, so the logs and every file the service creates
 are readable by your account only. The background
 service deliberately does not use `--debug` and listens on no debug port; run
 `afoot console` to open the debug UI on it, for as long as that command runs
-(see [Open the debug console](debug-console.md)).
+(see [Open the debug console](../guides/debug-console.md)).
 
 There is no command yet to stop or remove the service, or to revert what
 `afoot setup` wrote; see [known limitations](../reference/known-limitations.md).

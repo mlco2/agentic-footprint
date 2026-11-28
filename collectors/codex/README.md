@@ -1,7 +1,7 @@
 # Codex collector
 
 For the complete copy-paste setup, verification, privacy, and troubleshooting
-procedure, see [`docs/how-to/codex.md`](../../docs/how-to/codex.md).
+procedure, see [`docs/agents/codex.md`](../../docs/agents/codex.md).
 
 Codex uses the existing `afoot watch` OTLP receiver; no wrapper or app-server
 proxy is required for ordinary CLI/TUI sessions. The receiver stores the
@@ -57,4 +57,4 @@ already embed Codex, but it is experimental and is not required by this
 collector.
 
 Receiver degradation and control-plane failures follow the shared
-[`error-handling policy`](../../docs/contributing/error-handling.md).
+[`error-handling policy`](../../docs/contributing/architecture/error-handling.md).

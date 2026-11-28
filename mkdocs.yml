@@ -12,21 +12,23 @@ theme:
   palette:
     - media: "(prefers-color-scheme: light)"
       scheme: default
-      primary: teal
-      accent: teal
+      primary: custom
+      accent: custom
       toggle:
         icon: lucide/sun
         name: Switch to dark mode
     - media: "(prefers-color-scheme: dark)"
       scheme: slate
-      primary: teal
-      accent: teal
+      primary: custom
+      accent: custom
       toggle:
         icon: lucide/moon
         name: Switch to light mode
   features:
+    - content.code.annotate
     - content.code.copy
     - content.code.select
+    - content.tabs.link
     - navigation.instant
     - navigation.instant.progress
     - navigation.sections
@@ -60,30 +62,31 @@ markdown_extensions:
 
 nav:
   - Home: index.md
-  - Tutorials:
-      - Quickstart: tutorials/quickstart.md
-  - How-to Guides:
-      - Install and configure: how-to/installation.md
-      - Claude Code: how-to/claude-code.md
-      - Codex: how-to/codex.md
-      - OpenCode: how-to/opencode.md
-      - Pi: how-to/pi.md
-      - Open the debug console: how-to/debug-console.md
-      - Use afoot from another program: how-to/integrate.md
-      - Verify releases: how-to/verify-release.md
-      - Uninstall: how-to/uninstall.md
-  - Explanation:
-      - Energy attribution: explanation/energy-attribution.md
-      - Rebuild architecture: explanation/rebuild-architecture.md
+  - Get Started:
+      - Quickstart: get-started/quickstart.md
+      - Install and configure: get-started/installation.md
+      - Uninstall: get-started/uninstall.md
+  - Agents:
+      - Claude Code: agents/claude-code.md
+      - Codex: agents/codex.md
+      - OpenCode: agents/opencode.md
+      - Pi: agents/pi.md
+  - Guides:
+      - Debug console: guides/debug-console.md
+      - Programmatic integration: guides/integrate.md
+      - Verify releases: guides/verify-release.md
   - Reference:
       - CLI: reference/cli.md
       - Machine-readable output: reference/machine-readable-output.md
       - Debug API: reference/debug-api.md
       - Event schemas: reference/event-schemas.md
-      - Release process: reference/release-process.md
       - Known limitations: reference/known-limitations.md
   - Contributing:
       - Developer guide: contributing/developer-guide.md
-      - API boundaries: contributing/api-boundaries.md
-      - Error handling: contributing/error-handling.md
+      - Architecture:
+          - Energy attribution: contributing/architecture/energy-attribution.md
+          - Rebuild architecture: contributing/architecture/rebuild-architecture.md
+          - API boundaries: contributing/architecture/api-boundaries.md
+          - Error handling: contributing/architecture/error-handling.md
       - Live tests: contributing/testing-live.md
+      - Release process: contributing/release-process.md

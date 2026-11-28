@@ -1,46 +1,71 @@
 # Agentic Footprint
 
-Agentic Footprint measures coding-agent workloads and reports their local and
-remote environmental impacts without hiding uncertainty or missing data.
+<div class="afoot-hero" markdown>
+**Agentic Footprint (`afoot`)** measures local machine energy and estimates remote inference impacts for coding-agent sessions. Everything runs locally on your machine—telemetry stays in your local SQLite store.
 
-It combines:
+```sh
+./install.sh --yes          # build, set up Python runtime, start receiver, configure agents
+afoot summary --period 7d   # view token usage and estimated remote impacts as JSON
+```
+</div>
 
-- native agent telemetry and lightweight hooks;
-- one shared CodeCarbon machine sampler;
-- per-session process observation with `psutil`;
-- CPU-weighted attribution to action spans and tool calls;
-- EcoLogits estimates for remote model inference;
-- a local Rust control plane, report CLI, and debug console.
+!!! info "Beta software"
+    Signed release binaries are available on the [GitHub releases page](https://github.com/mlco2/agentic-footprint/releases), or you can build from source. Interfaces and stored schemas may change between releases.
 
-## Start here
+## Explore the documentation
 
-- Follow the [quickstart](tutorials/quickstart.md) for a first measured session.
-- Use the [installation guide](how-to/installation.md) for platform-specific
-  receiver and setup options.
-- Choose the [Claude Code](how-to/claude-code.md) or
-  [Codex](how-to/codex.md) integration guide.
-- Read [energy attribution](explanation/energy-attribution.md) to understand how
-  machine joules become per-action results.
-- To read afoot's results from another program, see
-  [Use afoot from another program](how-to/integrate.md).
-- Check the [known limitations](reference/known-limitations.md) before
-  relying on a figure.
+<div class="grid cards" markdown>
 
-## Design principles
+-   **Get Started**
 
-**Raw facts remain raw.** Collectors do not estimate environmental impact.
+    ---
 
-**Measured and modeled values stay distinguishable.** Missing local energy or
-remote estimates remain explicit gaps rather than invented zeroes.
+    Install `afoot`, start the per-user background receiver, and record your first measured agent session in minutes.
 
-**Machine energy is conserved.** Session and action attribution divide each
-measurement window without duplicating its joules.
+    - [Quickstart](get-started/quickstart.md)
+    - [Install and configure](get-started/installation.md)
+    - [Uninstall](get-started/uninstall.md)
 
-**Collection must not break the agent.** Hooks degrade safely while control
-plane failures remain visible to the operator.
+-   **Supported Agents**
 
-## Project status
+    ---
 
-Agentic Footprint is alpha software and no release has been published yet;
-it is installed from a source checkout. It supports Claude Code, Codex, OpenCode
-and Pi.
+    `afoot setup` detects installed agents and configures collection automatically.
+
+    - [Claude Code](agents/claude-code.md) <span class="afoot-badge">OTLP</span><span class="afoot-badge">Hooks</span>
+    - [Codex](agents/codex.md) <span class="afoot-badge">OTLP</span>
+    - [OpenCode](agents/opencode.md) <span class="afoot-badge">Plugin</span>
+    - [Pi](agents/pi.md) <span class="afoot-badge">Extension</span>
+
+-   **Guides & Integration**
+
+    ---
+
+    Inspect live sessions in the local web UI, consume JSON outputs from other apps, or verify signed downloads.
+
+    - [Debug console](guides/debug-console.md)
+    - [Programmatic integration](guides/integrate.md)
+    - [Verify releases](guides/verify-release.md)
+
+-   **Reference**
+
+    ---
+
+    Command options, versioned JSON schemas, debug HTTP/SSE routes, and current constraints.
+
+    - [CLI reference](reference/cli.md)
+    - [Machine-readable output](reference/machine-readable-output.md)
+    - [Known limitations](reference/known-limitations.md)
+
+</div>
+
+## What `afoot` reports
+
+| Layer | Source | Output |
+|---|---|---|
+| **Token usage** | Native agent OTLP logs, plugins, or extensions | Exact counts (`input`, `output`, `thought`, `cache_read`, `cache_write`) |
+| **Remote inference impact** | EcoLogits model over token counts | Min–max ranges (`energy`, `gwp`, `water`, `adpe`, `pe`); unestimated models are listed under `models_not_estimated` |
+| **Local machine energy** | Shared CodeCarbon sampler + `psutil` | Measured joules attributed to sessions and tool spans (`afoot report`, `afoot console`) |
+
+!!! tip "Integrating with another app?"
+    Use `afoot status` and `afoot summary` rather than reading `state.db` directly. Both are read-only and emit versioned single-line JSON. See [Programmatic integration](guides/integrate.md).
