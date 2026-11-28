@@ -1,19 +1,19 @@
 # Claude Code hooks collector (`cc-hooks`)
 
 For an end-to-end installation and usage walkthrough—including building
-`af`, provisioning Python, configuring OTLP, running `af watch`, and adding
+`afoot`, provisioning Python, configuring OTLP, running `afoot watch`, and adding
 the optional statusline—see
 [`docs/how-to/claude-code.md`](../../docs/how-to/claude-code.md).
 
-`af-hook.sh` is a POSIX `sh` shim that turns Claude Code's six lifecycle
+`afoot-hook.sh` is a POSIX `sh` shim that turns Claude Code's six lifecycle
 hooks into Contract #1 events, appended to
-`$AF_STATE_DIR/spool/cc-hooks.<session_id>.jsonl` (default `AF_STATE_DIR`:
+`$AFOOT_STATE_DIR/spool/cc-hooks.<session_id>.jsonl` (default `AFOOT_STATE_DIR`:
 `~/.local/state/agentic-footprint`). It never reads transcripts — only the
 hook JSON Claude Code writes to its stdin.
 
 ### Dependencies and failure behavior
 
-**`jq` is a required dependency**, and the *only* external one. `af-hook.sh`
+**`jq` is a required dependency**, and the *only* external one. `afoot-hook.sh`
 checks `command -v jq` before doing anything else; if `jq` isn't on `PATH`,
 the shim **silently no-ops and exits 0** — no error, no log line, nothing
 written to the spool. Collection is best-effort; the running Claude Code
@@ -23,13 +23,13 @@ That "never disturb the session" contract extends past the `jq` check: the
 shim **always exits 0**, regardless of any internal failure (malformed
 stdin JSON, an unwritable state dir, a corrupted open-span file, ...).
 Internal errors are best-effort appended to
-`$AF_STATE_DIR/tmp/hook-errors.log` (never to stdout/stderr in a way Claude
+`$AFOOT_STATE_DIR/tmp/hook-errors.log` (never to stdout/stderr in a way Claude
 Code would see as a hook failure) and otherwise swallowed. `session_id` and
 `tool_use_id` from the hook payload are also sanitized (every character
 outside `[A-Za-z0-9._-]` stripped, leading `.` guarded) before either is
 used to build a file path, so a malicious or malformed id can't write
-outside `$AF_STATE_DIR/spool/` or `$AF_STATE_DIR/tmp/openspans/<session_id>/`.
-The same rule is implemented in `crates/af-otlp` and `python/af_sampler`,
+outside `$AFOOT_STATE_DIR/spool/` or `$AFOOT_STATE_DIR/tmp/openspans/<session_id>/`.
+The same rule is implemented in `crates/afoot-otlp` and `python/afoot_sampler`,
 and all three are pinned to the shared conformance vectors in
 `tests/fixtures/sanitize-vectors.json` — two collectors that disagree
 about what a session id may contain record one session under two ids, and
@@ -37,14 +37,14 @@ the join sees two sessions.
 
 Everything the shim creates (spool files, open-span files, the error log,
 missing directories) is owner-only: it runs under `umask 077`, because it may
-run before `af watch` has restricted the state dir and a spool line carries
+run before `afoot watch` has restricted the state dir and a spool line carries
 tool inputs from the session.
 
 This collector observes local tool-call *spans* (when a tool started, when
 it finished, what kind it was). It does **not** capture LLM token usage —
-that's the OTLP receiver's job (`crates/af-otlp`). The two are
+that's the OTLP receiver's job (`crates/afoot-otlp`). The two are
 complementary and carry the same session id: this collector writes the
-`cc-hooks.*` spool file, while the receiver in `af watch` stores the
+`cc-hooks.*` spool file, while the receiver in `afoot watch` stores the
 `otlp-cc` facts directly in the SQLite store, without a spool file.
 
 ## `.claude/settings.json` hooks snippet
@@ -66,28 +66,28 @@ covered by the collector fixtures.
 {
   "hooks": {
     "SessionStart": [
-      { "hooks": [ { "type": "command", "command": "/absolute/path/to/collectors/claude-code/af-hook.sh" } ] }
+      { "hooks": [ { "type": "command", "command": "/absolute/path/to/collectors/claude-code/afoot-hook.sh" } ] }
     ],
     "PreToolUse": [
-      { "matcher": "*", "hooks": [ { "type": "command", "command": "/absolute/path/to/collectors/claude-code/af-hook.sh" } ] }
+      { "matcher": "*", "hooks": [ { "type": "command", "command": "/absolute/path/to/collectors/claude-code/afoot-hook.sh" } ] }
     ],
     "PostToolUse": [
-      { "matcher": "*", "hooks": [ { "type": "command", "command": "/absolute/path/to/collectors/claude-code/af-hook.sh" } ] }
+      { "matcher": "*", "hooks": [ { "type": "command", "command": "/absolute/path/to/collectors/claude-code/afoot-hook.sh" } ] }
     ],
     "PostToolUseFailure": [
-      { "matcher": "*", "hooks": [ { "type": "command", "command": "/absolute/path/to/collectors/claude-code/af-hook.sh" } ] }
+      { "matcher": "*", "hooks": [ { "type": "command", "command": "/absolute/path/to/collectors/claude-code/afoot-hook.sh" } ] }
     ],
     "Stop": [
-      { "hooks": [ { "type": "command", "command": "/absolute/path/to/collectors/claude-code/af-hook.sh" } ] }
+      { "hooks": [ { "type": "command", "command": "/absolute/path/to/collectors/claude-code/afoot-hook.sh" } ] }
     ],
     "SessionEnd": [
-      { "hooks": [ { "type": "command", "command": "/absolute/path/to/collectors/claude-code/af-hook.sh" } ] }
+      { "hooks": [ { "type": "command", "command": "/absolute/path/to/collectors/claude-code/afoot-hook.sh" } ] }
     ]
   }
 }
 ```
 
-Use an absolute path; `af-hook.sh` must be executable (`chmod +x`).
+Use an absolute path; `afoot-hook.sh` must be executable (`chmod +x`).
 
 ### The session's root pid
 
@@ -104,13 +104,13 @@ not `exec` it (seen with Claude Code 2.1.331 in a Linux sandbox). That
 shell exits with the hook, so its pid would be gone by the time the
 sampler looks, and the session would get no energy. When the shim's parent
 is a shell (`sh`, `bash`, `dash`, `zsh`, `ash`, `ksh`), it reports the
-shell's parent instead (`session_root_pid`; `af hook` does the same). Do
+shell's parent instead (`session_root_pid`; `afoot hook` does the same). Do
 not add a wrapper of your own: a second shell level is not skipped.
 
-## OTel env block (the `af watch` receiver, run alongside this collector)
+## OTel env block (the `afoot watch` receiver, run alongside this collector)
 
 Set these before launching `claude` to also capture LLM call telemetry via
-the local OTLP receiver (`crates/af-otlp::serve`, `POST /v1/logs`):
+the local OTLP receiver (`crates/afoot-otlp::serve`, `POST /v1/logs`):
 
 ```sh
 export CLAUDE_CODE_ENABLE_TELEMETRY=1
@@ -124,7 +124,7 @@ either one enabled alone.
 
 ## Timestamp precision
 
-`af-hook.sh` timestamps every event with **millisecond precision**:
+`afoot-hook.sh` timestamps every event with **millisecond precision**:
 `2026-07-25T12:00:00.123Z`, RFC 3339 UTC. `date` can't produce it portably
 (sub-second output needs GNU's non-POSIX `+%N`, absent from macOS's BSD
 `date`), so the shim derives it from `jq`'s float `now` instead — jq is
@@ -149,7 +149,7 @@ assume a nonzero span duration.
 | Hook event | Emits |
 |---|---|
 | `SessionStart` | A zero-length bootstrap `action_span` (`tool_name: "__session__"`, `pids: [$PPID]`) + one `session_meta` (`agent_app.name: "claude-code"`, `os`) |
-| `PreToolUse` | Nothing to the spool — opens `$AF_STATE_DIR/tmp/openspans/<session_id>/<tool_use_id>` (`{t_start, tool_name}`) |
+| `PreToolUse` | Nothing to the spool — opens `$AFOOT_STATE_DIR/tmp/openspans/<session_id>/<tool_use_id>` (`{t_start, tool_name}`) |
 | `PostToolUse` | One `action_span` closing the open-span with `status: "ok"` (or `status: "unknown"`, `t_start == t_end` if none was found, or the file exists but doesn't parse — same fallback, and the stale file is still deleted) |
 | `PostToolUseFailure` | The same closure, with `status: "cancelled"` when the payload's `is_interrupt` is `true` and `status: "error"` otherwise. A span whose start was never observed still closes `unknown` with `t_start == t_end`: the payload's own `duration_ms` is Claude Code's measurement, not this collector's, and `t_start` is never fabricated from it |
 | `Stop` / `SessionEnd` | Closes every remaining open-span with `status: "unknown"` and deletes its file; a stray file that doesn't parse as JSON is counted, deleted, and skipped (nothing emitted for it) rather than crashing the sweep |
@@ -181,7 +181,7 @@ Collector degradation and control-plane failures follow the shared
 collectors/claude-code/test_hooks.sh
 ```
 
-Builds `af-cli` once, then pipes each fixture through the shim into a
-fresh `AF_STATE_DIR` per case and validates every resulting spool line via
-`af validate-line` (a hidden `af-cli` subcommand built for exactly this).
+Builds `afoot-cli` once, then pipes each fixture through the shim into a
+fresh `AFOOT_STATE_DIR` per case and validates every resulting spool line via
+`afoot validate-line` (a hidden `afoot-cli` subcommand built for exactly this).
 Also runs in CI (`.github/workflows/ci.yml`, after `cargo test --workspace`).

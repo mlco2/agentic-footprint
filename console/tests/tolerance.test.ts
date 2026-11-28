@@ -1,6 +1,6 @@
-// Task 4b — real-server tolerance contract tests (docs/design-log.md, "af
+// Task 4b — real-server tolerance contract tests (docs/design-log.md, "afoot
 // watch resident mode, sampler lifecycle, and the `/debug` console
-// surface"). The real `af watch --debug` server deviates from the mock's
+// surface"). The real `afoot watch --debug` server deviates from the mock's
 // rich fixtures in specific, deliberate ways: several fields the mock
 // always fills in are `null`/omitted on the real server instead. These are
 // hand-built, null-bearing fixtures pushed straight through the
@@ -95,13 +95,13 @@ describe("HealthPayload tolerance — real server's null events_per_s and absent
 
   // Found during this task's own e2e run (not in the brief's verified-facts
   // list, but a real, reachable state, not a corner case unique to the test
-  // rig): `af watch --debug --no-otlp` — a normal, user-facing flag
+  // rig): `afoot watch --debug --no-otlp` — a normal, user-facing flag
   // combination (`--otlp-addr`/`--no-otlp` are a real choice, docs/design-log.md)
   // — serves `otlp_receiver.endpoint: null` plus a `note` explaining why.
   it("HealthStore.set() accepts a null otlp_receiver.endpoint (--no-otlp) with its explanatory note, without throwing", () => {
     const noOtlpHealth: HealthPayload = {
       collectors: [],
-      otlp_receiver: { endpoint: null, protocol: "http/json", logs_accepted: 0, metrics_discarded: 0, note: "no OTLP receiver is running in this af watch process" },
+      otlp_receiver: { endpoint: null, protocol: "http/json", logs_accepted: 0, metrics_discarded: 0, note: "no OTLP receiver is running in this afoot watch process" },
       rejected: [],
       python: [],
     };

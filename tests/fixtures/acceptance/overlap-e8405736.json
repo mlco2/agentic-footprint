@@ -4,12 +4,12 @@
     "session_id": "e8405736-5793-4e27-bd35-4a1522fef6f8",
     "run": "run 1 of 3 on 2026-07-25 — plain `claude -p` defaults, permission-blocked, never applied a fix (walkthrough §5 issue 2). Also predates the `PostToolUseFailure` fix (commit 510fd9b), so 14 of its 28 spans closed `status: \"unknown\"` in the `Stop` sweep (walkthrough §5 issue 1).",
     "sources": [
-      "spans[]: verbatim `action_span` payload fields from the run's `cc-hooks.<session>.jsonl` spool (scratch AF_STATE_DIR, not preserved beyond this extract)",
-      "live_allocation_trace: verbatim from `GET /debug/snapshot` taken while `af watch --debug` was running — this is the allocator's own recorded decision, not a recomputation",
+      "spans[]: verbatim `action_span` payload fields from the run's `cc-hooks.<session>.jsonl` spool (scratch AFOOT_STATE_DIR, not preserved beyond this extract)",
+      "live_allocation_trace: verbatim from `GET /debug/snapshot` taken while `afoot watch --debug` was running — this is the allocator's own recorded decision, not a recomputation",
       "windows_during_agent_span[]: energy-sample bounds and totals verbatim from the run's `codecarbon.<session>.jsonl` spool; `recomputed_shadow_sum_share` is derived here, see `derived_note`"
     ],
     "sanitization": "No absolute paths, usernames, home directories, hostnames or cwd appear here or in the source spools — the collectors never write them. Session id, tool-use ids, timestamps and energy values are real and unaltered. The `claude` pid of this run (71290) appears in the live trace as captured.",
-    "reproduce": "docs/poc-walkthrough.md §1 with plain `claude -p` (no permission flags), on a build predating 510fd9b, with `af watch --debug` and `GET /debug/snapshot` before teardown."
+    "reproduce": "docs/poc-walkthrough.md §1 with plain `claude -p` (no permission flags), on a build predating 510fd9b, with `afoot watch --debug` and `GET /debug/snapshot` before teardown."
   },
 
   "spans": [
@@ -100,7 +100,7 @@
   },
 
   "windows_during_agent_span": {
-    "_note": "The Agent-containment overlap the walkthrough cites, quantified. No live allocation trace survives for these windows — `af watch`'s trace ring had already evicted them by the time `/debug/snapshot` was taken (its oldest entry is 22:49:46.651Z). `recomputed_shadow_sum_share` is therefore DERIVED here from the preserved span and energy-window bounds, counting only the 14 spans that closed `ok` (excluding the Stop-swept ones), i.e. Σ overlap_ms / wall_ms.",
+    "_note": "The Agent-containment overlap the walkthrough cites, quantified. No live allocation trace survives for these windows — `afoot watch`'s trace ring had already evicted them by the time `/debug/snapshot` was taken (its oldest entry is 22:49:46.651Z). `recomputed_shadow_sum_share` is therefore DERIVED here from the preserved span and energy-window bounds, counting only the 14 spans that closed `ok` (excluding the Stop-swept ones), i.e. Σ overlap_ms / wall_ms.",
     "_live_allocator_caveat": "Live, the allocator never saw this overlap at all: a span is ingested when it CLOSES, and the Agent span closed at 22:49:18.907 — after every window it overlapped had already been attributed. The `[attr]` lines for these windows name only the short Bash spans. The over-100 % sum below is what a correctly-ordered ingest would have exposed, not what was recorded.",
     "windows": [
       {"t_start": "2026-07-25T22:48:34.755Z", "t_end": "2026-07-25T22:48:41.289Z", "wall_ms": 6534, "total_j": 40.14233, "observed_ok_spans": [{"span_id": "toolu_015FoTMYSL37uk12HY2QGwCX", "tool_name": "Agent", "overlap_ms": 1923}], "recomputed_shadow_sum_share": 0.2943},

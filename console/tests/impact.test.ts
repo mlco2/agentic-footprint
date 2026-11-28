@@ -44,7 +44,7 @@ function sessionFixture(overrides: Partial<SessionInfo> = {}): SessionInfo {
     attribution_policy: "l2_cpu_time",
     methodology: { version: "v2026.06.1", source: "bundled", ecologits_version: "0.7.1", codecarbon_version: "3.0.4" },
     grid: { zone: "FRA", g_co2e_per_kwh: 56, source: "codecarbon data v2026.06" },
-    state_dir: "/tmp/af",
+    state_dir: "/tmp/afoot",
     schema_version: "0.1.0",
     mode: "watch --debug",
     ...overrides,

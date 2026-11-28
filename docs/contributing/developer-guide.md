@@ -4,16 +4,16 @@
 
 ```sh
 ./install.sh --no-setup
-cargo test -p af-cli --test cli
+cargo test -p afoot-cli --test cli
 ```
 
 For development without installing the binary:
 
 ```sh
-cargo build -p af-cli
-export AF_BIN="$PWD/target/debug/af"
-export AF_STATE_DIR="$(mktemp -d)"
-"$AF_BIN" setup --dry-run
+cargo build -p afoot-cli
+export AFOOT_BIN="$PWD/target/debug/afoot"
+export AFOOT_STATE_DIR="$(mktemp -d)"
+"$AFOOT_BIN" setup --dry-run
 ```
 
 Prerequisites used by the full repository include Rust/Cargo, `cargo-audit`,
@@ -25,14 +25,14 @@ deterministic Rust tests do not need agent credentials or network access.
 
 | Area | Responsibility |
 |---|---|
-| `crates/af-events` | Contract #1 Rust types and validation |
-| `crates/af-spool` | JSONL discovery and incremental tailing; malformed lines are returned, not stored |
-| `crates/af-otlp` | OTLP HTTP/JSON receiver (it writes nothing itself) and source normalizers |
-| `crates/af-store` | Raw/derived SQLite persistence, the metadata-only `rejects` table, and migrations |
-| `crates/af-sidecar` | Managed Python environment and JSON-stdio process client |
-| `crates/af-core` | Correlation, estimation orchestration, attribution, joins, replay |
-| `crates/af-cli` | User commands, setup wizard, resident control plane, debug API |
-| `crates/af-console` | Embedded console assets |
+| `crates/afoot-events` | Contract #1 Rust types and validation |
+| `crates/afoot-spool` | JSONL discovery and incremental tailing; malformed lines are returned, not stored |
+| `crates/afoot-otlp` | OTLP HTTP/JSON receiver (it writes nothing itself) and source normalizers |
+| `crates/afoot-store` | Raw/derived SQLite persistence, the metadata-only `rejects` table, and migrations |
+| `crates/afoot-sidecar` | Managed Python environment and JSON-stdio process client |
+| `crates/afoot-core` | Correlation, estimation orchestration, attribution, joins, replay |
+| `crates/afoot-cli` | User commands, setup wizard, resident control plane, debug API |
+| `crates/afoot-console` | Embedded console assets |
 | `collectors/` | Agent-native shims, fixtures, and collector-specific docs |
 | `python/` | Estimator and sampler sidecars owned by the Rust control plane |
 | `console/` | Debug console source and frontend tests |
@@ -45,13 +45,13 @@ rules.
 
 ```sh
 ./install.sh                    # install binary and run setup wizard
-af setup --dry-run              # inspect integration changes
-af watch --debug                # run the resident control plane
-af report --format json         # read current derived results
-af replay --format json         # rebuild derived data from raw facts
+afoot setup --dry-run              # inspect integration changes
+afoot watch --debug                # run the resident control plane
+afoot report --format json         # read current derived results
+afoot replay --format json         # rebuild derived data from raw facts
 ```
 
-Integration-specific installation must flow through `af setup`; collector
+Integration-specific installation must flow through `afoot setup`; collector
 READMEs document runtime behavior and troubleshooting, not alternative install
 systems.
 
@@ -60,12 +60,12 @@ systems.
 Start narrow and expand only after focused tests pass:
 
 ```sh
-cargo test -p af-cli setup -- --nocapture
+cargo test -p afoot-cli setup -- --nocapture
 scripts/test-install.sh
 collectors/claude-code/test_hooks.sh
 collectors/opencode/test_collector.sh
-cargo test -p af-otlp
-cargo test -p af-cli
+cargo test -p afoot-otlp
+cargo test -p afoot-cli
 cargo fmt --all -- --check
 git diff --check
 ```
@@ -80,7 +80,7 @@ are manual and documented in [`testing-live.md`](testing-live.md).
   `minimumReleaseAge` (`renovate.json`), `pyproject.toml` records it under
   `[tool.agentic-footprint.dependency-policy]`, and the managed Python runtime
   applies it at install time: `python/manifest.toml` pins are floors, and
-  `af python upgrade` (run by `af self update`) moves only to releases outside
+  `afoot python upgrade` (run by `afoot self update`) moves only to releases outside
   the seven-day window.
 - **Pinned actions.** Every GitHub Action is referenced by full commit SHA,
   with the version in a comment. Workflows default to `contents: read`, a job
@@ -98,11 +98,11 @@ are manual and documented in [`testing-live.md`](testing-live.md).
 ## Adding or changing an integration
 
 1. Identify the highest-fidelity public source exposed by the agent.
-2. Record raw facts only; estimation belongs in `af-core`/sidecars.
+2. Record raw facts only; estimation belongs in `afoot-core`/sidecars.
 3. Emit Contract #1 envelopes with stable source-derived event IDs.
 4. Make replay and restart semantics explicit.
 5. Add deterministic fixtures before a live test.
-6. Add one `af setup` adapter or setup guidance; do not create a standalone
+6. Add one `afoot setup` adapter or setup guidance; do not create a standalone
    installer for one integration.
 7. Follow [`error-handling.md`](error-handling.md): collectors preserve the
    agent session, while control-plane configuration/startup failures are fatal.

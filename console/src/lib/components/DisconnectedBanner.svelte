@@ -1,7 +1,7 @@
 <script lang="ts">
-  import type { AfClientStatus } from "../client/afClient.svelte";
+  import type { AfootClientStatus } from "../client/afootClient.svelte";
 
-  let { status = "connecting" }: { status?: AfClientStatus } = $props();
+  let { status = "connecting" }: { status?: AfootClientStatus } = $props();
 </script>
 
 {#if status === "reconnecting"}
@@ -10,7 +10,7 @@
   </div>
 {:else if status === "offline"}
   <div class="disconnected-banner">
-    Watcher not running — start it with <code>af watch --debug</code>. Retrying quietly.
+    Watcher not running — start it with <code>afoot watch --debug</code>. Retrying quietly.
   </div>
 {/if}
 

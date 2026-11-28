@@ -1,16 +1,16 @@
-"""Tests for `python/af_estimator/__main__.py`, the ecologits estimator
+"""Tests for `python/afoot_estimator/__main__.py`, the ecologits estimator
 sidecar.
 
 Requires `ecologits` to be importable. It's pinned in
 `python/manifest.toml` and installed only into the managed venv that
-`af python setup` provisions (via `uv`) — not necessarily into whatever
+`afoot python setup` provisions (via `uv`) — not necessarily into whatever
 interpreter runs plain `pytest`. `pytest.importorskip` makes that the
-CI-safe default (skips cleanly without it); the project's `AF_E2E=1` +
+CI-safe default (skips cleanly without it); the project's `AFOOT_E2E=1` +
 managed-venv gate is what runs this file for real, matching the split used
 elsewhere in this PoC.
 
 Driven as a real subprocess (not by importing `__main__` directly) so this
-exercises the exact newline-delimited-JSON framing `af-sidecar::Sidecar`
+exercises the exact newline-delimited-JSON framing `afoot-sidecar::Sidecar`
 speaks to it.
 """
 import json
@@ -21,14 +21,14 @@ from pathlib import Path
 
 import pytest
 
-if os.environ.get("AF_REQUIRE_ECOLOGITS") == "1":
+if os.environ.get("AFOOT_REQUIRE_ECOLOGITS") == "1":
     import ecologits
 else:
     ecologits = pytest.importorskip("ecologits")
 
 from ecologits.model_repository import models  # noqa: E402  (after importorskip)
 
-MAIN = Path(__file__).resolve().parents[1] / "af_estimator" / "__main__.py"
+MAIN = Path(__file__).resolve().parents[1] / "afoot_estimator" / "__main__.py"
 
 
 def _any_anthropic_model() -> str:
@@ -40,7 +40,7 @@ def _any_anthropic_model() -> str:
 
 class SidecarProcess:
     """Minimal line-oriented subprocess driver for these tests — a small
-    Python-side stand-in for `af-sidecar::Sidecar`'s request/response
+    Python-side stand-in for `afoot-sidecar::Sidecar`'s request/response
     framing, not a reimplementation of its id-matching/timeout logic."""
 
     def __init__(self) -> None:

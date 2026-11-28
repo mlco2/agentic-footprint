@@ -44,7 +44,7 @@ jobs:
           upload-sarif: ${{ github.event_name == 'push' }}
 
   # The console and Python locks get the advisory check the Rust lock has.
-  # The Python runtime af provisions resolves at install time from the
+  # The Python runtime afoot provisions resolves at install time from the
   # manifest floors, so this covers the pinned versions, not every install.
   advisories:
     runs-on: ubuntu-latest
@@ -132,7 +132,7 @@ jobs:
         run: |
           rustup toolchain install 1.97.1 --profile minimal --component clippy,rustfmt
           rustup override set 1.97.1
-      # af-console embeds console/dist at compile time (crates/af-console/build.rs);
+      # afoot-console embeds console/dist at compile time (crates/afoot-console/build.rs);
       # download the console job's build so cargo test exercises the real
       # bundle instead of the "not built" placeholder.
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
@@ -155,7 +155,7 @@ jobs:
       - name: Pi collector tests
         run: collectors/pi/test_collector.sh
       - name: OpenCode plugin tests
-        run: node --test collectors/opencode/af-plugin.test.ts
+        run: node --test collectors/opencode/afoot-plugin.test.ts
       - name: claude-code hook collector tests
         run: collectors/claude-code/test_hooks.sh
       - name: statusline bar tests
@@ -168,7 +168,7 @@ jobs:
       # estimator and model-coverage tests run instead of skipping.
       - run: uv run --frozen --group test --group runtime pytest python/tests -q
         env:
-          AF_REQUIRE_ECOLOGITS: '1'
+          AFOOT_REQUIRE_ECOLOGITS: '1'
 
   docs-and-hygiene:
     runs-on: ubuntu-latest
@@ -219,7 +219,7 @@ jobs:
       # estimator and model-coverage tests run instead of skipping.
       - run: uv run --frozen --group test --group runtime pytest python/tests -q
         env:
-          AF_REQUIRE_ECOLOGITS: '1'
+          AFOOT_REQUIRE_ECOLOGITS: '1'
       - name: macOS collector and statusline tests
         if: runner.os == 'macOS'
         run: |
@@ -230,7 +230,7 @@ jobs:
         run: scripts/test-install.sh
       - name: Build the Windows release binary
         if: runner.os == 'Windows'
-        run: cargo build --release -p af-cli
+        run: cargo build --release -p afoot-cli
       - name: Windows installer test
         if: runner.os == 'Windows'
         shell: pwsh

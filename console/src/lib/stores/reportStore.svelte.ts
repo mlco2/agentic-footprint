@@ -129,7 +129,7 @@ export class ReportStore {
   }
 
   /** Forget every report — they describe a watcher process that is gone
-   * (AfClient, on a `boot_id` change). `focused` is kept: it says what the
+   * (AfootClient, on a `boot_id` change). `focused` is kept: it says what the
    * view shows, not what the server holds. */
   clear(): void {
     this.levels = {};
@@ -173,7 +173,7 @@ export class ReportStore {
   /** Lazily fetches `GET /debug/report?level=task|session|tool` and stores
    * the result, with in-flight dedup per level.
    *
-   * The real `af watch --debug` server IGNORES `?level=` and always serves
+   * The real `afoot watch --debug` server IGNORES `?level=` and always serves
    * the session-level report (docs/design-log.md: "`?level=` is ignored —
    * session only"). So the cache slot here is keyed by what THIS call
    * requested, not by `report.level` (which `set()` uses) — otherwise a

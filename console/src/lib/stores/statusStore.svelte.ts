@@ -4,7 +4,7 @@
 // session, so it is what the console can show before the first event.
 //
 // `unavailable` is a distinct fact from "not loaded yet": the watcher
-// answered, and has no status route (an `af` older than the route, reached
+// answered, and has no status route (an `afoot` older than the route, reached
 // through the Vite dev proxy). The UI must say "status unavailable" then,
 // not sit on a loading state forever.
 import type { WatcherStatus } from "../types/debug";

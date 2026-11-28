@@ -4,7 +4,7 @@
 # Plain-sh test runner for ecologits-bar.sh (no bats, matching this repo's
 # shell tooling budget — same shape as collectors/claude-code/test_hooks.sh).
 #
-# The bar is exercised against a **stub** `af` (via $AF_BIN) that prints a
+# The bar is exercised against a **stub** `afoot` (via $AFOOT_BIN) that prints a
 # known five-number line, so this suite tests exactly what the bar owns:
 # that it hands Claude Code's status JSON through unmodified, that it maps
 # the five fields to the right metrics in the right order, that the unit
@@ -12,8 +12,8 @@
 # importantly — that no failure of the control plane can break a user's
 # status line.
 #
-# The numbers `af` actually produces for a seeded store are asserted on the
-# Rust side (crates/af-cli/tests/statusline.rs); the golden line used here
+# The numbers `afoot` actually produces for a seeded store are asserted on the
+# Rust side (crates/afoot-cli/tests/statusline.rs); the golden line used here
 # is that test's expected output verbatim, so the two ends of the contract
 # are pinned to the same digits.
 #
@@ -44,12 +44,12 @@ fail() {
   printf '  actual:   %s\n' "$3"
 }
 
-# --- stub `af` -------------------------------------------------------------
+# --- stub `afoot` -------------------------------------------------------------
 # Prints $STUB_LINE (default: the golden line), saves the stdin it received
 # so a case can assert the status JSON was passed through untouched, and
 # exits with $STUB_EXIT.
 
-STUB="$WORK/af"
+STUB="$WORK/afoot"
 cat >"$STUB" <<'STUB_EOF'
 #!/bin/sh
 cat >"$STUB_STDIN"
@@ -58,8 +58,8 @@ printf '%s\n' "${STUB_LINE?}"
 STUB_EOF
 chmod +x "$STUB"
 
-# The exact line `af statusline` prints for the Task 12 golden fixture
-# (see crates/af-cli/tests/statusline.rs::EXPECTED_LINE):
+# The exact line `afoot statusline` prints for the Task 12 golden fixture
+# (see crates/afoot-cli/tests/statusline.rs::EXPECTED_LINE):
 #   gwp 0.000188 kgCO2eq | water 3.75e-5 L | energy 0.000383 kWh
 #   | adpe 1.875e-9 kgSbeq | pe 0.00375 MJ
 GOLDEN_LINE="0.00018793293055555555 0.000037500000000000003 0.0003834722222222222 0.0000000018750000000000002 0.00375"
@@ -70,7 +70,7 @@ STATUS_JSON='{"hook_event_name":"Status","session_id":"sess-basic","transcript_p
 
 run_bar() {
   # $1 = stdin payload; remaining env comes from the caller.
-  printf '%s' "$1" | STUB_STDIN="$WORK/stdin.json" AF_BIN="$STUB" \
+  printf '%s' "$1" | STUB_STDIN="$WORK/stdin.json" AFOOT_BIN="$STUB" \
     HOME="$WORK/home" bash "$BAR"
 }
 
@@ -97,13 +97,13 @@ actual="$(STUB_LINE="$GOLDEN_LINE" run_bar "$STATUS_JSON" | plain)"
 check "default metrics render gwp/wcf/energy, auto-scaled" \
   "🔥 188 mgCO₂eq | 💧 0.04 mL | ⚡️ 383 mWh" "$actual"
 
-# --- Case: the status JSON reaches `af` byte-for-byte ----------------------
-# `af statusline` extracts the session id itself; if the bar reformatted or
+# --- Case: the status JSON reaches `afoot` byte-for-byte ----------------------
+# `afoot statusline` extracts the session id itself; if the bar reformatted or
 # truncated the payload, the control plane would answer for the wrong
 # session (or for none).
 
 actual="$(cat "$WORK/stdin.json")"
-check "the status JSON is handed to af unmodified" "$STATUS_JSON" "$actual"
+check "the status JSON is handed to afoot unmodified" "$STATUS_JSON" "$actual"
 
 # --- Case: every metric, in the configured order ---------------------------
 
@@ -163,7 +163,7 @@ actual="$(STUB_LINE="0 0 0 0 0" run_bar "$STATUS_JSON" | plain)"
 check "zeros render as 0, not as a small-looking quantity" \
   "🔥 0 | 💧 0 | ⚡️ 0" "$actual"
 
-# --- Case: `af` fails -> zeros, and the bar still exits 0 ------------------
+# --- Case: `afoot` fails -> zeros, and the bar still exits 0 ------------------
 
 # The exit code is asserted on the bar itself, not on a pipeline (whose
 # status would be the last command's, i.e. `plain`'s). The whole thing runs
@@ -171,23 +171,23 @@ check "zeros render as 0, not as a small-looking quantity" \
 # persist in the calling shell — `STUB_EXIT=1` would otherwise leak into
 # every later case and quietly turn this suite into one long zeros test.
 if ( STUB_EXIT=1 STUB_LINE="$GOLDEN_LINE" run_bar "$STATUS_JSON" >"$WORK/out" ); then
-  pass "a failing af exits the bar 0"
+  pass "a failing afoot exits the bar 0"
 else
-  fail "a failing af exits the bar 0" "exit 0" "exit $?"
+  fail "a failing afoot exits the bar 0" "exit 0" "exit $?"
 fi
-check "a failing af renders zeros" "🔥 0 | 💧 0 | ⚡️ 0" "$(plain <"$WORK/out")"
+check "a failing afoot renders zeros" "🔥 0 | 💧 0 | ⚡️ 0" "$(plain <"$WORK/out")"
 
-# --- Case: `af` is not installed at all -> zeros ---------------------------
+# --- Case: `afoot` is not installed at all -> zeros ---------------------------
 
-actual="$(printf '%s' "$STATUS_JSON" | AF_BIN="$WORK/no-such-binary" \
+actual="$(printf '%s' "$STATUS_JSON" | AFOOT_BIN="$WORK/no-such-binary" \
   HOME="$WORK/home" bash "$BAR" | plain)"
-check "a missing af binary renders zeros" "🔥 0 | 💧 0 | ⚡️ 0" "$actual"
+check "a missing afoot binary renders zeros" "🔥 0 | 💧 0 | ⚡️ 0" "$actual"
 
-# --- Case: `af` answers garbage -> zeros, never a bogus number -------------
+# --- Case: `afoot` answers garbage -> zeros, never a bogus number -------------
 
 # `nan` is deliberately *not* among the tokens: `v+0` on it is
 # implementation-defined (mawk yields nan, BSD awk yields 0), so asserting
-# either way would be asserting a property of the test runner's awk. `af`
+# either way would be asserting a property of the test runner's awk. `afoot`
 # itself never emits it — non-finite values are formatted as `0`.
 actual="$(STUB_LINE="banana - -1 " run_bar "$STATUS_JSON" | plain)"
 check "a non-numeric answer renders zeros" \
@@ -223,29 +223,29 @@ actual="$(ECOLOGITS_METRICS="gwp" STUB_LINE="$GOLDEN_LINE" run_bar "$STATUS_JSON
 check "an exported env var still beats the config file" "🔥 188 mgCO₂eq" "$actual"
 rm -rf "$WORK/home/.claude"
 
-# --- Case: the real `af`, with nothing stored ------------------------------
+# --- Case: the real `afoot`, with nothing stored ------------------------------
 # The stub cases above cannot catch a drift in the actual invocation (a
 # renamed subcommand, a flag the binary now requires). This one calls the
 # real binary against an empty state dir: the honest answer is zeros, and
 # the bar must render them without an error line.
 
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-AF_REAL="$REPO_ROOT/target/debug/af"
-if [ ! -x "$AF_REAL" ] && command -v cargo >/dev/null 2>&1; then
-  echo "building af-cli..."
-  (cd "$REPO_ROOT" && cargo build -p af-cli -q)
+AFOOT_REAL="$REPO_ROOT/target/debug/afoot"
+if [ ! -x "$AFOOT_REAL" ] && command -v cargo >/dev/null 2>&1; then
+  echo "building afoot-cli..."
+  (cd "$REPO_ROOT" && cargo build -p afoot-cli -q)
 fi
-if [ -x "$AF_REAL" ]; then
+if [ -x "$AFOOT_REAL" ]; then
   mkdir -p "$WORK/state"
-  actual="$(printf '%s' "$STATUS_JSON" | AF_BIN="$AF_REAL" AF_STATE_DIR="$WORK/state" \
+  actual="$(printf '%s' "$STATUS_JSON" | AFOOT_BIN="$AFOOT_REAL" AFOOT_STATE_DIR="$WORK/state" \
     HOME="$WORK/home" bash "$BAR" 2>"$WORK/err" | plain)"
-  check "the real af with an empty state dir renders zeros" \
+  check "the real afoot with an empty state dir renders zeros" \
     "🔥 0 | 💧 0 | ⚡️ 0" "$actual"
-  check "the real af writes nothing to stderr through the bar" "" "$(cat "$WORK/err")"
-  check "the real af creates no database when asked for a statusline" \
+  check "the real afoot writes nothing to stderr through the bar" "" "$(cat "$WORK/err")"
+  check "the real afoot creates no database when asked for a statusline" \
     "" "$(ls "$WORK/state")"
 else
-  echo "# skipped: target/debug/af not built and cargo unavailable"
+  echo "# skipped: target/debug/afoot not built and cargo unavailable"
 fi
 
 # --- Summary ---------------------------------------------------------------

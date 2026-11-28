@@ -1,7 +1,7 @@
 # Codex setup guide
 
 This guide configures Codex to export raw usage facts to
-`agentic-footprint` (`af`). Codex exports native OTLP logs directly to the
+`agentic-footprint` (`afoot`). Codex exports native OTLP logs directly to the
 resident receiver; no extra collector process is needed.
 
 All commands below use the default local addresses:
@@ -9,7 +9,7 @@ All commands below use the default local addresses:
 - OTLP receiver: `http://127.0.0.1:4318`;
 - debug console: `http://127.0.0.1:9414`.
 
-## 1. Build and initialize `af`
+## 1. Build and initialize `afoot`
 
 The recommended onboarding path is the unified installer and setup wizard:
 
@@ -17,15 +17,15 @@ The recommended onboarding path is the unified installer and setup wizard:
 ./install.sh
 ```
 
-Or, when `af` is already installed:
+Or, when `afoot` is already installed:
 
 ```sh
-af setup
+afoot setup
 ```
 
-The wizard verifies that an `af watch` receiver is healthy before inspecting
+The wizard verifies that an `afoot watch` receiver is healthy before inspecting
 agents. On macOS/Linux it can install a per-user service; on Windows start
-`af watch` in a persistent PowerShell window first. It then detects Codex and
+`afoot watch` in a persistent PowerShell window first. It then detects Codex and
 Claude Code, configures Codex OTLP automatically when safe, and installs or
 merges Claude Code collection. See
 [`installation.md`](installation.md) for automation flags.
@@ -33,50 +33,50 @@ merges Claude Code collection. See
 Confirm receiver health:
 
 ```sh
-af setup --check
+afoot setup --check
 ```
 
-On macOS/Linux, `af service status` additionally checks the installed service.
+On macOS/Linux, `afoot service status` additionally checks the installed service.
 
 For manual development from the repository root:
 
 ```sh
-cargo build -p af-cli
-export AF_BIN="$PWD/target/debug/af"
-export AF_STATE_DIR="$HOME/.local/state/agentic-footprint"
+cargo build -p afoot-cli
+export AFOOT_BIN="$PWD/target/debug/afoot"
+export AFOOT_STATE_DIR="$HOME/.local/state/agentic-footprint"
 ```
 
 Remote inference facts can be collected without the managed Python runtime.
 To calculate remote impacts and measure local process energy, also run:
 
 ```sh
-"$AF_BIN" python setup
-"$AF_BIN" python doctor
+"$AFOOT_BIN" python setup
+"$AFOOT_BIN" python doctor
 ```
 
 For manual development without the installed service, start the control plane
 before Codex:
 
 ```sh
-"$AF_BIN" watch --debug
+"$AFOOT_BIN" watch --debug
 ```
 
 If the managed Python runtime is intentionally not installed yet, collect and
 inspect raw facts without sampling or estimation:
 
 ```sh
-"$AF_BIN" watch --debug --no-sidecars
+"$AFOOT_BIN" watch --debug --no-sidecars
 ```
 
 Keep this process running. If port `4318` is already used, select another
 loopback address with `--otlp-addr` and use the same address in the Codex
-configuration below. `af watch` refuses a non-loopback `--otlp-addr` or
+configuration below. `afoot watch` refuses a non-loopback `--otlp-addr` or
 `--debug-addr`: neither listener has authentication.
 
 The installed launchd/systemd service runs without `--debug`. On macOS inspect
-`$AF_STATE_DIR/logs/`; on Linux use
+`$AFOOT_STATE_DIR/logs/`; on Linux use
 `journalctl --user -u agentic-footprint-watch.service`. Run
-`af console` to open the debug UI on the running service (see
+`afoot console` to open the debug UI on the running service (see
 [Open the debug console](debug-console.md)).
 
 ## 2. Configure Codex
@@ -88,8 +88,8 @@ the table below, backing the file up first and refusing a conflicting existing
 exporter:
 
 ```sh
-af setup --agents codex
-af setup --agents codex --endpoint http://127.0.0.1:5000/v1/logs
+afoot setup --agents codex
+afoot setup --agents codex --endpoint http://127.0.0.1:5000/v1/logs
 ```
 
 The target must be the Codex home your sessions actually read. Setup
@@ -97,15 +97,15 @@ configures the primary home (`$CODEX_HOME`, else `~/.codex`) and, when the
 `--project` directory (default: the current directory) contains a `.codex/`
 directory, `<project>/.codex/config.toml` as well. That covers a shell alias
 like `alias codex='CODEX_HOME="$PWD/.codex" codex'`, which gives every project
-directory its own home: run setup (or `af setup --check`) once from each such
+directory its own home: run setup (or `afoot setup --check`) once from each such
 project:
 
 ```sh
-af setup --agents codex --project /path/to/project
+afoot setup --agents codex --project /path/to/project
 ```
 
 Setup cannot see a shell alias, so a home outside both locations still needs
-`CODEX_HOME=/path/to/home af setup --agents codex`.
+`CODEX_HOME=/path/to/home afoot setup --agents codex`.
 
 `codex doctor --summary` prints which `config.toml` a session in the current
 directory loads.
@@ -129,9 +129,9 @@ exporter = { otlp-http = {
 Important details:
 
 - include `/v1/logs` in the endpoint;
-- use `protocol = "json"`; the current `af` receiver accepts OTLP HTTP/JSON;
+- use `protocol = "json"`; the current `afoot` receiver accepts OTLP HTTP/JSON;
 - keep `log_user_prompt = false` unless prompt text export is explicitly
-  desired; `af` does not need prompt contents;
+  desired; `afoot` does not need prompt contents;
 - metrics and traces are not needed by the Codex normalizer.
 
 Check installation, authentication, connectivity, and whether the
@@ -157,7 +157,7 @@ codex
 codex exec "Inspect this repository and summarize the test layout"
 ```
 
-Ensure `af setup --check` passes first. The receiver needs the initial
+Ensure `afoot setup --check` passes first. The receiver needs the initial
 `codex.conversation_starts` record to associate later calls with their session
 and provider.
 
@@ -179,22 +179,22 @@ invocation.
 
 ### Verify Codex export
 
-Codex telemetry is not written to the spool: the receiver in `af watch`
-normalizes it and stores it directly in `$AF_STATE_DIR/state.db`, once a
+Codex telemetry is not written to the spool: the receiver in `afoot watch`
+normalizes it and stores it directly in `$AFOOT_STATE_DIR/state.db`, once a
 minute (a new session is written at once). After a Codex turn, wait for that
 flush, then check:
 
 ```sh
-"$AF_BIN" report --format text
-"$AF_BIN" doctor
+"$AFOOT_BIN" report --format text
+"$AFOOT_BIN" doctor
 ```
 
 The text report's `EVENT_COUNTS` column should include `llm_call=` for the
-session. `af doctor` checks the
+session. `afoot doctor` checks the
 receiver and flags a running `codex` process that started before its
 telemetry configuration last changed.
 
-With `af watch --debug`, or `af console` beside the background service, open
+With `afoot watch --debug`, or `afoot console` beside the background service, open
 the debug console:
 
 ```text

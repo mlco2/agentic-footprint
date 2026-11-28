@@ -1,12 +1,12 @@
 <script lang="ts">
-  // SSE dot + live/pause toggle read AfClient/UiStore state directly, no
+  // SSE dot + live/pause toggle read AfootClient/UiStore state directly, no
   // local state (DATA-CONTRACT §3 client layer). The session picker is the
   // console's one session control: it scopes the *computed* views
   // (Impact/Attribution, via sessionStore.data) and deliberately not
   // Timeline/Stream, which show every session unfiltered. "follow latest"
   // mirrors the live-toggle's semantics: an explicit pick pins, the empty
   // value re-enters follow mode.
-  import { afClient } from "../client/afClient.svelte";
+  import { afootClient } from "../client/afootClient.svelte";
   import { sessionStore } from "../stores/sessionStore.svelte";
   import { uiStore } from "../stores/uiStore.svelte";
   import AgentMarks from "./AgentMarks.svelte";
@@ -31,12 +31,12 @@
   }
 
   function onPick(event: Event & { currentTarget: HTMLSelectElement }): void {
-    afClient.selectSession(event.currentTarget.value || null);
+    afootClient.selectSession(event.currentTarget.value || null);
   }
 </script>
 
 <header class="masthead rule-masthead">
-  <span class="masthead__title">af · debug console</span>
+  <span class="masthead__title">afoot · debug console</span>
   <span class="masthead__subtitle">agentic-footprint control plane</span>
   <div class="masthead__spacer"></div>
   <AgentMarks />
@@ -60,10 +60,10 @@
     </label>
   {/if}
   <button type="button" class="ghost-btn masthead__live-toggle" onclick={() => uiStore.toggleLive()}>
-    {uiStore.live ? "live" : `SSE paused · buffering (${afClient.pausedBuffered})`}
+    {uiStore.live ? "live" : `SSE paused · buffering (${afootClient.pausedBuffered})`}
   </button>
-  <span class="masthead__dot masthead__dot--{afClient.status}" aria-hidden="true"></span>
-  <span class="masthead__meta">SSE {afClient.status}</span>
+  <span class="masthead__dot masthead__dot--{afootClient.status}" aria-hidden="true"></span>
+  <span class="masthead__meta">SSE {afootClient.status}</span>
 </header>
 
 <style>

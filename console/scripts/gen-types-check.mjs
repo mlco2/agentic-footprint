@@ -11,7 +11,7 @@ import { generateContract1, generateContract2 } from "./gen-types-lib.mjs";
 const here = dirname(fileURLToPath(import.meta.url));
 const typesDir = join(here, "..", "src", "lib", "types");
 
-const tmp = mkdtempSync(join(tmpdir(), "af-console-gen-types-check-"));
+const tmp = mkdtempSync(join(tmpdir(), "afoot-console-gen-types-check-"));
 
 let drifted = false;
 try {

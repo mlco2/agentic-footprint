@@ -21,8 +21,8 @@ It combines:
   [Codex](how-to/codex.md) integration guide.
 - Read [energy attribution](explanation/energy-attribution.md) to understand how
   machine joules become per-action results.
-- To read af's results from another program, see
-  [Use af from another program](how-to/integrate.md).
+- To read afoot's results from another program, see
+  [Use afoot from another program](how-to/integrate.md).
 - Check the [known limitations](reference/known-limitations.md) before
   relying on a figure.
 

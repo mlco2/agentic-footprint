@@ -1,20 +1,20 @@
 # Uninstall
 
-There is no `af uninstall` command yet. These are the manual steps, in the
+There is no `afoot uninstall` command yet. These are the manual steps, in the
 order that loses nothing: stop the receiver, restore the agents'
 configuration, then remove the program and, if you want, its data.
 
 `<state>` below is the state directory: `~/.local/state/agentic-footprint`
 on macOS and Linux, `%LOCALAPPDATA%\agentic-footprint` on Windows, or
-`AF_STATE_DIR` if you set it.
+`AFOOT_STATE_DIR` if you set it.
 
 ## 1. Stop and remove the background receiver
 
 === "macOS"
 
     ```sh
-    launchctl bootout "gui/$(id -u)/dev.agentic-footprint.af-watch"
-    rm ~/Library/LaunchAgents/dev.agentic-footprint.af-watch.plist
+    launchctl bootout "gui/$(id -u)/dev.agentic-footprint.afoot-watch"
+    rm ~/Library/LaunchAgents/dev.agentic-footprint.afoot-watch.plist
     ```
 
 === "Linux"
@@ -31,18 +31,18 @@ on macOS and Linux, `%LOCALAPPDATA%\agentic-footprint` on Windows, or
 === "Windows"
 
     ```powershell
-    schtasks /End /TN agentic-footprint-af-watch
-    schtasks /Delete /TN agentic-footprint-af-watch /F
+    schtasks /End /TN agentic-footprint-afoot-watch
+    schtasks /Delete /TN agentic-footprint-afoot-watch /F
     ```
 
-If you run `af watch` in a terminal instead, stop it with Ctrl-C.
+If you run `afoot watch` in a terminal instead, stop it with Ctrl-C.
 
 ## 2. Restore the agents' configuration
 
 With the receiver gone, a configured agent keeps trying to export to it. That
 loses nothing and costs little, but the configuration should go.
 
-`af setup` saved a copy of each file it changed, beside it, as
+`afoot setup` saved a copy of each file it changed, beside it, as
 `<file>.bak.<timestamp>`. If you have not edited the file since, put the
 oldest copy back:
 
@@ -52,7 +52,7 @@ cp ~/.claude/settings.json.bak.<timestamp> ~/.claude/settings.json
 ```
 
 If you have edited the file since, or there is no copy (the file did not
-exist before `af setup`), remove only what `af setup` added.
+exist before `afoot setup`), remove only what `afoot setup` added.
 
 **Claude Code** (`~/.claude/settings.json`, and `.claude/settings.json` in a
 project you set up):
@@ -61,7 +61,7 @@ project you set up):
   `OTEL_METRICS_EXPORTER`, `OTEL_EXPORTER_OTLP_PROTOCOL`,
   `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_LOGS_EXPORT_INTERVAL`;
 - under `hooks`: each entry whose command ends in
-  `integrations/claude-code/af-hook.sh` or runs `af hook`.
+  `integrations/claude-code/afoot-hook.sh` or runs `afoot hook`.
 
 Leave any of these that you set yourself for another telemetry receiver.
 
@@ -88,11 +88,11 @@ started with.
 === "macOS / Linux"
 
     ```sh
-    rm ~/.local/bin/af
+    rm ~/.local/bin/afoot
     ```
 
     Remove the `PATH` line you added to your shell profile, if you added one
-    for `af` alone.
+    for `afoot` alone.
 
 === "Windows"
 
@@ -102,11 +102,11 @@ started with.
     .\install.ps1 -Uninstall
     ```
 
-    This removes `af.exe` and its entry in your user `PATH`.
+    This removes `afoot.exe` and its entry in your user `PATH`.
 
 ## 4. Keep or remove the data
 
-Everything `af` recorded is in `<state>`. Nothing else on the computer holds
+Everything `afoot` recorded is in `<state>`. Nothing else on the computer holds
 it.
 
 To keep the history and remove the rest, keep the files whose names start

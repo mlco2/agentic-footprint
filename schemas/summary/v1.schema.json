@@ -1,13 +1,13 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/mlco2/agentic-footprint/schemas/summary/v1.schema.json",
-  "title": "af summary, protocol version 1",
-  "description": "Output of `af summary`. New fields may be added without a version change; consumers ignore what they do not know.",
+  "title": "afoot summary, protocol version 1",
+  "description": "Output of `afoot summary`. New fields may be added without a version change; consumers ignore what they do not know.",
   "type": "object",
-  "required": ["protocol_version", "af_version", "generated_at", "period", "collector", "totals", "by_agent", "by_model", "models_not_estimated", "by_day"],
+  "required": ["protocol_version", "afoot_version", "generated_at", "period", "collector", "totals", "by_agent", "by_model", "models_not_estimated", "by_day"],
   "properties": {
     "protocol_version": {"const": 1},
-    "af_version": {"type": "string"},
+    "afoot_version": {"type": "string"},
     "generated_at": {"type": "string"},
     "period": {
       "type": "object",

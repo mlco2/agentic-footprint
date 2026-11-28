@@ -284,7 +284,7 @@ describe("selectRejected", () => {
 describe("selectHealthAside", () => {
   it("ingestion KVs equal the fixture's own strings verbatim (provenance)", async () => {
     const { selectHealthAside, eventStore } = await freshEnv();
-    const session = sessionFixture({ state_dir: "/tmp/af-state" });
+    const session = sessionFixture({ state_dir: "/tmp/afoot-state" });
     const health = healthFixture({
       collectors: [collectorFixture({ name: "claude-code", spool_file: "claude-code.01K9Y7QZ.jsonl", byte_offset: 2_517_428 })],
       otlp_receiver: { endpoint: "127.0.0.1:4318", protocol: "http/json", logs_accepted: 11, metrics_discarded: 42 },
@@ -292,7 +292,7 @@ describe("selectHealthAside", () => {
     const aside = selectHealthAside(health, eventStore.rev, session);
 
     const spoolRow = aside.ingestion.find((r) => r.label === "claude-code spool");
-    expect(spoolRow?.value).toBe(`/tmp/af-state/spool/claude-code.01K9Y7QZ.jsonl · byte ${fmtCount(2_517_428)}`);
+    expect(spoolRow?.value).toBe(`/tmp/afoot-state/spool/claude-code.01K9Y7QZ.jsonl · byte ${fmtCount(2_517_428)}`);
 
     const endpointRow = aside.ingestion.find((r) => r.label === "otlp endpoint");
     expect(endpointRow?.value).toBe("127.0.0.1:4318 · http/json");
@@ -323,11 +323,11 @@ describe("selectHealthAside", () => {
   it("renders the real server's --no-otlp note when otlp_receiver.endpoint is null (tolerance)", async () => {
     const { selectHealthAside, eventStore } = await freshEnv();
     const health = healthFixture({
-      otlp_receiver: { endpoint: null, protocol: "http/json", logs_accepted: 0, metrics_discarded: 0, note: "no OTLP receiver is running in this af watch process" },
+      otlp_receiver: { endpoint: null, protocol: "http/json", logs_accepted: 0, metrics_discarded: 0, note: "no OTLP receiver is running in this afoot watch process" },
     });
     const aside = selectHealthAside(health, eventStore.rev, sessionFixture());
     const endpointRow = aside.ingestion.find((r) => r.label === "otlp endpoint");
-    expect(endpointRow?.value).toBe("no OTLP receiver is running in this af watch process");
+    expect(endpointRow?.value).toBe("no OTLP receiver is running in this afoot watch process");
   });
 
   it("reuses the Timeline rail's WatchdogRailRow shape/formatting for eventStore.watchdog", async () => {

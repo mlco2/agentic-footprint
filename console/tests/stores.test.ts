@@ -102,7 +102,7 @@ describe("ReportStore — replace-on-arrival and requested-vs-payload level keyi
   });
 
   it("fetchLevel() caches under the REQUESTED level, not the payload's own `.level` — even when they differ", async () => {
-    // The real `af watch --debug` server ignores `?level=` and always answers
+    // The real `afoot watch --debug` server ignores `?level=` and always answers
     // at session level (DATA-CONTRACT §2.6 gap, docs/design-log.md) — so a
     // `fetchLevel("task")` caller must still find its result under "task",
     // or it would re-fetch forever, and `get("session")` must stay untouched
@@ -223,7 +223,7 @@ describe("StatusStore", () => {
   const status: WatcherStatus = {
     boot_id: "b1",
     started_at: "2026-11-16T09:00:00.000Z",
-    af_version: "0.1.0",
+    afoot_version: "0.1.0",
     flush_interval_ms: 60000,
     receiver: { endpoint: "127.0.0.1:4318", note: null },
     agents: [],

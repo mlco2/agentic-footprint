@@ -102,7 +102,7 @@
     <WatchdogList watchdog={aside.watchdog} orphanSummary={aside.orphanSummary} />
 
     <div class="rail-section">
-      <div class="rail-section__heading">af python doctor</div>
+      <div class="rail-section__heading">afoot python doctor</div>
       {#if aside.doctor.length === 0}
         <EmptyState label="Python doctor" message="no doctor rows yet" />
       {:else}

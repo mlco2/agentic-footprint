@@ -21,7 +21,7 @@ and other sensitive data before posting.
 
 **Environment**
 - OS and version:
-- Agentic Footprint version (`af --version`):
+- Agentic Footprint version (`afoot --version`):
 - Coding agent and version:
 - Installation method:
 

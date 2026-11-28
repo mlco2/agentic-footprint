@@ -16,7 +16,7 @@ On macOS, use `shasum -a 256 -c SHA256SUMS`.
 
 ## Verify the keyless signature
 
-`af self update` checks every update against its archive's Sigstore bundle
+`afoot self update` checks every update against its archive's Sigstore bundle
 before replacing anything. The certificate must name exactly
 `https://github.com/mlco2/agentic-footprint/.github/workflows/release.yml@refs/tags/<tag>`,
 issued by `https://token.actions.githubusercontent.com`, and appear in the
