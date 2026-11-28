@@ -1273,8 +1273,23 @@ impl Watch {
 
     /// Activity from spool files that just changed: the file name carries
     /// the collector and the session, so nothing has to be read.
+    ///
+    /// Only a file written since this watcher started counts. The file
+    /// watcher can report writes made just before it opened (macOS FSEvents
+    /// does), and those are backlog, not something received while this
+    /// watcher runs; a file that is gone received nothing either.
     fn note_spool_paths(&mut self, paths: &[PathBuf], at_ms: i64) {
-        for file in paths.iter().filter_map(|path| spool_file_of(path)) {
+        let started_at = self.started_at;
+        let written_since_start = |path: &PathBuf| {
+            std::fs::metadata(path)
+                .and_then(|meta| meta.modified())
+                .is_ok_and(|modified| modified >= started_at)
+        };
+        for file in paths
+            .iter()
+            .filter(|path| written_since_start(path))
+            .filter_map(|path| spool_file_of(path))
+        {
             self.note_activity(&file.collector, &file.session_id, at_ms);
         }
     }
@@ -3178,15 +3193,24 @@ mod tests {
         assert_eq!(published(&rx), 0, "unchanged: nothing to say");
     }
 
+    /// A spool file in `dir`, last modified at `modified`.
+    fn spool_file_at(dir: &Path, name: &str, modified: SystemTime) -> PathBuf {
+        let path = dir.join(name);
+        let file = std::fs::File::create(&path).expect("create spool file");
+        file.set_modified(modified).expect("set mtime");
+        path
+    }
+
     #[test]
     fn spool_notices_count_as_activity_by_file_name() {
-        let (_dir, mut watch, _debug) = status_watch();
+        let (dir, mut watch, _debug) = status_watch();
+        let now = SystemTime::now();
         watch.note_spool_paths(
             &[
-                PathBuf::from("/state/spool/cc-hooks.sess-1.jsonl"),
-                PathBuf::from("/state/spool/codecarbon.sess-1.jsonl"),
-                PathBuf::from("/state/spool/not-a-spool-file.txt"),
-                PathBuf::from("/state/spool"),
+                spool_file_at(dir.path(), "cc-hooks.sess-1.jsonl", now),
+                spool_file_at(dir.path(), "codecarbon.sess-1.jsonl", now),
+                spool_file_at(dir.path(), "not-a-spool-file.txt", now),
+                dir.path().to_path_buf(),
             ],
             7_000,
         );
@@ -3195,6 +3219,34 @@ mod tests {
         assert_eq!(claude["state"], "receiving");
         assert_eq!(claude["sessions"], 1);
         assert_ne!(agent(&status, "codex")["state"], "receiving");
+    }
+
+    /// A notice for a file last written before this watcher started is a
+    /// backlog replayed by the file watcher (macOS FSEvents does this for
+    /// writes made just before the stream opened), not something received
+    /// while this watcher runs.
+    #[test]
+    fn a_spool_file_last_written_before_start_is_not_activity() {
+        let (dir, mut watch, _debug) = status_watch();
+        let before = watch.started_at - Duration::from_secs(1);
+        watch.note_spool_paths(
+            &[spool_file_at(dir.path(), "cc-hooks.sess-old.jsonl", before)],
+            7_000,
+        );
+        assert_ne!(
+            agent(&watch.status_payload(), "claude-code")["state"],
+            "receiving"
+        );
+    }
+
+    #[test]
+    fn a_spool_file_that_no_longer_exists_is_not_activity() {
+        let (dir, mut watch, _debug) = status_watch();
+        watch.note_spool_paths(&[dir.path().join("cc-hooks.sess-gone.jsonl")], 7_000);
+        assert_ne!(
+            agent(&watch.status_payload(), "claude-code")["state"],
+            "receiving"
+        );
     }
 
     fn one_fact() -> Envelope {
