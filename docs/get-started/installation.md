@@ -167,9 +167,9 @@ the command printed by the wizard, keep it running, then rerun `afoot setup`.
 
 ## Updating
 
-No release has been published yet, so `afoot self update` has nothing to
-install. An afoot built from a source checkout is updated by pulling and
-rerunning `./install.sh`. Once releases exist:
+An afoot that the installer placed from a release binary updates itself; an
+afoot built from a source checkout is updated by pulling and rerunning
+`./install.sh`:
 
 ```sh
 afoot self update            # the latest release
