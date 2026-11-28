@@ -99,7 +99,12 @@ impl Machine {
                 "AFOOT_ESTIMATOR_SCRIPT",
                 repo_root().join("tests/fixtures/fake_sidecar.py").into(),
             ),
-            ("AFOOT_ESTIMATOR_PYTHON", "python3".into()),
+            (
+                "AFOOT_ESTIMATOR_PYTHON",
+                afoot_sidecar::find_python()
+                    .expect("no usable Python interpreter found on PATH (or via uv)")
+                    .into(),
+            ),
             ("AFOOT_ESTIMATOR_ARGS", "".into()),
             (
                 "AFOOT_FAKE_KNOWN_MODELS",

@@ -379,7 +379,13 @@ fn slow_estimation_does_not_block_live_ingest() {
         &["--no-otlp"],
         &[
             ("AFOOT_ESTIMATOR_SCRIPT", fake.display().to_string()),
-            ("AFOOT_ESTIMATOR_PYTHON", "python3".to_string()),
+            (
+                "AFOOT_ESTIMATOR_PYTHON",
+                afoot_sidecar::find_python()
+                    .expect("no usable Python interpreter found on PATH (or via uv)")
+                    .display()
+                    .to_string(),
+            ),
             ("AFOOT_FAKE_ESTIMATE_DELAY", "3".to_string()),
             (
                 "AFOOT_FAKE_ESTIMATE_STARTED_FILE",

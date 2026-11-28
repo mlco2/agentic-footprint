@@ -108,7 +108,11 @@ pub fn afoot_command(state_dir: &Path, args: &[&str], with_estimator: bool) -> C
             "AFOOT_ESTIMATOR_SCRIPT",
             repo_root().join("tests/fixtures/fake_sidecar.py"),
         )
-        .env("AFOOT_ESTIMATOR_PYTHON", "python3")
+        .env(
+            "AFOOT_ESTIMATOR_PYTHON",
+            afoot_sidecar::find_python()
+                .expect("no usable Python interpreter found on PATH (or via uv)"),
+        )
         .env(
             "AFOOT_ESTIMATOR_ARGS",
             format!("--replay\n{}", transcript.display()),

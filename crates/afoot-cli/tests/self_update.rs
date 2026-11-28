@@ -2,10 +2,13 @@
 //! server — no network, no real GitHub.
 mod common;
 
+#[cfg(unix)]
 use std::path::PathBuf;
+#[cfg(unix)]
 use std::sync::OnceLock;
 
 use assert_cmd::Command;
+#[cfg(unix)]
 use common::fake_server;
 use predicates::prelude::*;
 
@@ -28,6 +31,7 @@ fn record_install_writes_a_receipt_for_this_binary() {
     assert!(receipt["target"].as_str().unwrap().contains('-'));
 }
 
+#[cfg(unix)]
 struct Install {
     _dir: tempfile::TempDir,
     state: PathBuf,
@@ -35,6 +39,7 @@ struct Install {
 }
 
 /// A release-style install: a copy of the test `afoot` plus a receipt for it.
+#[cfg(unix)]
 fn install(with_receipt: bool) -> Install {
     let dir = tempfile::tempdir().unwrap();
     let state = dir.path().join("state");
@@ -63,6 +68,7 @@ fn install(with_receipt: bool) -> Install {
 }
 
 /// This build's release target, as the binary itself records it.
+#[cfg(unix)]
 fn target() -> &'static str {
     static TARGET: OnceLock<String> = OnceLock::new();
     TARGET.get_or_init(|| {
@@ -81,13 +87,16 @@ fn target() -> &'static str {
     })
 }
 
+#[cfg(unix)]
 const NEW_BINARY: &[u8] = b"#!/bin/sh\necho 'afoot 9.9.9'\n";
 
+#[cfg(unix)]
 fn sha256_hex(bytes: &[u8]) -> String {
     use sha2::{Digest, Sha256};
     format!("{:x}", Sha256::digest(bytes))
 }
 
+#[cfg(unix)]
 fn release_routes(tag: &str, asset: &[u8], sums_digest: &str) -> Vec<(&'static str, u16, Vec<u8>)> {
     let name = format!("afoot-{}", target());
     let release = serde_json::json!({
@@ -120,8 +129,10 @@ fn release_routes(tag: &str, asset: &[u8], sums_digest: &str) -> Vec<(&'static s
 /// binary (that takes a real OIDC identity), so tests about what happens
 /// *after* verification pass this; the signature check itself is unit-tested
 /// against a real bundle in `cmd::self_update`.
+#[cfg(unix)]
 const UNSIGNED: &str = "--allow-unsigned";
 
+#[cfg(unix)]
 fn self_update(install: &Install, base: &str, extra: &[&str]) -> assert_cmd::assert::Assert {
     Command::new(&install.binary)
         .env("AFOOT_STATE_DIR", &install.state)

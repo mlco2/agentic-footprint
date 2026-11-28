@@ -17,9 +17,10 @@ use anyhow::{anyhow, bail, Context, Result};
 use serde_json::Value;
 
 pub use pyenv::{
-    doctor, environment_fingerprint, floors, installed_versions, meets_floors, provision,
-    provisioner, requirements_for, runtime_status, setup, spawn_without_windows, venv_interpreter,
-    venv_python, version_key, DoctorFinding, RuntimeVersions, Severity, UV_INSTALL_URL,
+    doctor, environment_fingerprint, find_python, floors, installed_versions, meets_floors,
+    provision, provisioner, requirements_for, runtime_status, setup, spawn_without_windows,
+    venv_interpreter, venv_python, version_key, DoctorFinding, RuntimeVersions, Severity,
+    UV_INSTALL_URL,
 };
 
 /// Default timeout for [`Sidecar::request`]. Overridable per-instance via

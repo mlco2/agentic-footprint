@@ -52,6 +52,7 @@ fn watch_exits_gracefully_on_ctrl_break() {
     while TcpStream::connect(&debug_addr).is_err() {
         if Instant::now() >= ready_deadline {
             let _ = child.kill();
+            let _ = child.wait();
             panic!("afoot watch never opened its debug port at {debug_addr}");
         }
         std::thread::sleep(Duration::from_millis(50));
@@ -65,6 +66,7 @@ fn watch_exits_gracefully_on_ctrl_break() {
         // tests without one, where delivery is impossible rather than the
         // behavior being wrong. Clean up and skip instead of failing.
         let _ = child.kill();
+        let _ = child.wait();
         eprintln!("skipping: no console available for GenerateConsoleCtrlEvent");
         return;
     }
@@ -81,6 +83,7 @@ fn watch_exits_gracefully_on_ctrl_break() {
             }
             None if Instant::now() >= deadline => {
                 let _ = child.kill();
+                let _ = child.wait();
                 panic!("afoot watch did not exit within 15s of CTRL_BREAK");
             }
             None => std::thread::sleep(Duration::from_millis(100)),

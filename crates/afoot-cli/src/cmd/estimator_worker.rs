@@ -446,8 +446,10 @@ mod tests {
             env!("CARGO_MANIFEST_DIR"),
             "/../../tests/fixtures/fake_sidecar.py"
         );
-        let mut sidecar =
-            Sidecar::spawn(Path::new("python3"), script, &[]).expect("spawn fake_sidecar.py");
+        let python = afoot_sidecar::find_python().expect(
+            "no usable Python interpreter found on PATH (or via uv); install uv or Python 3.12+ to run sidecar tests",
+        );
+        let mut sidecar = Sidecar::spawn(&python, script, &[]).expect("spawn fake_sidecar.py");
         // Wait until the interpreter is up, under the sidecar's own default
         // timeout, before the worker applies its 5s one: a cold Python start
         // on a loaded CI runner can exceed 10s, which timed out the worker's

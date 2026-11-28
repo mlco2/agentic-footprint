@@ -184,6 +184,14 @@ fn is_executable(path: &Path, _meta: &std::fs::Metadata) -> bool {
 pub fn isolated_python(python: &Path, workdir: &Path) -> Command {
     let mut command = Command::new(python);
     command.arg("-I").current_dir(workdir);
+    apply_windowless(&mut command);
+    command
+}
+
+#[cfg(windows)]
+static WINDOWLESS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+fn apply_windowless(#[allow(unused_variables)] command: &mut Command) {
     #[cfg(windows)]
     if WINDOWLESS.load(std::sync::atomic::Ordering::Relaxed) {
         // CREATE_NO_WINDOW: a process that has no console (the scheduled
@@ -192,11 +200,7 @@ pub fn isolated_python(python: &Path, workdir: &Path) -> Command {
         use std::os::windows::process::CommandExt;
         command.creation_flags(0x0800_0000);
     }
-    command
 }
-
-#[cfg(windows)]
-static WINDOWLESS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 /// From now on, start interpreters without a console window (Windows; a
 /// no-op elsewhere). For an `afoot` that runs with no console of its own.
@@ -420,6 +424,68 @@ pub fn provisioner() -> Option<&'static str> {
                 .unwrap_or(false)
         })
         .then_some("python")
+}
+
+/// Locates a usable Python 3 interpreter on this machine and returns its
+/// concrete executable path.
+///
+/// Probes system candidates with `-I -c "import sys; print(sys.executable)"`
+/// so Windows Store app-execution stubs (which exit non-zero) are skipped and
+/// launcher shims like `py -3` resolve to the real interpreter binary. When
+/// no global interpreter is on `PATH`, falls back to an already-installed
+/// `uv`-managed Python (`uv --no-config python find --no-project
+/// --no-python-downloads`) without triggering any download.
+pub fn find_python() -> Option<PathBuf> {
+    #[cfg(unix)]
+    let candidates: &[(&str, &[&str])] = &[("python3", &[]), ("python", &[])];
+    #[cfg(windows)]
+    let candidates: &[(&str, &[&str])] = &[("python3", &[]), ("python", &[]), ("py", &["-3"])];
+
+    for (program, leading) in candidates {
+        let mut command = Command::new(program);
+        apply_windowless(&mut command);
+        let Ok(output) = command
+            .args(*leading)
+            .args(["-I", "-c", "import sys; print(sys.executable)"])
+            .stdin(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .output()
+        else {
+            continue;
+        };
+        if output.status.success() {
+            let resolved = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if !resolved.is_empty() {
+                return Some(PathBuf::from(resolved));
+            }
+        }
+    }
+
+    if uv_on_path() {
+        let mut command = Command::new("uv");
+        apply_windowless(&mut command);
+        if let Ok(output) = command
+            .args([
+                "--no-config",
+                "python",
+                "find",
+                "--no-project",
+                "--no-python-downloads",
+            ])
+            .stdin(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .output()
+        {
+            if output.status.success() {
+                let resolved = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                if !resolved.is_empty() {
+                    return Some(PathBuf::from(resolved));
+                }
+            }
+        }
+    }
+
+    None
 }
 
 /// System-interpreter candidates for the stdlib fallback, as

@@ -13,7 +13,9 @@ use afoot_sidecar::Sidecar;
 use afoot_store::Store;
 
 fn python3() -> PathBuf {
-    PathBuf::from("python3")
+    afoot_sidecar::find_python().expect(
+        "no usable Python interpreter found on PATH (or via uv); install uv or Python 3.12+ to run sidecar tests",
+    )
 }
 
 fn fake_sidecar_path() -> PathBuf {

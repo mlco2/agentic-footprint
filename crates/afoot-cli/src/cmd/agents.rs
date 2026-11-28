@@ -173,6 +173,8 @@ fn parse_lsof(output: &str) -> BTreeMap<u32, Vec<(String, PathBuf)>> {
 /// path). The working directory is the `cwd` descriptor. A Codex home is
 /// recognised by what Codex keeps open inside it: its rollout file under
 /// `sessions/`, or its `state_*.sqlite` database.
+// Used on Unix only (Windows does not inspect processes); the tests run everywhere.
+#[cfg_attr(not(unix), allow(dead_code))]
 fn inspection_from(files: &[(String, PathBuf)]) -> Inspection {
     let mut inspection = Inspection {
         cwd: files
@@ -214,6 +216,7 @@ fn inspection_from(files: &[(String, PathBuf)]) -> Inspection {
 }
 
 /// The UUID a rollout file name ends with (`…T12-29-52-<uuid>`).
+#[cfg_attr(not(unix), allow(dead_code))]
 fn trailing_uuid(stem: &str) -> Option<String> {
     let start = stem.len().checked_sub(36)?;
     let candidate = stem.get(start..)?;
@@ -1861,8 +1864,18 @@ mod tests {
     #[test]
     fn a_command_that_outlives_its_deadline_is_abandoned() {
         let started = std::time::Instant::now();
-        let mut slow = Command::new("sleep");
-        slow.arg("5");
+        #[cfg(unix)]
+        let slow = {
+            let mut cmd = Command::new("sleep");
+            cmd.arg("5");
+            cmd
+        };
+        #[cfg(windows)]
+        let slow = {
+            let mut cmd = Command::new("ping");
+            cmd.args(["-n", "6", "127.0.0.1"]);
+            cmd
+        };
         assert_eq!(output_within(slow, Duration::from_millis(200)), None);
         assert!(
             started.elapsed() < Duration::from_secs(3),
@@ -1870,12 +1883,19 @@ mod tests {
             started.elapsed()
         );
 
-        let mut quick = Command::new("echo");
-        quick.arg("hi");
-        assert_eq!(
-            output_within(quick, Duration::from_secs(5)),
-            Some(b"hi\n".to_vec())
-        );
+        #[cfg(unix)]
+        let (quick, expected) = {
+            let mut cmd = Command::new("echo");
+            cmd.arg("hi");
+            (cmd, b"hi\n".to_vec())
+        };
+        #[cfg(windows)]
+        let (quick, expected) = {
+            let mut cmd = Command::new("cmd");
+            cmd.args(["/C", "echo hi"]);
+            (cmd, b"hi\r\n".to_vec())
+        };
+        assert_eq!(output_within(quick, Duration::from_secs(5)), Some(expected));
         assert_eq!(
             output_within(
                 Command::new("/nonexistent/afoot-test-tool"),
